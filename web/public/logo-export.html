@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>postbuch. Logo Export</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@700&display=block" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f0f13;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      gap: 32px;
+      font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    }
+
+    h1 { color: #888; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
+
+    /* ── CSS reference preview (mirrors SidebarLogoFull exactly) ── */
+    #logo-root {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: transparent;
+    }
+    .logo-icon-wrap { position: relative; width: 53px; height: 53px; flex-shrink: 0; }
+    .logo-icon-blur { position: absolute; inset: 0; width: 53px; height: 53px; filter: blur(10px); opacity: 0.55; }
+    .logo-icon-sharp { position: relative; width: 53px; height: 53px; }
+    .glow-text-wrap { position: relative; display: inline-block; font-size: 23px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; }
+    .glow-text-blur {
+      position: absolute; top: 0; left: 0;
+      background: linear-gradient(90deg, #7d2dbd 0%, #a56bd8 50%, #2cc5dd 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+      filter: blur(6px); opacity: 0.85; white-space: nowrap; pointer-events: none; user-select: none;
+    }
+    .glow-text-sharp {
+      position: relative;
+      background: linear-gradient(90deg, #7d2dbd 0%, #a56bd8 50%, #2cc5dd 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+      white-space: nowrap;
+    }
+    .dot { font-size: 1.8em; line-height: 1; }
+    .tld { font-size: 0.65em; line-height: 1; }
+
+    /* ── Shared checker background ── */
+    .checker {
+      background-image:
+        linear-gradient(45deg, #222 25%, transparent 25%),
+        linear-gradient(-45deg, #222 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #222 75%),
+        linear-gradient(-45deg, transparent 75%, #222 75%);
+      background-size: 16px 16px;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+      background-color: #181818;
+      border-radius: 8px;
+      border: 1px solid #333;
+    }
+
+    .preview-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    .preview-label { color: #555; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+    #css-checker { padding: 16px; }
+
+    /* canvas preview – display scaled down but shows actual pixels */
+    #canvas-preview {
+      display: block;
+      max-width: min(560px, 92vw);
+    }
+
+    /* ── Controls ── */
+    #controls { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+    label { color: #aaa; font-size: 12px; display: flex; align-items: center; gap: 8px; }
+    input[type=range] { width: 180px; accent-color: #a56bd8; }
+    #scale-val { color: #ddd; min-width: 32px; display: inline-block; }
+    button {
+      background: linear-gradient(90deg, #7d2dbd 0%, #2cc5dd 100%);
+      color: #fff; border: none; border-radius: 8px; padding: 10px 28px;
+      font-size: 14px; font-weight: 600; cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.85; }
+    button:disabled { opacity: 0.4; cursor: wait; }
+    #hint { color: #555; font-size: 11px; text-align: center; line-height: 1.6; }
+    #status { color: #666; font-size: 10px; letter-spacing: 0.04em; min-height: 14px; }
+  </style>
+</head>
+<body>
+  <h1>postbuch. Logo · PNG Export</h1>
+
+  <!-- CSS reference (browser renders gradients/glow correctly here) -->
+  <div class="preview-wrap">
+    <span class="preview-label">Browser-Referenz</span>
+    <div class="checker" id="css-checker">
+      <div id="logo-root">
+        <div class="logo-icon-wrap">
+          <img class="logo-icon-blur" src="/logo.svg" alt="" aria-hidden />
+          <img class="logo-icon-sharp" src="/logo.svg" alt="postbuch." />
+        </div>
+        <div>
+          <span class="glow-text-wrap">
+          <span class="glow-text-blur" aria-hidden>postbuch<span class="dot">.</span><span class="tld">net</span></span>
+          <span class="glow-text-sharp">postbuch<span class="dot">.</span><span class="tld">net</span></span>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Canvas preview (what the exported PNG will look like) -->
+  <div class="preview-wrap">
+    <span class="preview-label">Export-Vorschau (Canvas)</span>
+    <div class="checker" style="overflow:hidden; padding:0; line-height:0;">
+      <canvas id="canvas-preview"></canvas>
+    </div>
+    <span id="status">Lädt…</span>
+  </div>
+
+  <div id="controls">
+    <label>
+      Skalierung:
+      <input type="range" id="scale" min="1" max="6" step="0.5" value="3" />
+      <span id="scale-val">3×</span>
+    </label>
+    <button id="export-btn">Als PNG exportieren</button>
+  </div>
+
+  <p id="hint">
+    Das PNG wird mit transparentem Hintergrund exportiert.<br />
+    Empfohlen: 3× oder höher für scharfe Darstellung im PDF.
+  </p>
+
+  <script>
+    // ── Constants mirroring SidebarLogoFull / GlowText exactly ──
+    const LOGO_SZ_BASE  = 53;    // LOGO_FULL_SIZE
+    const GAP_BASE      = 10;    // gap-2.5
+    const FONT_BASE     = 23;    // GlowText fontSize={23}
+    const DOT_EM        = 1.8;   // "." span fontSize
+    const NET_EM        = 0.47;  // "net" span fontSize (relative to base)
+    const PAD_BASE      = 14;
+    const FONT_FAM      = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+
+    function loadImg(src) {
+      return new Promise((res, rej) => {
+        const img = new Image();
+        img.onload = () => res(img);
+        img.onerror = rej;
+        img.src = src;
+      });
+    }
+
+    async function renderLogo(scale) {
+      const s            = scale;
+      const logoSz       = Math.round(LOGO_SZ_BASE * s);
+      const gap          = Math.round(GAP_BASE * s);
+      const fontSize     = FONT_BASE * s;
+      const dotFontSize  = FONT_BASE * DOT_EM * s;
+      const netFontSize  = FONT_BASE * NET_EM * s;
+      const blurR        = Math.round(6 * s);
+      const pad          = Math.round(PAD_BASE * s) + blurR * 3;
+
+      const fontStr     = `bold ${fontSize}px ${FONT_FAM}`;
+      const dotFontStr  = `bold ${dotFontSize}px ${FONT_FAM}`;
+      const netFontStr  = `bold ${netFontSize}px ${FONT_FAM}`;
+
+      await document.fonts.ready;
+
+      const tmp = document.createElement('canvas').getContext('2d');
+
+      tmp.font = fontStr;
+      tmp.letterSpacing = `${-0.02 * fontSize}px`;
+      const mainM    = tmp.measureText('postbuch');
+      const mainW    = mainM.width;
+      const mainAsc  = mainM.actualBoundingBoxAscent;
+      const mainDesc = mainM.actualBoundingBoxDescent;
+
+      tmp.font = dotFontStr;
+      tmp.letterSpacing = `${-0.02 * dotFontSize}px`;
+      const dotW = tmp.measureText('.').width;
+
+      tmp.font = netFontStr;
+      tmp.letterSpacing = `${-0.02 * netFontSize}px`;
+      const netW = tmp.measureText('net').width;
+
+      const textW = mainW + dotW + netW;
+
+      const logoX      = pad;
+      const logoY      = pad;
+      const textX      = pad + logoSz + gap;
+      // Center "postbuch" (tallest glyph) vertically with logo
+      const logoCenter = pad + logoSz / 2;
+      const baseline   = Math.round(logoCenter + (mainAsc - mainDesc) / 2);
+
+      const totalW = Math.ceil(pad + logoSz + gap + textW + pad);
+      const totalH = Math.ceil(Math.max(pad + logoSz + pad, baseline + mainDesc + pad));
+
+      const canvas = document.createElement('canvas');
+      canvas.width  = totalW;
+      canvas.height = totalH;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, totalW, totalH);
+
+      const svgImg = await loadImg('/logo.svg');
+
+      // Blurred logo
+      ctx.save();
+      ctx.filter      = `blur(${Math.round(10 * s)}px)`;
+      ctx.globalAlpha = 0.55;
+      ctx.drawImage(svgImg, logoX, logoY, logoSz, logoSz);
+      ctx.restore();
+      // Sharp logo
+      ctx.drawImage(svgImg, logoX, logoY, logoSz, logoSz);
+
+      // ONE gradient spanning full text width → continuous colour flow
+      function makeGrad() {
+        const g = ctx.createLinearGradient(textX, 0, textX + textW, 0);
+        g.addColorStop(0,   '#7d2dbd');
+        g.addColorStop(0.5, '#a56bd8');
+        g.addColorStop(1.0, '#2cc5dd');
+        return g;
+      }
+
+      ctx.textBaseline = 'alphabetic';
+
+      function drawText(blurPass) {
+        if (blurPass) {
+          ctx.save();
+          ctx.filter      = `blur(${blurR}px)`;
+          ctx.globalAlpha = 0.85;
+        }
+
+        // "postbuch"
+        ctx.font          = fontStr;
+        ctx.letterSpacing = `${-0.02 * fontSize}px`;
+        ctx.fillStyle     = makeGrad();
+        ctx.fillText('postbuch', textX, baseline);
+
+        // "." at 1.8×
+        ctx.font          = dotFontStr;
+        ctx.letterSpacing = `${-0.02 * dotFontSize}px`;
+        ctx.fillStyle     = makeGrad();
+        ctx.fillText('.', textX + mainW, baseline);
+
+        // "net" at 0.65× – same baseline, small letters ≈ dot diameter
+        ctx.font          = netFontStr;
+        ctx.letterSpacing = `${-0.02 * netFontSize}px`;
+        ctx.fillStyle     = makeGrad();
+        ctx.fillText('net', textX + mainW + dotW, baseline);
+
+        if (blurPass) ctx.restore();
+      }
+
+      drawText(true);   // glow
+      drawText(false);  // sharp on top
+
+      return canvas;
+    }
+
+    // ── UI ──
+    const scaleInput = document.getElementById('scale');
+    const scaleVal   = document.getElementById('scale-val');
+    const exportBtn  = document.getElementById('export-btn');
+    const preview    = document.getElementById('canvas-preview');
+    const statusEl   = document.getElementById('status');
+
+    async function updatePreview() {
+      statusEl.textContent = 'Rendere…';
+      const scale = parseFloat(scaleInput.value);
+      try {
+        const offscreen = await renderLogo(scale);
+        // Show at screen resolution (scale down for display only)
+        const maxW      = Math.min(560, window.innerWidth * 0.92);
+        const dispScale = Math.min(1, maxW / offscreen.width);
+        preview.width   = offscreen.width;
+        preview.height  = offscreen.height;
+        preview.style.width  = Math.round(offscreen.width  * dispScale) + 'px';
+        preview.style.height = Math.round(offscreen.height * dispScale) + 'px';
+        preview.getContext('2d').drawImage(offscreen, 0, 0);
+        statusEl.textContent = `${offscreen.width} × ${offscreen.height} px`;
+      } catch (err) {
+        statusEl.textContent = 'Fehler: ' + err.message;
+        console.error(err);
+      }
+    }
+
+    scaleInput.addEventListener('input', () => {
+      scaleVal.textContent = scaleInput.value + '×';
+      updatePreview();
+    });
+
+    exportBtn.addEventListener('click', async () => {
+      exportBtn.disabled    = true;
+      exportBtn.textContent = 'Exportiere…';
+      const scale = parseFloat(scaleInput.value);
+      try {
+        const offscreen = await renderLogo(scale);
+        const link      = document.createElement('a');
+        link.download   = `postbuch-logo-${scale}x.png`;
+        link.href       = offscreen.toDataURL('image/png');
+        link.click();
+      } catch (err) {
+        alert('Export fehlgeschlagen: ' + err.message);
+        console.error(err);
+      } finally {
+        exportBtn.disabled    = false;
+        exportBtn.textContent = 'Als PNG exportieren';
+      }
+    });
+
+    // Initial render
+    updatePreview();
+  </script>
+</body>
+</html>

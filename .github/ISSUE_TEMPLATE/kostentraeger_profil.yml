@@ -1,0 +1,49 @@
+name: Kostenträger-Profil beisteuern
+description: Ein selbst erzeugtes Kostenträger-Profil für die Erstattungsbescheid-Erkennung vorschlagen
+title: "[Kostenträger-Profil]: "
+labels:
+  - kostentraeger-profil
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke fürs Teilen! So kommst du an die Datei: **Einstellungen → KI-Anbieter →
+        Kostenträger-Profile** → beim gewünschten Profil auf „JSON exportieren“ klicken.
+        Das lädt eine `.json`-Datei mit `name`, `kostentraeger` und `profiltext` herunter –
+        füge deren Inhalt unten ein.
+
+        Ein Profil beschreibt ausschließlich, **wie** ein Kostenträger seine Bescheide
+        aufbaut (Tabellen, Formulierungen, wo Kürzungen stehen) – keine echten Namen,
+        Versicherungsnummern, Beträge oder sonstigen personenbezogenen Daten. Bitte den
+        `profiltext` vor dem Absenden nochmal genau darauf durchsehen.
+  - type: dropdown
+    id: kostentraeger
+    attributes:
+      label: Kostenträger-Typ
+      options:
+        - PKV
+        - Beihilfe
+    validations:
+      required: true
+  - type: textarea
+    id: json
+    attributes:
+      label: Inhalt der exportierten .json-Datei
+      description: Kompletten Inhalt der heruntergeladenen Datei einfügen.
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: kontext
+    attributes:
+      label: Kontext
+      description: Optional, z. B. welcher Absender genau, wie viele Bescheide getestet, Besonderheiten.
+  - type: checkboxes
+    id: datenschutz
+    attributes:
+      label: Datenschutzbestätigung
+      options:
+        - label: Der profiltext enthält ausschließlich Layout-/Struktur-Beschreibung, keine echten Namen, Versicherungs- oder Rechnungsnummern, Beträge oder sonstige personenbezogenen Daten.
+          required: true
+        - label: Ich bin damit einverstanden, dass dieses Profil in einem zukünftigen Release als mitgeliefertes Profil aufgenommen werden kann.
+          required: true

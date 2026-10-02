@@ -1,0 +1,70 @@
+name: Fehler melden
+description: Einen reproduzierbaren Fehler in postbuch.net melden
+title: "[Fehler]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Danke für die Meldung. Keine echten Dokumente, personenbezogenen Daten,
+        Secrets, `.env`-Inhalte, Datenbank-Dumps oder unbearbeiteten Logs hochladen.
+        Sicherheitslücken bitte nicht hier, sondern privat über „Report a vulnerability“ melden.
+  - type: input
+    id: version
+    attributes:
+      label: postbuch.net-Version
+      description: Die Version steht in der Anwendung oder in der Datei VERSION.
+      placeholder: 2.9.1
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installationsart
+      options:
+        - install.sh / Selfhosting
+        - Manuelle Docker-Compose-Installation
+        - Eigene Entwicklungsumgebung
+        - Unbekannt
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Was ist passiert?
+      description: Beschreibe das beobachtete Verhalten ohne persönliche Daten.
+    validations:
+      required: true
+  - type: textarea
+    id: erwartet
+    attributes:
+      label: Was wurde erwartet?
+    validations:
+      required: true
+  - type: textarea
+    id: schritte
+    attributes:
+      label: Schritte zum Nachstellen
+      description: Möglichst klein und mit ausschließlich künstlichen Beispieldaten.
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: diagnose
+    attributes:
+      label: Anonymisierte Diagnoseinformationen
+      description: Optional. Logs und Screenshots vorher vollständig anonymisieren.
+      render: shell
+  - type: checkboxes
+    id: sicherheit
+    attributes:
+      label: Datenschutzbestätigung
+      options:
+        - label: Ich habe die Meldung auf personenbezogene Daten und Secrets geprüft.
+          required: true
+        - label: Es handelt sich nicht um eine Sicherheitslücke.
+          required: true

@@ -1,0 +1,9 @@
+[Unit]
+Description=Postbuch Host-Agent
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/postbuch/postbuch-update-agent.sh
+TimeoutStartSec=7200

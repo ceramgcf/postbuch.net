@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <title>Deckblatt Layout-Tuner</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0f0f13;
+      display: flex;
+      min-height: 100vh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+      color: #ccc;
+    }
+
+    /* ── Left panel ── */
+    #panel {
+      width: 320px;
+      min-width: 320px;
+      background: #18181f;
+      border-right: 1px solid #2a2a3a;
+      padding: 24px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+      overflow-y: auto;
+    }
+
+    h1 { color: #eee; font-size: 14px; letter-spacing: 0.06em; text-transform: uppercase; }
+    h2 { color: #aaa; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 10px; }
+
+    .group {
+      background: #1e1e28;
+      border: 1px solid #2a2a3a;
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+
+    .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+    .field:last-child { margin-bottom: 0; }
+
+    label { color: #888; font-size: 11px; letter-spacing: 0.04em; display: flex; justify-content: space-between; }
+    label span { color: #ddd; font-variant-numeric: tabular-nums; }
+
+    input[type=range] {
+      width: 100%;
+      accent-color: #a56bd8;
+      height: 4px;
+    }
+    input[type=number] {
+      width: 100%;
+      background: #12121a;
+      border: 1px solid #333;
+      border-radius: 4px;
+      color: #ddd;
+      padding: 5px 8px;
+      font-size: 12px;
+    }
+    input[type=text] {
+      width: 100%;
+      background: #12121a;
+      border: 1px solid #333;
+      border-radius: 4px;
+      color: #ddd;
+      padding: 5px 8px;
+      font-size: 12px;
+    }
+
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+    button {
+      width: 100%;
+      background: linear-gradient(90deg, #7d2dbd 0%, #2cc5dd 100%);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      padding: 12px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      letter-spacing: 0.02em;
+      transition: opacity 0.15s;
+    }
+    button:hover { opacity: 0.85; }
+    button:disabled { opacity: 0.4; cursor: wait; }
+
+    #copy-btn {
+      background: #2a2a3a;
+      font-size: 11px;
+      padding: 8px;
+      margin-top: -10px;
+    }
+
+    #status { color: #555; font-size: 10px; text-align: center; min-height: 14px; }
+
+    #values-box {
+      background: #12121a;
+      border: 1px solid #2a2a3a;
+      border-radius: 6px;
+      padding: 10px 12px;
+      font-size: 10px;
+      font-family: monospace;
+      color: #7a7;
+      line-height: 1.7;
+      white-space: pre;
+      user-select: all;
+    }
+
+    /* ── PDF Preview ── */
+    #preview-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 32px 24px;
+      overflow-y: auto;
+      gap: 12px;
+    }
+
+    #preview-label { color: #555; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+
+    iframe {
+      width: 100%;
+      max-width: 760px;
+      height: calc(100vh - 120px);
+      min-height: 500px;
+      border: 1px solid #2a2a3a;
+      border-radius: 6px;
+      background: #fff;
+    }
+  </style>
+</head>
+<body>
+
+<div id="panel">
+  <h1>Deckblatt Layout</h1>
+
+  <!-- Logo section -->
+  <div class="group">
+    <h2>Logo (PNG)</h2>
+
+    <div class="field">
+      <label>Breite (logoW) <span id="lw-val">250 pt</span></label>
+      <input type="range" id="logoW" min="40" max="300" step="1" value="250" />
+    </div>
+
+    <div class="row2">
+      <div class="field">
+        <label>X <span id="lx-val">345 pt</span></label>
+        <input type="number" id="logoX" value="345" min="0" max="595" step="1" />
+      </div>
+      <div class="field">
+        <label>Y <span id="ly-val">1 pt</span></label>
+        <input type="number" id="logoY" value="1" min="0" max="800" step="1" />
+      </div>
+    </div>
+  </div>
+
+  <!-- Instance name section -->
+  <div class="group">
+    <h2>Instanzname</h2>
+
+    <div class="field">
+      <label>Text</label>
+      <input type="text" id="instanceName" value="Familie Mustergültig Berlin" />
+    </div>
+
+    <div class="field">
+      <label>Schriftgröße (instFontSize) <span id="ifs-val">8 pt</span></label>
+      <input type="range" id="instFontSize" min="5" max="16" step="0.5" value="8" />
+    </div>
+
+    <div class="row2">
+      <div class="field">
+        <label>X <span id="ix-val">300 pt</span></label>
+        <input type="number" id="instX" value="300" min="0" max="595" step="1" />
+      </div>
+      <div class="field">
+        <label>Y <span id="iy-val">68 pt</span></label>
+        <input type="number" id="instY" value="68" min="0" max="800" step="1" />
+      </div>
+    </div>
+  </div>
+
+  <button id="gen-btn">Test-PDF generieren</button>
+  <div id="status"></div>
+
+  <!-- Current values readout -->
+  <div class="group">
+    <h2>Aktuelle Werte (für Copilot)</h2>
+    <div id="values-box">–</div>
+    <button id="copy-btn">Werte kopieren</button>
+  </div>
+</div>
+
+<!-- PDF preview -->
+<div id="preview-area">
+  <span id="preview-label">Vorschau erscheint hier nach Klick auf „Test-PDF generieren"</span>
+  <iframe id="pdf-frame" style="display:none"></iframe>
+</div>
+
+<script>
+  // ── Defaults (mirror cover-page.js tuned values) ─────────────────────────
+  // logoW=250, logoX=345, logoY=1  (logo bleeds over margin – intentional)
+  // instFontSize=8, instX=300, instY=68
+  // HEADER_ADV=34 (fixed – never depends on logo size)
+
+  const inputs = ['logoW','logoX','logoY','instFontSize','instX','instY','instanceName'];
+  const rangeDisplays = {
+    logoW:        'lw-val',
+    instFontSize: 'ifs-val',
+  };
+
+  function getVal(id) {
+    const el = document.getElementById(id);
+    return el.type === 'number' || el.type === 'text' ? el.value : el.value;
+  }
+
+  function updateDisplay(id) {
+    const el  = document.getElementById(id);
+    const key = rangeDisplays[id];
+    if (!key) return;
+    const unit = id === 'instFontSize' ? ' pt' : ' pt';
+    document.getElementById(key).textContent = el.value + unit;
+
+    // When logoW changes, auto-update logoX and instX to stay right-aligned
+    if (id === 'logoW') {
+      const logoW   = parseFloat(el.value);
+      const logoX   = Math.round(50 + 495.28 - logoW);
+      const logoH   = Math.round(logoW * 351 / 779);
+      const logoY   = parseFloat(document.getElementById('logoY').value);
+      const instX   = Math.round(50 + 495.28 - 155);
+      const instY   = Math.round(logoY + logoH + 3);
+      document.getElementById('logoX').value  = logoX;
+      document.getElementById('lx-val').textContent = logoX + ' pt';
+      document.getElementById('instX').value  = instX;
+      document.getElementById('ix-val').textContent = instX + ' pt';
+      document.getElementById('instY').value  = instY;
+      document.getElementById('iy-val').textContent = instY + ' pt';
+    }
+  }
+
+  function updateValuesBox() {
+    const v = {
+      logoW:        parseFloat(document.getElementById('logoW').value),
+      logoX:        parseFloat(document.getElementById('logoX').value),
+      logoY:        parseFloat(document.getElementById('logoY').value),
+      instFontSize: parseFloat(document.getElementById('instFontSize').value),
+      instX:        parseFloat(document.getElementById('instX').value),
+      instY:        parseFloat(document.getElementById('instY').value),
+      instanceName: document.getElementById('instanceName').value,
+    };
+    document.getElementById('values-box').textContent =
+      `logoW:        ${v.logoW}\n` +
+      `logoX:        ${v.logoX}\n` +
+      `logoY:        ${v.logoY}\n` +
+      `instFontSize: ${v.instFontSize}\n` +
+      `instX:        ${v.instX}\n` +
+      `instY:        ${v.instY}\n` +
+      `instanceName: "${v.instanceName}"`;
+  }
+
+  // Wire up all inputs
+  for (const id of inputs) {
+    const el = document.getElementById(id);
+    el.addEventListener('input', () => {
+      updateDisplay(id);
+      // live-update number label next to number inputs
+      if (el.type === 'number') {
+        const map = { logoX:'lx-val', logoY:'ly-val', instX:'ix-val', instY:'iy-val' };
+        if (map[id]) document.getElementById(map[id]).textContent = el.value + ' pt';
+      }
+      updateValuesBox();
+    });
+  }
+  updateValuesBox();
+
+  // ── Generate PDF ──────────────────────────────────────────────────────────
+  const genBtn   = document.getElementById('gen-btn');
+  const statusEl = document.getElementById('status');
+  const frame    = document.getElementById('pdf-frame');
+
+  genBtn.addEventListener('click', async () => {
+    genBtn.disabled    = true;
+    genBtn.textContent = 'Generiere…';
+    statusEl.textContent = '';
+
+    const body = {
+      logoW:        parseFloat(document.getElementById('logoW').value),
+      logoX:        parseFloat(document.getElementById('logoX').value),
+      logoY:        parseFloat(document.getElementById('logoY').value),
+      instFontSize: parseFloat(document.getElementById('instFontSize').value),
+      instX:        parseFloat(document.getElementById('instX').value),
+      instY:        parseFloat(document.getElementById('instY').value),
+      instanceName: document.getElementById('instanceName').value,
+    };
+
+    try {
+      const res = await fetch('/api/export/cover-preview', {
+        method:      'POST',
+        credentials: 'include',
+        headers:     { 'Content-Type': 'application/json' },
+        body:        JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt || `HTTP ${res.status}`);
+      }
+
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      frame.src  = url;
+      frame.style.display = 'block';
+      document.getElementById('preview-label').textContent = 'Vorschau';
+      statusEl.textContent = `Generiert – ${new Date().toLocaleTimeString('de-DE')}`;
+    } catch (err) {
+      statusEl.textContent = 'Fehler: ' + err.message;
+      console.error(err);
+    } finally {
+      genBtn.disabled    = false;
+      genBtn.textContent = 'Test-PDF generieren';
+    }
+  });
+
+  // ── Copy values ───────────────────────────────────────────────────────────
+  document.getElementById('copy-btn').addEventListener('click', () => {
+    const txt = document.getElementById('values-box').textContent;
+    navigator.clipboard.writeText(txt).catch(() => {
+      // fallback
+      const ta = document.createElement('textarea');
+      ta.value = txt; document.body.appendChild(ta);
+      ta.select(); document.execCommand('copy');
+      document.body.removeChild(ta);
+    });
+    document.getElementById('copy-btn').textContent = 'Kopiert ✓';
+    setTimeout(() => { document.getElementById('copy-btn').textContent = 'Werte kopieren'; }, 1500);
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,170 @@
+@import "tailwindcss";
+
+@theme {
+  /* --- Typography --- */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+
+  /* --- Purple / Lilac / Turquoise palette --- */
+  --color-border: oklch(0.91 0.02 280);
+  --color-input: oklch(0.91 0.02 280);
+  --color-ring: oklch(0.55 0.22 280);
+
+  --color-background: oklch(0.985 0.005 280);
+  --color-foreground: oklch(0.18 0.02 280);
+
+  /* Primary: rich purple */
+  --color-primary: oklch(0.50 0.22 280);
+  --color-primary-foreground: oklch(0.98 0.005 280);
+
+  /* Secondary: soft lilac tint */
+  --color-secondary: oklch(0.95 0.03 280);
+  --color-secondary-foreground: oklch(0.25 0.06 280);
+
+  /* Accent: turquoise hint */
+  --color-accent: oklch(0.94 0.04 200);
+  --color-accent-foreground: oklch(0.22 0.08 200);
+
+  /* Destructive */
+  --color-destructive: oklch(0.58 0.24 27);
+  --color-destructive-foreground: oklch(0.58 0.24 27);
+
+  /* Muted: very light purple-grey */
+  --color-muted: oklch(0.96 0.012 280);
+  --color-muted-foreground: oklch(0.50 0.03 280);
+
+  /* Cards & popovers */
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.18 0.02 280);
+  --color-popover: oklch(1 0 0);
+  --color-popover-foreground: oklch(0.18 0.02 280);
+
+  /* Sidebar-specific */
+  --color-sidebar: oklch(0.97 0.015 280);
+  --color-sidebar-foreground: oklch(0.30 0.04 280);
+  --color-sidebar-active: oklch(0.50 0.22 280);
+
+  /* Radii */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+}
+
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}
+
+/* --- Global refinements --- */
+body {
+  font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle animated gradient for primary buttons */
+.btn-gradient {
+  background: linear-gradient(135deg, #7d2dbd 0%, #a56bd8 45%, #2cc5dd 100%);
+  background-size: 200% 200%;
+  animation: gradient-shift 6s ease infinite;
+}
+
+@keyframes gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* Fortschrittsbalken mit animiertem Farbverlauf */
+.progress-gradient {
+  background: linear-gradient(90deg, #7d2dbd 0%, #a56bd8 50%, #2cc5dd 100%);
+  background-size: 200% 100%;
+  animation: gradient-shift 3s ease infinite;
+}
+
+/* Unbestimmter Fortschritt (Gesamtgröße unbekannt): Balken wandert hin und her */
+.animate-progress-indeterminate {
+  animation: progress-indeterminate 1.4s ease-in-out infinite, gradient-shift 3s ease infinite;
+}
+
+@keyframes progress-indeterminate {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(150%); }
+  100% { transform: translateX(-100%); }
+}
+
+/* Countdown-Ring des Suche-Autoforwards (Umfang 2π·17 ≈ 106.8) */
+.animate-countdown-drain {
+  animation: countdown-drain 3s linear forwards;
+}
+@keyframes countdown-drain {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: 106.8; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-countdown-drain { animation: none; }
+}
+
+/* Card hover lift */
+.card-hover {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.card-hover:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 20px oklch(0.50 0.22 280 / 0.1);
+}
+
+/* Search result specific styling: default muted card, on hover become lighter (inverse of previous behavior) */
+.search-result-card {
+  background: var(--color-muted);
+  color: var(--color-muted-foreground);
+  border-color: color-mix(in oklch, var(--color-border) 80%, transparent);
+}
+.search-result-card:hover {
+  background: var(--color-card);
+  color: var(--color-card-foreground);
+}
+
+/* Subject highlight in search results: show yellow marker stripe and underlay on hover */
+.search-result-card .subject {
+  position: relative;
+  transition: background-color 160ms ease, color 160ms ease;
+  padding: 0 0.125rem;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.search-result-card:hover .subject.search-highlight {
+  background-image: linear-gradient(0deg, #F6F42FDE 0.6em, transparent 0.6em);
+}
+
+/* When hovering the subject inside a hovered card, show yellow underlay */
+.search-result-card:hover .subject.search-highlight:hover {
+  background-color: #FFEF9F; /* soft yellow */
+  background-blend-mode: multiply;
+  color: inherit;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: oklch(0.80 0.02 280);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.65 0.04 280);
+}
+
+/* Textmarker-Hervorhebung als reiner CSS-Gradient, keine Bilddatei nötig */
+.highlight {
+  background-image: linear-gradient(0deg, #F6F42FDE 0.6em, transparent 0.6em);
+  padding: 0 0.15em;
+  /* Ohne clone bekäme eine über mehrere Zeilen laufende Markierung einen
+     einzigen, über alle Zeilen gestreckten Strich statt einen pro Zeile. */
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}

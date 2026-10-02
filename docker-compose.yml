@@ -1,0 +1,200 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16@sha256:a36250871de0833b8757561c72f2477ef1ddd1101afa4e617fb552e0de514c6b
+    container_name: postbuch-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postbuch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-postbuch}
+      # postbuch.net ist ausschließlich für den Einsatz in Deutschland gedacht.
+      # Wirkt nur auf frische initdb-Läufe (Server-Default in postgresql.conf);
+      # bestehende Datenverzeichnisse setzt die App selbst je Verbindung per
+      # `SET TIME ZONE` (siehe app/src/db.js), unabhängig vom Server-Default.
+      TZ: Europe/Berlin
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    ports:
+      # Nur auf localhost binden: sonst ist die DB inkl. aller Klartext-Secrets bei
+      # einer Instanz ohne Firewall direkt aus dem Internet erreichbar.
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postbuch} -d ${POSTGRES_DB:-postbuch}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - postbuch
+
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    container_name: postbuch-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./data/scan_buffer:/data/scan_buffer
+      - ./data/scanner_test:/data/scanner_test
+      # Übergabeverzeichnis App ↔ Host-Update-Agent. Die App schreibt hier eine
+      # Anforderung, mehr nicht: kein Docker-Socket, kein Quellbaum-Mount.
+      - ./data/update:/data/update
+      # Persistente, rein diagnostische Zusammenfassung des einmaligen
+      # LxD-Upgrades auf Fremdinstanzen (getrennt vom Update-Agent-Protokoll).
+      - ./data/migration:/data/migration
+    environment:
+      # Postgres — nur diese kommen permanent aus ENV
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER:-postbuch}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-postbuch}
+      PORT: 3421
+      NODE_ENV: production
+      TZ: Europe/Berlin
+      # ── Seed-only: alle anderen Werte ──
+      # Werden von docker-entrypoint.sh beim ersten Start in _settings geschrieben.
+      # Danach liest die App ALLES aus der DB. ENV_FORCE_OVERRIDE=1 überschreibt.
+      ENV_FORCE_OVERRIDE: ${ENV_FORCE_OVERRIDE:-0}
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+      APP_ADMIN_USERNAME: ${APP_ADMIN_USERNAME:-}
+      INSTANCE_NAME: ${INSTANCE_NAME:-Postbuch}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3420}
+      WEB_PORT: ${WEB_PORT:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # dev-Key zur Freischaltung der Claude-Subscription (Agent SDK). Ohne gültigen
+      # Key existiert die Subscription-Option weder im UI noch im Backend. Wird zur
+      # Laufzeit direkt aus der ENV geprüft (subscriptionFeatureUnlocked), nicht geseedet.
+      POSTBUCH_SDK_DEV_KEY: ${POSTBUCH_SDK_DEV_KEY:-}
+      # Zugangsdaten ("benutzer:passwort") fuer die Bezugsquelle der beiden
+      # Feeds (Update-Manifest, Modellempfehlungen). Wie der SDK-Key bewusst
+      # NICHT geseedet: Credentials gehoeren nicht in _settings, und ein
+      # Passwortwechsel soll .env-Aenderung + Neustart sein, nicht ENV_FORCE_OVERRIDE.
+      POSTBUCH_FEED_AUTH: ${POSTBUCH_FEED_AUTH:-}
+      # Nicht geheime, aber instanzspezifische Adresse des Release- und
+      # Empfehlungs-Feeds. Absichtlich ohne Default: jede Installation bestimmt
+      # ihre Bezugsquelle selbst.
+      POSTBUCH_FEED_BASE_URL: ${POSTBUCH_FEED_BASE_URL:-}
+      # Ablage-Backend der Erstinstallation ('onedrive' | 'nextcloud'). seed-settings.js
+      # schreibt den Wert NUR, wenn _settings.storage_backend noch gar nicht existiert
+      # — also bei leerer DB. Auf einer bestehenden Instanz wird das aktive Backend
+      # ausschliesslich ueber die Migration umgeschaltet, nie ueber die ENV.
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-}
+      ONEDRIVE_CLIENT_ID: ${ONEDRIVE_CLIENT_ID:-}
+      ONEDRIVE_CLIENT_SECRET: ${ONEDRIVE_CLIENT_SECRET:-}
+      ONEDRIVE_TENANT_ID: ${ONEDRIVE_TENANT_ID:-}
+      DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
+      SCANNER_URL: ${SCANNER_URL:-http://scanner:8080}
+      SCANNER_PORT: ${SCANNER_PORT:-8080}
+      # seed-settings.js liest SCANNER_DEVICE_URL im App-Container. Ohne diese Zeile
+      # landete ein im Installer angegebener Scanner-Wert nie in _settings — die
+      # Variable ging bisher nur an den scanner-Service.
+      SCANNER_DEVICE_URL: ${SCANNER_DEVICE_URL:-}
+      # NUR die Tatsache, nie der Wert: install.sh legt das DuckDNS-Token in die
+      # .env, von wo es ausschliesslich caddy bekommt. Der Einrichtungsassistent
+      # soll aber zeigen koennen, dass bereits eines hinterlegt ist, statt ein
+      # leeres Feld anzubieten. `:+1` setzt die Variable auf 1, wenn das Token
+      # nicht leer ist — sonst auf den Leerstring.
+      DUCKDNS_TOKEN_VORHANDEN: ${DUCKDNS_API_TOKEN:+1}
+      # Die Domain dagegen ist kein Geheimnis. Ohne sie muesste der
+      # Einrichtungsassistent die im Installer gesetzte Domain aus der
+      # Basisadresse raten, statt sie zu kennen (seed-settings.js schreibt sie
+      # einmalig nach _settings.hostconfig_duckdns).
+      DUCKDNS_DOMAIN: ${DUCKDNS_DOMAIN:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - postbuch
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    container_name: postbuch-web
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "${WEB_PORT:-3420}:80"
+    networks:
+      - postbuch
+
+  scanner:
+    build: ./scanner
+    profiles:
+      - scanner
+    container_name: postbuch-scanner
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "${SCANNER_PORT:-8080}:8080"
+    environment:
+      TZ: Europe/Berlin
+      APP_URL: http://app:3421
+      # Fallback-URL falls App beim ersten Start noch nicht bereit ist. Leer,
+      # solange kein Scanner konfiguriert ist — der 30s-Poll gegen
+      # /api/internal/config zieht die echte Adresse nach.
+      SCANNER_DEVICE_URL: ${SCANNER_DEVICE_URL:-}
+    volumes:
+      - ./data/scans_pending:/scans
+      - ./data/scanner_test:/test-scans
+    networks:
+      - postbuch
+
+  cleaner:
+    build: ./cleaner
+    profiles:
+      - scanner
+    container_name: postbuch-cleaner
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      TZ: Europe/Berlin
+      APP_URL: http://app:3421
+      APP_WEBHOOK_URL: http://app:3421/api/webhooks/scan-complete
+      APP_WEBHOOK_REGISTERED_URL: http://app:3421/api/webhooks/scan-registered
+      SCAN_DEBUG: ${SCAN_DEBUG:-0}
+    volumes:
+      - ./data/scans_pending:/input
+      - ./data/scanner_test:/test-scans
+    networks:
+      - postbuch
+
+  caddy:
+    build: ./caddy
+    # Fester Image-Name, damit der Installer das (release-unabhaengige) caddy-
+    # Image zuverlaessig wiederfindet und den teuren xcaddy-Build nicht bei
+    # jedem Update wiederholt.
+    image: postbuch-caddy:local2
+    container_name: postbuch-caddy
+    restart: unless-stopped
+    profiles:
+      - caddy
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      TZ: Europe/Berlin
+      CF_API_TOKEN: ${CF_API_TOKEN:-}
+      DUCKDNS_API_TOKEN: ${DUCKDNS_API_TOKEN:-}
+      DUCKDNS_DOMAIN: ${DUCKDNS_DOMAIN:-}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - postbuch
+
+networks:
+  postbuch:
+    driver: bridge

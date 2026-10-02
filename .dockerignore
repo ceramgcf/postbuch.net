@@ -1,0 +1,20 @@
+# Root-.dockerignore — gilt für App- und Web-Builds mit context=.
+# Whitelist-Stil: alles ausschließen, dann nur die beiden Buildkontexte zulassen.
+**
+
+!app/**
+!web/**
+!VERSION
+# Die Anwenderdokumentation wird vom Web-Build als statisches Asset
+# mitgeliefert (In-App-Hilfe unter /hilfe). Sie ist Quelltext des Repos,
+# keine Kopie — siehe web/Dockerfile.
+!docs/**
+
+# Subpfade, die nicht in den Build gehören
+app/node_modules
+app/.git
+app/*.md
+web/node_modules
+web/dist
+web/.git
+web/*.md

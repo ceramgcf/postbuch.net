@@ -1,0 +1,39 @@
+{
+  "id": "/",
+  "name": "postbuch.net",
+  "short_name": "postbuch.net",
+  "description": "Dokumentenverwaltung & postbuch.net",
+  "start_url": "/",
+  "scope": "/",
+  "display": "fullscreen",
+  "capture_links": "existing-client-navigate",
+  "launch_handler": { "client_mode": ["navigate-existing", "auto"] },
+  "background_color": "#f9f8ff",
+  "theme_color": "#7c3aed",
+  "icons": [
+    {
+      "src": "/Postbuch-Logo192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/Postbuch-Logo512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/Postbuch-Logo512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

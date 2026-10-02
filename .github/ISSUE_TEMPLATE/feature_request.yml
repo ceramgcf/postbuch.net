@@ -1,0 +1,41 @@
+name: Funktion vorschlagen
+description: Eine neue oder verbesserte Funktion für postbuch.net vorschlagen
+title: "[Idee]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Beschreibe zuerst das Problem und den Nutzen. Bitte keine echten
+        Dokumente, personenbezogenen Daten oder Secrets einfügen.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Welches Problem soll gelöst werden?
+      description: Beschreibe den heutigen Ablauf und warum er unpraktisch ist.
+    validations:
+      required: true
+  - type: textarea
+    id: vorschlag
+    attributes:
+      label: Gewünschte Lösung
+      description: Wie sollte sich postbuch.net aus Sicht der Nutzer verhalten?
+    validations:
+      required: true
+  - type: textarea
+    id: alternativen
+    attributes:
+      label: Bekannte Alternativen oder Workarounds
+  - type: textarea
+    id: auswirkungen
+    attributes:
+      label: Mögliche Auswirkungen
+      description: Optional, zum Beispiel Installation, Updates, Datenschutz oder bestehende Daten.
+  - type: checkboxes
+    id: datenschutz
+    attributes:
+      label: Datenschutzbestätigung
+      options:
+        - label: Der Vorschlag enthält keine personenbezogenen Daten oder Secrets.
+          required: true

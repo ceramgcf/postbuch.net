@@ -1,0 +1,24 @@
+# Caddyfile.example — Reverse-Proxy mit automatischem HTTPS
+# Kopieren nach caddy/Caddyfile, eine Variante wählen, Domain eintragen.
+#   cp caddy/Caddyfile.example caddy/Caddyfile
+
+# ── Variante A: kostenlose DuckDNS-Subdomain ───────────────────────
+# DUCKDNS_API_TOKEN und DUCKDNS_DOMAIN in der .env setzen.
+{env.DUCKDNS_DOMAIN} {
+    tls {
+        dns duckdns {env.DUCKDNS_API_TOKEN}
+        resolvers 8.8.8.8 1.1.1.1
+    }
+    reverse_proxy web:80
+}
+
+# ── Variante B: eigene Domain, DNS bei Cloudflare ──────────────────
+# CF_API_TOKEN in der .env setzen (Zone:Read + DNS:Edit).
+# Variante A oben entfernen und hier die Domain eintragen:
+#
+# deine.domain.example {
+#     tls {
+#         dns cloudflare {env.CF_API_TOKEN}
+#     }
+#     reverse_proxy web:80
+# }
