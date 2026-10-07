@@ -12,6 +12,7 @@
 
 import pool from '../db.js';
 import { uiLog } from '../log.js';
+import { sperrePerioden } from './perioden-sperre.js';
 
 function httpError(message, status) {
   const e = new Error(message);
@@ -30,35 +31,53 @@ export async function pinDokument(postid, { person, kostentraeger, grund, akteur
   if (!['PKV', 'Beihilfe'].includes(kostentraeger)) throw httpError('Ungültiger Kostenträger', 400);
   if (!person) throw httpError('Person fehlt', 400);
 
-  const docRes = await pool.query(`SELECT 1 FROM postbuch WHERE postid = $1`, [postid]);
-  if (docRes.rows.length === 0) throw httpError('Dokument nicht gefunden', 404);
+  // Prüfen und Schreiben unter der Periodensperre der Person: Ohne sie
+  // könnte eine gleichzeitige Einreichung die gelesene Periode schließen,
+  // und die Anpinnung bliebe in einer eingereichten Periode liegen, ohne je
+  // im Paket gestanden zu haben (service/perioden-sperre.js).
+  const client = await pool.connect();
+  let periode;
+  try {
+    await client.query('BEGIN');
+    await sperrePerioden(client, [{ person, kostentraeger }]);
 
-  const periodeRes = await pool.query(
-    `SELECT periode FROM abrechnungsperiode_buch
-      WHERE person = $1 AND kostentraeger = $2 AND status = 'COLLECTING'
-      ORDER BY periode DESC LIMIT 1`,
-    [person, kostentraeger]
-  );
-  if (periodeRes.rows.length === 0) throw httpError('KEINE_OFFENE_PERIODE', 422);
-  const periode = periodeRes.rows[0].periode;
+    const docRes = await client.query(`SELECT 1 FROM postbuch WHERE postid = $1`, [postid]);
+    if (docRes.rows.length === 0) throw httpError('Dokument nicht gefunden', 404);
 
-  const bestehend = await pool.query(
-    `SELECT status FROM dokument_pin WHERE postid = $1 AND person = $2 AND kostentraeger = $3`,
-    [postid, person, kostentraeger]
-  );
-  if (bestehend.rows.length > 0) {
-    if (bestehend.rows[0].status === 'EINGEREICHT') throw httpError('BEREITS_EINGEREICHT', 422);
-    await pool.query(
-      `UPDATE dokument_pin SET grund = $4, periode = $5
-        WHERE postid = $1 AND person = $2 AND kostentraeger = $3`,
-      [postid, person, kostentraeger, g, periode]
+    const periodeRes = await client.query(
+      `SELECT periode FROM abrechnungsperiode_buch
+        WHERE person = $1 AND kostentraeger = $2 AND status = 'COLLECTING'
+        ORDER BY periode DESC LIMIT 1`,
+      [person, kostentraeger]
     );
-  } else {
-    await pool.query(
-      `INSERT INTO dokument_pin (postid, person, kostentraeger, periode, grund, vorgemerkt_von)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [postid, person, kostentraeger, periode, g, akteur || null]
+    if (periodeRes.rows.length === 0) throw httpError('KEINE_OFFENE_PERIODE', 422);
+    periode = periodeRes.rows[0].periode;
+
+    const bestehend = await client.query(
+      `SELECT status FROM dokument_pin WHERE postid = $1 AND person = $2 AND kostentraeger = $3
+          FOR UPDATE`,
+      [postid, person, kostentraeger]
     );
+    if (bestehend.rows.length > 0) {
+      if (bestehend.rows[0].status === 'EINGEREICHT') throw httpError('BEREITS_EINGEREICHT', 422);
+      await client.query(
+        `UPDATE dokument_pin SET grund = $4, periode = $5
+          WHERE postid = $1 AND person = $2 AND kostentraeger = $3`,
+        [postid, person, kostentraeger, g, periode]
+      );
+    } else {
+      await client.query(
+        `INSERT INTO dokument_pin (postid, person, kostentraeger, periode, grund, vorgemerkt_von)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [postid, person, kostentraeger, periode, g, akteur || null]
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
   }
   uiLog('CREATE', 'postbuch', postid, `Dokument an ${kostentraeger}-Periode ${periode} (${person}) angepinnt`);
   return { status: 'VORGEMERKT', periode };

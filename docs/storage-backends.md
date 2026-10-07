@@ -216,8 +216,9 @@ Ordner-Schritt. Angelegt wird:
 **Ein Ordner je Lebensbereich** – zwölf Stück, fest mit dem Release ausgeliefert
 (_Tier_, _Steuer & Behörden_, _Vorsorge & Absicherung_, _Gesundheit_, _Beruf_,
 _Bildung_, _Mobilität_, _Versorgung_, _Wohnen_, _Finanzen_, _Freizeit_,
-_Allgemeines_). Bei der [Ablage nach Person](#ablage-nach-person) liegen sie
-stattdessen unter den Personenordnern.
+_Allgemeines_). Steht der Lebensbereich in der
+[Ablagestruktur](#ablagestruktur-wählen) nicht auf der ersten Ebene, liegen sie
+stattdessen unter den Ordnern der Ebene davor.
 
 Unterhalb der Lebensbereiche gibt es **Ordner je Dokumentart**. Diese entstehen
 **nicht** im Voraus, sondern erst, wenn das erste Dokument einer Kombination
@@ -227,54 +228,100 @@ tatsächlich belegt ist. Enthält ein Dokumentart-Name Zeichen, die OneDrive in
 Ordnernamen verbietet (`\ / : * ? " < > |`), wird für den Ordnernamen ersetzt;
 die Anzeige in der App bleibt unverändert.
 
-### Ablage nach Person
+### Ablagestruktur wählen
 
-Statt nach Lebensbereich lässt sich die Ablage auch zuerst nach Person
-gliedern. Umgestellt wird unter ![Dateiablage-Symbol](icons/hard-drive.svg)
-**Einstellungen → Dateiablage** auf der Karte **Ablagestruktur**:
+Wie die Dokumentordner unterhalb des Wurzelordners gegliedert sind, legt die
+Karte **Ablagestruktur** unter ![Dateiablage-Symbol](icons/hard-drive.svg)
+**Einstellungen → Dateiablage** fest:
 
-| Struktur               | Pfad unterhalb des Wurzelordners             |
-| ---------------------- | -------------------------------------------- |
-| **Nach Lebensbereich** | `<Lebensbereich>/<Dokumentart>` (Standard)   |
-| **Nach Person**        | `<Person>/<Lebensbereich>/<Dokumentart>`     |
+| Struktur               | Pfad unterhalb des Wurzelordners           |
+| ---------------------- | ------------------------------------------ |
+| **Nach Lebensbereich** | `<Lebensbereich>/<Dokumentart>` (Standard) |
+| **Nach Person**        | `<Person>/<Lebensbereich>/<Dokumentart>`   |
+| **Benutzerdefiniert**  | ein bis vier frei gewählte Ebenen          |
 
-Maßgeblich ist die Person, der ein Dokument zugeordnet ist, in der Regel der
-Adressat. Der Personenordner heißt wie ihr Kurzname. Dokumente ohne
-zugeordnete Person liegen im Ordner `Gemeinsam`. Die Systemordner (`_inbox`,
-`_trash` …) bleiben unverändert direkt unter dem Wurzelordner. Personen-,
-Lebensbereichs- und Dokumentartordner entstehen erst, wenn das erste Dokument
-dort abgelegt wird.
+Bei **Benutzerdefiniert** öffnet sich eine Auswahl mit vier Ebenen. Die erste
+Ebene ist Pflicht, die übrigen können `(nicht besetzt)` bleiben. Eine Ebene
+lässt sich erst wählen, wenn die darüber besetzt ist, und jede Ebene bietet
+nur an, was weiter oben noch nicht vergeben ist. Unter der Auswahl steht der
+entstehende Pfad; **Übernehmen** startet die Umstellung. Zur Wahl stehen:
+
+| Ebene             | Ordnername                                                      |
+| ----------------- | --------------------------------------------------------------- |
+| **Person**        | Kurzname der Person (siehe unten), ohne Person `Gemeinsam`      |
+| **Lebensbereich** | Name des Lebensbereichs                                         |
+| **Dokumentart**   | Name der Dokumentart                                            |
+| **Jahr**          | Jahr des Briefdatums, ohne Briefdatum `Ohne Datum`              |
+| **Richtung**      | `Eingang` oder `Ausgang`                                        |
+
+Ergibt die Auswahl genau eine der beiden Vorlagen, zeigt die Karte diese
+Vorlage als aktiv an. Die Systemordner
+(`_inbox`, `_trash` …) bleiben unverändert direkt unter dem Wurzelordner.
+Alle Dokumentordner entstehen erst, wenn das erste Dokument dort abgelegt
+wird.
 
 Die Umstellung verschiebt den gesamten Bestand des aktiven Backends im
 Hintergrund, Datei für Datei; die Karte zeigt den Fortschritt. Neue Dokumente
-landen sofort in der neuen Struktur. Erst wenn alle Dateien umgezogen sind,
-entfernt postbuch.net die leer gewordenen Ordner der bisherigen Struktur.
-Ordner, in denen noch fremde Dateien liegen, bleiben stehen und werden im
-Ergebnis gezählt. Schlägt das Verschieben einzelner Dateien fehl, bleiben alle
-alten Ordner stehen; die Karte listet die betroffenen Dokumente, und ein
-erneuter Klick auf die aktive Struktur setzt den Umzug fort. Die Dateien
-behalten dabei ihre Datei-ID, der Zugriff aus postbuch.net funktioniert also
-während des ganzen Umzugs. Nur Sync-Programme auf angeschlossenen Rechnern
-haben bei großen Beständen entsprechend viel abzugleichen.
+landen sofort in der neuen Struktur. Wird während des Umzugs eine andere
+Struktur gewählt, bricht postbuch.net den laufenden Umzug nach dem gerade
+bewegten Dokument ab und ersetzt ihn durch den Umzug in die neue Struktur.
+Erst wenn alle Dateien umgezogen sind, entfernt postbuch.net die leer
+gewordenen Ordner früherer Strukturen. Ordner, in denen noch fremde Dateien
+liegen, bleiben stehen und werden im Ergebnis gezählt. Schlägt das Verschieben
+einzelner Dateien fehl, bleiben alle alten Ordner stehen; die Karte listet die
+betroffenen Dokumente, und ein erneuter Klick auf die aktive Struktur setzt
+den Umzug fort. Die Dateien behalten dabei ihre Datei-ID, der Zugriff aus
+postbuch.net funktioniert also während des ganzen Umzugs. Nur Sync-Programme
+auf angeschlossenen Rechnern haben bei großen Beständen entsprechend viel
+abzugleichen.
 
-Vor der Umstellung auf **Nach Person** prüft postbuch.net, ob sich alle
-Kurznamen als Ordnernamen eignen. Ein Kurzname darf nicht mit `_` oder `.`
-beginnen, nicht `Gemeinsam` lauten und keinem Lebensbereich entsprechen;
-außerdem dürfen sich zwei Kurznamen nicht nur in der Groß- und
-Kleinschreibung unterscheiden. Passt ein Kurzname nicht, nennt die Karte ihn
-samt Grund, und er muss zuerst unter **Einstellungen → Personen & Zugänge**
-geändert werden. Dieselben Regeln gelten beim Anlegen und Umbenennen von
-Personen.
+Enthält die Struktur die Ebene Person, legt die Karte zusätzlich fest, wonach
+sich die Personenordner richten:
 
-Solange die Ablage nach Person gegliedert ist, folgt sie Änderungen
-automatisch:
+- **Adressat** (Standard): die Person, an die das Dokument gerichtet ist.
+- **Behandelte Person bzw. Tier:** Bei Arztrechnungen, Arztberichten und
+  Erstattungsbescheiden zählt die behandelte Person oder das behandelte Tier.
+  Die Rechnung für die Behandlung eines Kindes landet damit im Ordner des
+  Kindes, auch wenn sie an einen Elternteil adressiert ist. Nennt ein Dokument
+  keine eindeutige behandelte Person, etwa ein Erstattungsbescheid mit
+  Positionen für mehrere Personen, oder ist die behandelte Person nicht unter
+  **Personen & Zugänge** erfasst, gilt der Adressat.
+
+Diese Auswahl erscheint auf der Karte, sobald die aktive Struktur die Ebene
+Person enthält, und im Bestätigungsdialog jeder Umstellung auf eine solche
+Struktur. Eine Änderung verschiebt wie ein Strukturwechsel den gesamten
+Bestand.
+
+Enthält die Struktur die Ebene Person, prüft postbuch.net vor der Umstellung,
+ob sich alle Kurznamen als Ordnernamen eignen. Ein Kurzname darf nicht mit `_`
+oder `.` beginnen und nicht `Gemeinsam` lauten; außerdem dürfen sich zwei
+Kurznamen nicht nur in der Groß- und Kleinschreibung unterscheiden. Steht
+Person auf der ersten Ebene, darf ein Kurzname zusätzlich keinem
+Lebensbereich, keiner Dokumentart und keinem Jahres- oder Richtungsordner
+entsprechen. Passt ein Kurzname nicht, nennt die Karte ihn samt Grund, und er
+muss zuerst unter **Einstellungen → Personen & Zugänge** geändert werden.
+Beim Anlegen und Umbenennen von Personen gelten die Grundregeln sowie der
+Ausschluss von Lebensbereichsnamen.
+
+Die Ablage folgt Änderungen am Dokument automatisch, soweit die betroffene
+Angabe eine Ebene der Struktur ist:
 
 - **Andere Person am Dokument:** Die Datei wandert in den Ordner der neuen
-  Person bzw. nach `Gemeinsam`.
-- **Kurzname geändert:** Der Personenordner wird umbenannt; die Dateien
+  Person bzw. nach `Gemeinsam`. Richten sich die Personenordner nach der
+  behandelten Person, gilt das auch für eine geänderte behandelte Person
+  einer Arztrechnung. Ein Erstattungsbescheid wird zunächst beim Adressaten
+  abgelegt und wandert nach dem Abgleich seiner Positionen gegebenenfalls in
+  den Ordner der behandelten Person.
+- **Briefdatum in ein anderes Jahr geändert:** Die Datei wandert in den
+  passenden Jahresordner.
+- **Richtung geändert:** Die Datei wandert nach `Eingang` bzw. `Ausgang`.
+- **Lebensbereich oder Dokumentart geändert:** Die Datei wandert in den
+  passenden Ordner.
+- **Kurzname geändert:** Die Personenordner werden umbenannt; die Dateien
   bleiben, wo sie sind.
-- **Person gelöscht:** Ihre verbleibenden Dokumente wandern nach `Gemeinsam`,
-  anschließend wird ihr leerer Personenordner entfernt.
+- **Person gelöscht:** Ihre verbleibenden Dokumente wandern zum Adressaten
+  bzw. nach `Gemeinsam`, anschließend werden ihre leeren Personenordner
+  entfernt.
 
 Zwei Regeln gelten überall, auch beim Umzug:
 
@@ -315,7 +362,7 @@ Leerlauf: Im selben Zug geht postbuch.net **jedes** Dokument des aktiven
 Backends mit gespeicherter Datei-ID einzeln durch (direkt über die ID aufgelöst, kein Durchsuchen der
 Dateiablage nötig – siehe [unten](#dateien-manuell-in-der-dateiablage-verschieben-oder-umbenennen))
 und verschiebt es in seinen korrekten Ordner der gewählten
-[Ablagestruktur](#ablage-nach-person), falls es dort nicht bereits liegt. Das gilt ausdrücklich auch für Dateien, die von Hand
+[Ablagestruktur](#ablagestruktur-wählen), falls es dort nicht bereits liegt. Das gilt ausdrücklich auch für Dateien, die von Hand
 irgendwo außerhalb der postbuch.net-Ordnerstruktur gelandet sind: Sie werden
 über ihre ID gefunden und zurückgeholt, ganz gleich ob der Wurzelordner-Pfad
 dabei geändert oder unverändert gelassen wurde.

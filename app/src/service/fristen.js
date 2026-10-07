@@ -16,6 +16,7 @@
  */
 
 import { query } from '../db.js';
+import { offenerBetragSql, istErsetztSql } from '../lib/rechnungs-filter.js';
 
 function todayISO() {
   return new Date().toISOString().split('T')[0];
@@ -77,26 +78,29 @@ export async function listFaelligkeiten({ bis = null, includeBezahlt = false } =
 
   const result = await query(
     `WITH cand AS (
-       SELECT ar.postid, ar.faelligkeit, ar.bezahlt_am, ar.gesamtbetrag - COALESCE(ar.bestritten_betrag, 0) AS gesamtbetrag,
+       SELECT ar.postid, ar.faelligkeit, ar.bezahlt_am, CASE WHEN ar.bezahlt_am IS NULL THEN ${offenerBetragSql('ar')} ELSE ar.gesamtbetrag - COALESCE(ar.bestritten_betrag, 0) END AS gesamtbetrag,
               p.betreff, 'arztrechnung'::text AS typ
          FROM postbuch.arztrechnung ar
          JOIN postbuch.postbuch p ON p.postid = ar.postid
         WHERE ar.gesamtbetrag IS NOT NULL AND ar.gesamtbetrag > COALESCE(ar.bestritten_betrag, 0)
           AND ar.faelligkeit IS NOT NULL AND ar.faelligkeit <= $1::date
+          AND NOT ${istErsetztSql('ar')}
        UNION ALL
-       SELECT hr.postid, hr.faelligkeit, hr.bezahlt_am, hr.gesamtbetrag - COALESCE(hr.bestritten_betrag, 0) AS gesamtbetrag,
+       SELECT hr.postid, hr.faelligkeit, hr.bezahlt_am, CASE WHEN hr.bezahlt_am IS NULL THEN ${offenerBetragSql('hr')} ELSE hr.gesamtbetrag - COALESCE(hr.bestritten_betrag, 0) END AS gesamtbetrag,
               p.betreff, 'handwerkerrechnung'
          FROM postbuch.handwerkerrechnung hr
          JOIN postbuch.postbuch p ON p.postid = hr.postid
         WHERE hr.gesamtbetrag IS NOT NULL AND hr.gesamtbetrag > COALESCE(hr.bestritten_betrag, 0)
           AND hr.faelligkeit IS NOT NULL AND hr.faelligkeit <= $1::date
+          AND NOT ${istErsetztSql('hr')}
        UNION ALL
-       SELECT gr.postid, gr.faelligkeit, gr.bezahlt_am, gr.gesamtbetrag - COALESCE(gr.bestritten_betrag, 0) AS gesamtbetrag,
+       SELECT gr.postid, gr.faelligkeit, gr.bezahlt_am, CASE WHEN gr.bezahlt_am IS NULL THEN ${offenerBetragSql('gr')} ELSE gr.gesamtbetrag - COALESCE(gr.bestritten_betrag, 0) END AS gesamtbetrag,
               p.betreff, 'rechnung'
          FROM postbuch.generische_rechnung gr
          JOIN postbuch.postbuch p ON p.postid = gr.postid
         WHERE gr.gesamtbetrag IS NOT NULL AND gr.gesamtbetrag > COALESCE(gr.bestritten_betrag, 0)
           AND gr.faelligkeit IS NOT NULL AND gr.faelligkeit <= $1::date
+          AND NOT ${istErsetztSql('gr')}
      )
      SELECT c.* FROM cand c
       WHERE ($2::boolean OR c.bezahlt_am IS NULL)

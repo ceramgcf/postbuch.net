@@ -44,6 +44,7 @@ import * as tracker from '../jobs/tracker.js';
 const ARCHIV_LEGACY_SIGNATUR = 'openai/text-embedding-3-large/3072';
 import { appLog } from '../app-log.js';
 import { ensureAblageOrdner } from './storage-setup.js';
+import { ergaenzeErkannteZahlung } from './rechnung-zahlung.js';
 
 export const ARCHIVE_LIMITS = Object.freeze({
   maxEntries: 20000,
@@ -189,11 +190,13 @@ export const DETAIL_COLUMNS = Object.freeze({
     'pkv_satz_override','beihilfe_satz_override','bezahlt_am_manuell','bestritten_betrag',
     'einreichung_seite_von','einreichung_seite_bis'],
   arztrechnung_einzelposition: ['subid','behandlungs_datum','goa_goz_gebueh_pzn','leistung',
-    'begruendung','faktor','betrag'],
+    'begruendung','faktor','betrag','ist_differenz'],
   handwerkerrechnung: ['re_nr','rechnungsdatum','leistungsdatum','leistungsjahr','faelligkeit','bezahlt_am',
-    'name_unternehmen','leistung','gesamtbetrag','lohnkosten','iban','verwendungszweck','bezahlt_am_manuell','bestritten_betrag'],
+    'name_unternehmen','leistung','gesamtbetrag','lohnkosten','iban','verwendungszweck','bezahlt_am_manuell','bestritten_betrag',
+    'estg35a_irrelevant'],
   generische_rechnung: ['re_nr','rechnungsdatum','gesamtbetrag','absender','bezahlt_am','faelligkeit',
     'iban','verwendungszweck','kontoinhaber','bezahlt_am_manuell','bestritten_betrag'],
+  rechnung_zahlung: ['datum','betrag'],
   arztbericht: ['behandelte_person','anlass','norm_befunde','pathologische_befunde'],
   erstattungsbescheid: ['kostentraeger','bescheiddatum','erstattungsbetrag','matching_summary','hinweise',
     'ist_tier',
@@ -220,6 +223,23 @@ async function insertRow(client, table, obj) {
   if (!cols.length) return;
   const ph = cols.map((_, i) => '$' + (i + 1));
   await client.query(`INSERT INTO ${table} (${cols.join(',')}) VALUES (${ph.join(',')})`, cols.map(c => obj[c]));
+}
+
+// Zahlungen einer Rechnung übernehmen. Archive ohne Zahlungsliste (ältere
+// Versionen) erhalten wie der Bestand eine Zahlung über den zu zahlenden
+// Betrag zum Bezahldatum. Ungültige Einträge werden übergangen.
+async function importiereZahlungen(client, postid, zahlungen) {
+  if (!Array.isArray(zahlungen)) {
+    await ergaenzeErkannteZahlung(client, postid);
+    return;
+  }
+  for (const z of zahlungen.slice(0, 100)) {
+    const row = pick(z, DETAIL_COLUMNS.rechnung_zahlung);
+    const betrag = Number(row.betrag);
+    if (typeof row.datum !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.datum)) continue;
+    if (!Number.isFinite(betrag) || betrag <= 0 || betrag >= 1e10) continue;
+    await insertRow(client, 'postbuch.rechnung_zahlung', { postid, datum: row.datum, betrag: betrag.toFixed(2) });
+  }
 }
 
 async function nextPostid() {
@@ -597,6 +617,8 @@ export async function importArchive(zipPath, {
 
     // ── Pass B: Ausführen ────────────────────────────────────────────────────
     let maxPostNum = 0;
+    const neuAngelegt = new Set();
+    const ersetzungen = []; // { neu, altQuelle, zahlungen, fileName }
     let doneCount = 0;
     for (const item of plan) {
       const { entryName, pdfEntryName, action, finalPostid } = item;
@@ -642,10 +664,29 @@ export async function importArchive(zipPath, {
           || art;
         const lebensbereich = resolveTaxonomyCode(pb.lebensbereich, lebensbereichCodes, 'Lebensbereich', strictTaxonomy)
           || 'allgemeines';
-        // Vor dem Upload zuordnen: bei Personenablage bestimmt familienmitglied den Zielordner.
+        // Vor dem Upload zuordnen: familienmitglied, behandelte Person und Richtung
+        // können den Ablageort bestimmen.
         const familienmitglied = ordneZu(pb.familienmitglied);
+        // Ausgangspost ohne Absender aus der Familie ist keine Ausgangspost —
+        // dieselbe Regel wie in der KI-Pipeline.
+        let richtung = richtungEnum.has(pb.richtung) ? pb.richtung : 'eingang';
+        if (richtung === 'ausgang' && !familienmitglied) richtung = 'eingang';
+        // Behandelte Person nach derselben Regel wie behandeltePersonSql():
+        // beim Erstattungsbescheid nur, wenn alle Positionen dieselbe nennen.
+        let behandeltePerson = null;
+        if (['arztrechnung', 'arztbericht'].includes(doc.detail?.type)) {
+          behandeltePerson = ordneZu(doc.detail.fields?.behandelte_person);
+        } else if (doc.detail?.type === 'erstattungsbescheid') {
+          const namen = (doc.detail.einzelpositionen || []).map((ep) => ordneZu(ep.behandelte_person));
+          if (namen.length && namen.every((n) => n && n === namen[0])) behandeltePerson = namen[0];
+        }
         const destFolderId = await ensureAblageOrdner(
-          settings, { lebensbereich, dokumentart, familienmitglied }, storage.name,
+          settings,
+          {
+            lebensbereich, dokumentart, familienmitglied, behandelte_person: behandeltePerson,
+            briefdatum: pb.briefdatum || null, richtung,
+          },
+          storage.name,
         );
 
         const wunschFileName = `${safeFileBase(pb.betreff)} ${finalPostid}.pdf`;
@@ -667,10 +708,6 @@ export async function importArchive(zipPath, {
         // stillgelegte 'WaitingForAIReview' weiterhin drin, alte Archive dürfen
         // ihn aber nicht wieder einschleppen.
         const status = istGueltigerStatus(pb.status) ? pb.status : 'UserClearance';
-        // Ausgangspost ohne Absender aus der Familie ist keine Ausgangspost —
-        // dieselbe Regel wie in der KI-Pipeline.
-        let richtung = richtungEnum.has(pb.richtung) ? pb.richtung : 'eingang';
-        if (richtung === 'ausgang' && !familienmitglied) richtung = 'eingang';
         const vector = doc.embedding?.vector;
         const embeddingLiteral = Array.isArray(vector) && vector.length ? '[' + vector.join(',') + ']' : null;
         const embeddingSignatur = embeddingLiteral
@@ -776,7 +813,21 @@ export async function importArchive(zipPath, {
           await insertRow(client, 'postbuch.handwerkerrechnung', { postid: finalPostid, ...pick(detail.fields, DETAIL_COLUMNS.handwerkerrechnung) });
         } else if (detail?.type === 'generische_rechnung') {
           await insertRow(client, 'postbuch.generische_rechnung', { postid: finalPostid, ...pick(detail.fields, DETAIL_COLUMNS.generische_rechnung) });
-        } else if (detail?.type === 'arztbericht') {
+        }
+        if (['arztrechnung', 'handwerkerrechnung', 'generische_rechnung'].includes(detail?.type)) {
+          await importiereZahlungen(client, finalPostid, detail.zahlungen);
+          if (detail.ersetzt && typeof detail.ersetzt.postid === 'string') {
+            ersetzungen.push({
+              neu: finalPostid,
+              altQuelle: detail.ersetzt.postid,
+              zahlungen: Array.isArray(detail.ersetzt.umgezogene_zahlungen) ? detail.ersetzt.umgezogene_zahlungen.slice(0, 100) : [],
+              altManuell: detail.ersetzt.alt_bezahlt_am_manuell === true,
+              neuManuell: detail.ersetzt.neu_bezahlt_am_manuell === true,
+              fileName,
+            });
+          }
+        }
+        if (detail?.type === 'arztbericht') {
           await insertRow(client, 'postbuch.arztbericht', {
             postid: finalPostid,
             ...pick(detail.fields, DETAIL_COLUMNS.arztbericht),
@@ -829,6 +880,7 @@ export async function importArchive(zipPath, {
         if (m) maxPostNum = Math.max(maxPostNum, parseInt(m[1], 10));
 
         report.imported++;
+        neuAngelegt.add(finalPostid);
         report.items.push({ file: fileName, postid: finalPostid, status: 'imported' });
       } catch (err) {
         await client.query('ROLLBACK').catch(() => {});
@@ -848,6 +900,40 @@ export async function importArchive(zipPath, {
       }
       doneCount++;
       if (jobId) tracker.setStep(jobId, doneCount, fileName);
+    }
+
+    // ── Pass C: Ersetzungskanten zwischen Rechnungen dieses Laufs ─────────────
+    // Nur wenn beide Seiten in diesem Lauf neu angelegt wurden: Eine bereits
+    // vorhandene Ursprungsrechnung trägt eigene Zahlungen, die Kante würde sie
+    // doppelt zählen.
+    for (const e of ersetzungen) {
+      const alt = remap.get(e.altQuelle);
+      if (!alt || !neuAngelegt.has(alt) || !neuAngelegt.has(e.neu)) {
+        report.omittedRelations.push({ file: e.fileName, relation: 'ersetzt.rechnung', sourcePostid: e.altQuelle });
+        continue;
+      }
+      const zahlungen = e.zahlungen
+        .filter((z) => /^\d{4}-\d{2}-\d{2}$/.test(String(z?.datum)) && Number(z?.betrag) > 0)
+        .map((z) => ({ datum: z.datum, betrag: Number(z.betrag).toFixed(2) }));
+      try {
+        await query(
+          `INSERT INTO postbuch.dokument_beziehung
+             (von_postid, zu_postid, art, umgezogene_zahlungen,
+              alt_bezahlt_am_manuell, neu_bezahlt_am_manuell, created_by)
+           SELECT $1::varchar, $2::varchar, 'ersetzt', $3::jsonb, $4::boolean, $5::boolean, 'archiv-import'
+            WHERE EXISTS (SELECT 1 FROM postbuch.arztrechnung WHERE postid = $1
+                          UNION ALL SELECT 1 FROM postbuch.handwerkerrechnung WHERE postid = $1
+                          UNION ALL SELECT 1 FROM postbuch.generische_rechnung WHERE postid = $1)
+              AND EXISTS (SELECT 1 FROM postbuch.arztrechnung WHERE postid = $2
+                          UNION ALL SELECT 1 FROM postbuch.handwerkerrechnung WHERE postid = $2
+                          UNION ALL SELECT 1 FROM postbuch.generische_rechnung WHERE postid = $2)
+           ON CONFLICT DO NOTHING`,
+          [e.neu, alt, JSON.stringify(zahlungen), e.altManuell, e.neuManuell],
+        );
+      } catch (err) {
+        console.warn(`[archive-import] Ersetzung ${e.neu} → ${alt} nicht übernommen: ${err.message}`);
+        report.omittedRelations.push({ file: e.fileName, relation: 'ersetzt.rechnung', sourcePostid: e.altQuelle });
+      }
     }
 
     // postbuch-Sequence anheben (Identität importierter IDs bewahren ohne künftige Kollision)

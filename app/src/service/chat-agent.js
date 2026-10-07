@@ -57,6 +57,8 @@ import { listWiedervorlagen, listFaelligkeiten } from './fristen.js';
 import { buildReferenceContext } from './chat-references.js';
 import { searchHelp } from './help-corpus.js';
 import pool from '../db.js';
+import { ermittleZahlungslage } from './rechnung-zahlung.js';
+import { ladeErsetzung } from './rechnung-ersetzung.js';
 
 // Endpunkte kommen aus der Provider-Registry (lib/llm/registry.js) — der
 // Chat-Agent behält bewusst seinen eigenen Request-Builder (19 Tools, 12 Runden,
@@ -617,7 +619,7 @@ async function toolGetDocumentMetadata({ postid }) {
   // (nicht in postbuch/arztrechnung selbst) — ohne diese muss das Modell für
   // Detailfragen (Doppelabrechnungen, bestrittene Positionen, Aktenkontext) auf
   // teures/ungenaues Vision-Raten ausweichen, obwohl die Daten strukturiert vorliegen.
-  const [einzelpositionen, erstattungEinzelpositionen, akten, wiedervorlagen] = await Promise.all([
+  const [einzelpositionen, erstattungEinzelpositionen, akten, wiedervorlagen, zahlungslage] = await Promise.all([
     row.arzt_betrag != null
       ? pool.query(`
           SELECT subid AS pos, behandlungs_datum, goa_goz_gebueh_pzn AS ziffer, leistung, begruendung, faktor, betrag
@@ -650,7 +652,12 @@ async function toolGetDocumentMetadata({ postid }) {
       SELECT wv_id, faellig_am, aktion, erledigt
       FROM postbuch.wiedervorlage WHERE postid = $1 ORDER BY faellig_am
     `, [postid]).then(x => x.rows),
+    ermittleZahlungslage(pool, postid),
   ]);
+  const ersetzung = (row.arzt_betrag ?? row.hw_betrag ?? row.gen_betrag) != null
+    ? await ladeErsetzung(pool, postid)
+    : null;
+  const ersetztDurch = ersetzung?.ersetzt_durch?.postid ?? null;
 
   return {
     postid: row.postid,
@@ -671,6 +678,21 @@ async function toolGetDocumentMetadata({ postid }) {
     leistung: row.leistung,
     faelligkeit,
     bezahlt_am,
+    // Zahlungen mit Datum und Betrag; offener_betrag ist der noch zu
+    // überweisende, nicht bestrittene Rest.
+    zahlungen: zahlungslage?.zahlungen.length ? zahlungslage.zahlungen.map(({ datum, betrag: b }) => ({ datum, betrag: b })) : null,
+    // Eine ersetzte Rechnung ist erledigt; Zahlungen und Rest stehen bei der
+    // Korrekturrechnung (ersetzt_durch).
+    offener_betrag: ersetztDurch ? 0 : (zahlungslage?.offen ?? null),
+    ersetzt_durch: ersetztDurch,
+    ersetzt_rechnung: ersetzung?.ersetzt?.postid ?? null,
+    // Klartext, damit die Antwort die Verknüpfung nennt statt sie nur als Feld
+    // mitzuführen.
+    ersetzung_hinweis: ersetztDurch
+      ? `Durch die Korrekturrechnung ${ersetztDurch} ersetzt und erledigt; Zahlungen und Rest stehen dort. In der Antwort erwähnen.`
+      : ersetzung?.ersetzt?.postid
+        ? `Korrekturrechnung: ersetzt die Rechnung ${ersetzung.ersetzt.postid} (dort erledigt); deren Zahlungen sind hier mitgezählt. In der Antwort erwähnen.`
+        : null,
     einzelpositionen,
     kostentraeger: row.kostentraeger,
     bescheiddatum: row.bescheiddatum,

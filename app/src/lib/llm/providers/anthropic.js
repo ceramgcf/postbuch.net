@@ -78,6 +78,9 @@ export function messagesUrl(provider) {
 export function buildThinkingBodyFields(policy) {
   if (!policy || policy.mode === 'none') return {};
   if (policy.mode === 'explicit-off') return { thinking: { type: 'disabled' } };
+  if (policy.mode === 'minimal') {
+    return { thinking: { type: 'adaptive' }, output_config: { effort: policy.effort } };
+  }
   return {
     thinking: { type: 'adaptive', display: 'summarized' },
     output_config: { effort: policy.effort },

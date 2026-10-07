@@ -257,6 +257,12 @@ aus vor, wenn es eine fragwürdige Textebene erkennt. Dabei entstehen erneut
 ungefähr dieselben KI-Kosten wie beim Import; eine feste Modellstufe spart die
 Voranalyse, nicht aber die Hauptanalyse und das neue Embedding.
 
+Bei einem Erstattungsbescheid gilt die Korrekturanweisung auch für das
+anschließende Auslesen der Positionen und den Abgleich der Kürzungen. Eine fest
+gewählte Modellstufe liest auch die Positionen aus; bei „Auto“ übernimmt das die
+Stufe Mittel. Schlägt dieser Schritt fehl, wiederholt postbuch.net ihn nach
+wenigen Minuten automatisch mit derselben Anweisung.
+
 ![PDF-ersetzen-Symbol](icons/file-up.svg) **PDF ersetzen** – Ersetzt nur die
 PDF-Datei (neuer Scan derselben Sache, in besserer Qualität). Die Postnummer,
 alle Metadaten, Akten- und

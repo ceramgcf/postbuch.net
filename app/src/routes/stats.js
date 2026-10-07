@@ -1,38 +1,54 @@
 import { Router } from 'express';
 import { query } from '../db.js';
+import { offenerBetragSql, offeneRechnungSql } from '../lib/rechnungs-filter.js';
+import { parsePersonenAuswahl, personenBedingung, aktenPersonenBedingung } from '../lib/personen-auswahl.js';
 
 const router = Router();
 
 // GET /api/stats/dashboard — Aggregierte Statistiken
+// ?personen=kurzname,…,_ohne beschränkt alle Kennzahlen auf diese Personen
+// (Dokumente über familienmitglied, Kürzungen über die behandelte Person).
 router.get('/dashboard', async (req, res) => {
   try {
+    const auswahl = parsePersonenAuswahl(req.query.personen);
+    // Jede Abfrage bekommt ihre eigene Parameterliste; ohne Auswahl bleibt sie leer.
+    const filter = (spalte, bedingung = personenBedingung) => {
+      const params = [];
+      const sql = bedingung(spalte, auswahl, params);
+      return { and: sql ? ` AND ${sql}` : '', params };
+    };
+    const dok = filter('familienmitglied');
+    const dokP = filter('p.familienmitglied');
+    const kuerzung = filter('ep.behandelte_person');
+    const akte = filter('a.akteid', aktenPersonenBedingung);
+
     const [totalResult, artResult, lebensbereichResult, lxdResult, statusResult, unbezahltResult, kuerzungenResult, letzteResult, faelligkeitResult, aktenResult] = await Promise.all([
-      query(`SELECT COUNT(*) AS total FROM postbuch WHERE historisch = false`),
+      query(`SELECT COUNT(*) AS total FROM postbuch WHERE historisch = false${dok.and}`, dok.params),
 
-      query(`SELECT dokumentart AS art, COUNT(*) AS count FROM postbuch WHERE historisch = false GROUP BY dokumentart ORDER BY count DESC`),
+      query(`SELECT dokumentart AS art, COUNT(*) AS count FROM postbuch WHERE historisch = false${dok.and} GROUP BY dokumentart ORDER BY count DESC`, dok.params),
 
-      query(`SELECT lebensbereich, COUNT(*) AS count FROM postbuch WHERE historisch = false GROUP BY lebensbereich ORDER BY count DESC`),
+      query(`SELECT lebensbereich, COUNT(*) AS count FROM postbuch WHERE historisch = false${dok.and} GROUP BY lebensbereich ORDER BY count DESC`, dok.params),
 
       query(`
         SELECT lebensbereich, dokumentart, COUNT(*) AS count
         FROM postbuch
-        WHERE historisch = false
+        WHERE historisch = false${dok.and}
         GROUP BY lebensbereich, dokumentart
         ORDER BY count DESC, lebensbereich, dokumentart
-      `),
+      `, dok.params),
 
-      query(`SELECT status, COUNT(*) AS count FROM postbuch WHERE historisch = false GROUP BY status ORDER BY count DESC`),
+      query(`SELECT status, COUNT(*) AS count FROM postbuch WHERE historisch = false${dok.and} GROUP BY status ORDER BY count DESC`, dok.params),
 
       query(`
         SELECT COUNT(*) AS anzahl, COALESCE(SUM(betrag), 0) AS summe
         FROM (
-          SELECT a.gesamtbetrag - COALESCE(a.bestritten_betrag, 0) AS betrag FROM arztrechnung a JOIN postbuch p ON p.postid = a.postid WHERE a.bezahlt_am IS NULL AND a.gesamtbetrag > COALESCE(a.bestritten_betrag, 0) AND p.historisch = false
+          SELECT ${offenerBetragSql('a')} AS betrag FROM arztrechnung a JOIN postbuch p ON p.postid = a.postid WHERE ${offeneRechnungSql('a')} AND p.historisch = false${dokP.and}
           UNION ALL
-          SELECT h.gesamtbetrag - COALESCE(h.bestritten_betrag, 0) AS betrag FROM handwerkerrechnung h JOIN postbuch p ON p.postid = h.postid WHERE h.bezahlt_am IS NULL AND h.gesamtbetrag > COALESCE(h.bestritten_betrag, 0) AND p.historisch = false
+          SELECT ${offenerBetragSql('h')} AS betrag FROM handwerkerrechnung h JOIN postbuch p ON p.postid = h.postid WHERE ${offeneRechnungSql('h')} AND p.historisch = false${dokP.and}
           UNION ALL
-          SELECT g.gesamtbetrag - COALESCE(g.bestritten_betrag, 0) AS betrag FROM generische_rechnung g JOIN postbuch p ON p.postid = g.postid WHERE g.bezahlt_am IS NULL AND g.gesamtbetrag > COALESCE(g.bestritten_betrag, 0) AND p.historisch = false
+          SELECT ${offenerBetragSql('g')} AS betrag FROM generische_rechnung g JOIN postbuch p ON p.postid = g.postid WHERE ${offeneRechnungSql('g')} AND p.historisch = false${dokP.and}
         ) sub
-      `),
+      `, dokP.params),
 
       query(`
         SELECT COUNT(*) AS anzahl, COALESCE(SUM(
@@ -62,37 +78,38 @@ router.get('/dashboard', async (req, res) => {
             WHEN e.kostentraeger = 'PKV' THEN arz_ep.abrechnungsperiode_pkv
             ELSE arz_ep.abrechnungsperiode_beihilfe
           END
-        WHERE p.historisch = false AND k.gesehen_am IS NULL
-      `),
+        WHERE p.historisch = false AND k.gesehen_am IS NULL${kuerzung.and}
+      `, kuerzung.params),
 
       query(`
         SELECT p.postid, p.briefdatum, p.kontakt, p.dokumentart AS art, p.lebensbereich, p.dokumentart, p.betreff, p.status
         FROM postbuch p
-        WHERE p.historisch = false
+        WHERE p.historisch = false${dokP.and}
         ORDER BY p.postid DESC
         LIMIT 200
-      `),
+      `, dokP.params),
 
       query(`
         SELECT MIN(faelligkeit) AS naechste_faelligkeit
         FROM (
-          SELECT faelligkeit FROM arztrechnung a JOIN postbuch p ON p.postid = a.postid WHERE a.bezahlt_am IS NULL AND a.gesamtbetrag > COALESCE(a.bestritten_betrag, 0) AND a.faelligkeit IS NOT NULL AND p.historisch = false
+          SELECT faelligkeit FROM arztrechnung a JOIN postbuch p ON p.postid = a.postid WHERE ${offeneRechnungSql('a')} AND a.faelligkeit IS NOT NULL AND p.historisch = false${dokP.and}
           UNION ALL
-          SELECT faelligkeit FROM handwerkerrechnung h JOIN postbuch p ON p.postid = h.postid WHERE h.bezahlt_am IS NULL AND h.gesamtbetrag > COALESCE(h.bestritten_betrag, 0) AND h.faelligkeit IS NOT NULL AND p.historisch = false
+          SELECT faelligkeit FROM handwerkerrechnung h JOIN postbuch p ON p.postid = h.postid WHERE ${offeneRechnungSql('h')} AND h.faelligkeit IS NOT NULL AND p.historisch = false${dokP.and}
           UNION ALL
-          SELECT faelligkeit FROM generische_rechnung g JOIN postbuch p ON p.postid = g.postid WHERE g.bezahlt_am IS NULL AND g.gesamtbetrag > COALESCE(g.bestritten_betrag, 0) AND g.faelligkeit IS NOT NULL AND p.historisch = false
+          SELECT faelligkeit FROM generische_rechnung g JOIN postbuch p ON p.postid = g.postid WHERE ${offeneRechnungSql('g')} AND g.faelligkeit IS NOT NULL AND p.historisch = false${dokP.and}
         ) sub
-      `),
+      `, dokP.params),
 
       query(`
         SELECT a.akteid, a.betreff, a.updated_at, a.created_at,
                COUNT(ad.postid)::int AS dok_count
         FROM akte a
         LEFT JOIN akte_dokument ad ON ad.akteid = a.akteid
+        WHERE TRUE${akte.and}
         GROUP BY a.akteid
         ORDER BY a.updated_at DESC
         LIMIT 6
-      `),
+      `, akte.params),
     ]);
 
     const nachArt = {};

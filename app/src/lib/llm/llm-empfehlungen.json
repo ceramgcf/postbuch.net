@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "stand": "2026-09-30",
+  "stand": "2026-10-07",
   "hinweis": "Kuratierte Empfehlungen des postbuch.net-Entwicklerteams. Die Reihenfolge je Klasse ist der Rang; postbuch.net nimmt den ersten Kandidaten, auf den diese Instanz nachweislich Zugriff hat. Preise in USD je 1 Million Token.",
   "klassen": {
     "preanalysis": [
@@ -19,12 +19,12 @@
       {
         "providerId": "anthropic",
         "providerTyp": "anthropic",
-        "model": "claude-haiku-4-5",
-        "label": "Claude Haiku 4.5",
-        "preisIn": 1.0,
-        "preisOut": 5.0,
-        "preisCacheWrite": 1.25,
-        "preisCacheRead": 0.1,
+        "model": "claude-haiku-5-5",
+        "label": "Claude Haiku 5.5",
+        "preisIn": 0.1,
+        "preisOut": 0.5,
+        "preisCacheWrite": 0.125,
+        "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
       }
@@ -45,12 +45,12 @@
       {
         "providerId": "anthropic",
         "providerTyp": "anthropic",
-        "model": "claude-haiku-4-5",
-        "label": "Claude Haiku 4.5",
-        "preisIn": 1.0,
-        "preisOut": 5.0,
-        "preisCacheWrite": 1.25,
-        "preisCacheRead": 0.1,
+        "model": "claude-haiku-5-5",
+        "label": "Claude Haiku 5.5",
+        "preisIn": 0.1,
+        "preisOut": 0.5,
+        "preisCacheWrite": 0.125,
+        "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
       }
@@ -71,12 +71,12 @@
       {
         "providerId": "anthropic",
         "providerTyp": "anthropic",
-        "model": "claude-haiku-4-5",
-        "label": "Claude Haiku 4.5",
-        "preisIn": 1.0,
-        "preisOut": 5.0,
-        "preisCacheWrite": 1.25,
-        "preisCacheRead": 0.1,
+        "model": "claude-haiku-5-5",
+        "label": "Claude Haiku 5.5",
+        "preisIn": 0.1,
+        "preisOut": 0.5,
+        "preisCacheWrite": 0.125,
+        "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
       }
@@ -149,12 +149,12 @@
       {
         "providerId": "anthropic",
         "providerTyp": "anthropic",
-        "model": "claude-haiku-4-5",
-        "label": "Claude Haiku 4.5",
-        "preisIn": 1.0,
-        "preisOut": 5.0,
-        "preisCacheWrite": 1.25,
-        "preisCacheRead": 0.1,
+        "model": "claude-haiku-5-5",
+        "label": "Claude Haiku 5.5",
+        "preisIn": 0.1,
+        "preisOut": 0.5,
+        "preisCacheWrite": 0.125,
+        "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
       }
@@ -175,12 +175,12 @@
       {
         "providerId": "anthropic",
         "providerTyp": "anthropic",
-        "model": "claude-haiku-4-5",
-        "label": "Claude Haiku 4.5",
-        "preisIn": 1.0,
-        "preisOut": 5.0,
-        "preisCacheWrite": 1.25,
-        "preisCacheRead": 0.1,
+        "model": "claude-haiku-5-5",
+        "label": "Claude Haiku 5.5",
+        "preisIn": 0.1,
+        "preisOut": 0.5,
+        "preisCacheWrite": 0.125,
+        "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
       }
@@ -227,12 +227,12 @@
       {
         "providerId": "anthropic",
         "providerTyp": "anthropic",
-        "model": "claude-haiku-4-5",
-        "label": "Claude Haiku 4.5",
-        "preisIn": 1.0,
-        "preisOut": 5.0,
-        "preisCacheWrite": 1.25,
-        "preisCacheRead": 0.1,
+        "model": "claude-haiku-5-5",
+        "label": "Claude Haiku 5.5",
+        "preisIn": 0.1,
+        "preisOut": 0.5,
+        "preisCacheWrite": 0.125,
+        "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
       }
@@ -253,12 +253,12 @@
       {
         "providerId": "anthropic",
         "providerTyp": "anthropic",
-        "model": "claude-haiku-4-5",
-        "label": "Claude Haiku 4.5",
-        "preisIn": 1.0,
-        "preisOut": 5.0,
-        "preisCacheWrite": 1.25,
-        "preisCacheRead": 0.1,
+        "model": "claude-haiku-5-5",
+        "label": "Claude Haiku 5.5",
+        "preisIn": 0.1,
+        "preisOut": 0.5,
+        "preisCacheWrite": 0.125,
+        "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
       }

@@ -5,7 +5,7 @@ an mehreren Stellen, sind alle aufgeführt – die erste Angabe ist jeweils die
 ausführlichste Behandlung.
 
 [A](#a) · [B](#b) · [C](#c) · [D](#d) · [E](#e) · [F](#f) · [G](#g) · [H](#h) ·
-[I](#i) · [K](#k) · [L](#l) · [M](#m) · [N](#n) · [O](#o) · [P](#p) · [Q](#q) ·
+[I](#i) · [J](#j) · [K](#k) · [L](#l) · [M](#m) · [N](#n) · [O](#o) · [P](#p) · [Q](#q) ·
 [R](#r) · [S](#s) · [T](#t) · [U](#u) · [V](#v) · [W](#w) · [Z](#z)
 
 ---
@@ -14,7 +14,7 @@ ausführlichste Behandlung.
 
 - **Dateiablage (Speicherort, zwingend)** – [Dateiablage-Backends](storage-backends.md) · [Welche Dateiablage ist aktiv?](storage-backends.md#welche-dateiablage-ist-aktiv) · [Voraussetzungen](voraussetzungen.md#dateiablage-onedrive-oder-nextcloud)
 - **Dateiablage-Wahl zurücknehmen** – [Wahl der Dateiablage zurücknehmen](installation.md#wahl-der-dateiablage-zurücknehmen)
-- **Ablagestruktur (nach Lebensbereich / nach Person)** – [Ablage nach Person](storage-backends.md#ablage-nach-person) · [Die Ordnerstruktur](storage-backends.md#die-ordnerstruktur)
+- **Ablagestruktur (nach Lebensbereich / nach Person / benutzerdefiniert)** – [Ablagestruktur wählen](storage-backends.md#ablagestruktur-wählen) · [Die Ordnerstruktur](storage-backends.md#die-ordnerstruktur)
 - **Ablagen (physische Aufbewahrungsorte)** → siehe *Verbleib* – [Ablagen verwalten](akten-und-organisation.md#ablagen-verwalten)
 - **Abrechnungs-Assistent** – [Periode einreichen](abrechnung-pkv-beihilfe.md#4-periode-einreichen--der-abrechnungs-assistent) · [Bestrittene Rechnungen werden übersprungen](abrechnung-pkv-beihilfe.md#bestrittene-rechnungen-werden-übersprungen)
 - **Abrechnungsperiode** – [Grundbegriffe](abrechnung-pkv-beihilfe.md#grundbegriffe) · [Rechnung zuordnen](abrechnung-pkv-beihilfe.md#2-rechnung-einer-periode-zuordnen) · [Von Hand korrigieren](abrechnung-pkv-beihilfe.md#perioden-von-hand-korrigieren) · [Restperioden](abrechnung-pkv-beihilfe.md#restperioden--wenn-ein-bescheid-nur-einen-teil-abrechnet)
@@ -23,16 +23,17 @@ ausführlichste Behandlung.
 - **AI ✓ (AIClearance)** – [Status und Freigabe](dokumentansicht.md#status-und-freigabe)
 - **Akte** – [Akten](akten-und-organisation.md#akten) · [Akte anlegen](akten-und-organisation.md#dokumente-hinzufügen) · [Aktenzuordnung im Dokument](dokumentansicht.md#akten) · [Aktenmodus der Suche](suche-und-assistent.md#aktenmodus) · [Akte an den Anwalt](export-import.md#anwendungsfall-akte-an-den-anwalt)
 - **Aktionsleiste** – [Die Aktionsleiste](dokumentansicht.md#die-aktionsleiste) · [Überblick](oberflaeche.md#dokumentdetailansicht)
-- **Analyse (Auswertungen)** – [Analyse](oberflaeche.md#analyse) · [Unbezahlt, Handwerker, Kalender, Salden](analyse.md)
+- **Analyse (Auswertungen)** – [Analyse](oberflaeche.md#analyse) · [Unbezahlt, Handwerker, Gesundheitskosten, Kalender, Salden](analyse.md)
 - **Android** – [Als App installieren](mobil-und-pwa.md#android)
 - **Anmeldename (Groß-/Kleinschreibung)** – [Anmeldung](sicherheit.md#anmeldung)
 - **Anmeldung** – [Anmeldung](sicherheit.md#anmeldung) · [Wenn ein Zugang endet](sicherheit.md#wenn-ein-zugang-endet)
 - **Anheften (Dokument an PKV/Beihilfe)** – [Beliebige Dokumente anheften](abrechnung-pkv-beihilfe.md#beliebige-dokumente-anheften) · [Akten](dokumentansicht.md#akten)
+- **„angepinnt“ (Badge, Periodenseite)** – [Beliebige Dokumente anheften](abrechnung-pkv-beihilfe.md#beliebige-dokumente-anheften)
 - **API-Schlüssel** – [Schlüssel](ki-provider.md#schlüssel) · [Geheimnisse](sicherheit.md#geheimnisse)
 - **Dokumentenübergabe (Export-Datei)** – [Was in der Übergabe steckt](export-import.md#was-in-der-dokumentenübergabe-steckt) · [Übergabe einspielen](dokumente-importieren.md#sonderfall-dokumentenübergabe-einspielen) · [Personen zuordnen](export-import.md#personen-zuordnen)
 - **Archivieren / Historisch** – [Was es bewirkt, warum man es tut, wie man zurückkommt](dokumentansicht.md#archivieren-historisch) · [Ganze Akten archivieren](akten-und-organisation.md#akte-archivieren-historisch) · [Archiv-Schalter in der Dokumentliste](oberflaeche.md#dokumente) · [Archivierte in der Suche](suche-und-assistent.md#suche) · [Kein Ersatz für eine erloschene Forderung](dokumentansicht.md#sonderfall-korrekturrechnung) · [Was trotz Archiv weiterzählt](dokumentansicht.md#archivieren-historisch)
 - **Arztbericht / Tierarztbericht** – [Fachblock (nur lesend)](dokumentansicht.md#arztbericht-und-tierarztbericht)
-- **Arztrechnung (auch Labor, Hilfsmittel, Rezept)** – [Fachblock](dokumentansicht.md#untertyp-arztrechnung-laborrechnung-hilfsmittelrechnung-rezept) · [Einzelpositionen](dokumentansicht.md#einzelpositionen-der-rechnung) · [Einer Periode zuordnen](abrechnung-pkv-beihilfe.md#2-rechnung-einer-periode-zuordnen)
+- **Arztrechnung (auch Labor, Hilfsmittel, Rezept)** – [Fachblock](dokumentansicht.md#untertyp-arztrechnung-laborrechnung-hilfsmittelrechnung-rezept) · [Einzelpositionen](dokumentansicht.md#einzelpositionen-der-rechnung) · [Positionen bearbeiten](dokumentansicht.md#positionen-bearbeiten-hinzufügen-und-löschen) · [Einer Periode zuordnen](abrechnung-pkv-beihilfe.md#2-rechnung-einer-periode-zuordnen)
 - **Assistent (Chat)** – [Assistent](suche-und-assistent.md#assistent) · [Wie er arbeitet und Hilfe findet](suche-und-assistent.md#wie-er-arbeitet) · [Bearbeiten-Modus](suche-und-assistent.md#bearbeiten-modus) · [Chats verwalten](suche-und-assistent.md#chats-verwalten) · [Was wähle ich wann?](suche-und-assistent.md#was-wähle-ich-wann)
 - **Aufgabenanzeige** – [Aufgabenanzeige](oberflaeche.md#aufgabenanzeige)
 - **Ausgehende Verbindungen** – [Ausgehende Verbindungen](sicherheit.md#ausgehende-verbindungen)
@@ -44,10 +45,13 @@ ausführlichste Behandlung.
 - **Backup-Verschlüsselung** – [Backup-Verschlüsselung](backup-wiederherstellung.md#backup-verschlüsselung) · [Wie das technisch funktioniert](backup-wiederherstellung.md#wie-das-technisch-funktioniert) · [Passwort ändern](backup-wiederherstellung.md#passwort-ändern) · [Welches Passwort wann genügt](backup-wiederherstellung.md#welches-passwort-wann-genügt)
 - **Backup von Hand (`<postbuch.net-Wurzelverzeichnis>/_backup/user`)** – [Einrichten](backup-wiederherstellung.md#einrichten) · [Aufbewahrung](backup-wiederherstellung.md#aufbewahrung) · [Aus der Liste](backup-wiederherstellung.md#aus-der-liste)
 - **Bearbeiten-Modus (Assistent)** – [Bearbeiten-Modus](suche-und-assistent.md#bearbeiten-modus) · [Was der Assistent nicht ändern kann](suche-und-assistent.md#bearbeiten-modus)
+- **Behandelte Person (Patient/Tier, auch ohne Versicherung)** – [Untertyp Arztrechnung](dokumentansicht.md#untertyp-arztrechnung-laborrechnung-hilfsmittelrechnung-rezept) · [Periode zuordnen](abrechnung-pkv-beihilfe.md#2-rechnung-einer-periode-zuordnen)
+- **Behandelte Person (Personenordner)** – [Ablagestruktur wählen](storage-backends.md#ablagestruktur-wählen)
 - **Beihilfe** – [Grundbegriffe](abrechnung-pkv-beihilfe.md#grundbegriffe) · [Erstattungsbescheid](abrechnung-pkv-beihilfe.md#5-der-erstattungsbescheid-kommt) · [Kürzungen](abrechnung-pkv-beihilfe.md#kürzungen-ansehen)
 - **Beihilfeergänzungstarif** – [Beihilfe-Kürzung zur PKV-Prüfung vormerken](abrechnung-pkv-beihilfe.md#beihilfe-kürzung-zur-pkv-prüfung-vormerken)
 - **Basisadresse (APP_BASE_URL)** – [Adresse einer laufenden Instanz ändern](installation.md#adresse-einer-laufenden-instanz-ändern) · [ENV-Werte](installation.md#weg-2-manuell-mit-docker-compose)
 - **Benachrichtigungen** – [Benachrichtigungen](benachrichtigungen.md) · [Was wo ankommt](benachrichtigungen.md#was-wo-ankommt)
+- **Benutzerdefinierte Ablagestruktur** – [Ablagestruktur wählen](storage-backends.md#ablagestruktur-wählen)
 - **Bestreiten (Rechnung)** – [Eine Rechnung bestreiten](dokumentansicht.md#eine-rechnung-bestreiten) · [Sonderfall Korrekturrechnung](dokumentansicht.md#sonderfall-korrekturrechnung) · [Bestrittene Rechnungen werden übersprungen](abrechnung-pkv-beihilfe.md#bestrittene-rechnungen-werden-übersprungen)
 - **Bezahlt markieren** – [Bezahlen](abrechnung-pkv-beihilfe.md#3-bezahlen) · [Bezahlt oder offen](dokumentansicht.md#bezahlt-oder-offen) · [Aktionsleiste](dokumentansicht.md#die-aktionsleiste)
 - **Bezugsquelle** – [Updates](betrieb-troubleshooting.md#updates) · [Herkunft der Software](sicherheit.md#herkunft-der-software)
@@ -73,6 +77,7 @@ ausführlichste Behandlung.
 - **Deckblatt (Export)** – [Das Deckblatt](export-import.md#das-deckblatt)
 - **Deinstallation** – [Lokal im Installationsverzeichnis](installation.md#der-installer-liegt-lokal-im-installationsverzeichnis)
 - **Disaster Recovery** – [Verlorene Datei-Verknüpfungen](backup-wiederherstellung.md#disaster-recovery-verlorene-datei-verknüpfungen) · [Fingerabdrücke](backup-wiederherstellung.md#fingerabdrücke--die-voraussetzung)
+- **Differenzbetrag (Einzelpositionen einer Arztrechnung)** – [Automatisch ermittelter Differenzbetrag](dokumentansicht.md#automatisch-ermittelter-differenzbetrag)
 - **Discord (experimentell, nicht empfohlen)** – [Warnung und Konfiguration](benachrichtigungen.md#discord)
 - **DNS-Rebind-Schutz** – [FAQ: DuckDNS-Subdomain funktioniert nicht](faq.md#betrieb) · [Prüfung vor „TLS aktivieren“](installation.md#tls-über-duckdns-im-assistenten)
 - **Docker Compose** – [Manuell installieren](installation.md#weg-2-manuell-mit-docker-compose) · [Wo man nachsieht](betrieb-troubleshooting.md#wo-man-nachsieht) · [Die Dienste](architektur.md#die-dienste)
@@ -93,11 +98,17 @@ ausführlichste Behandlung.
 - **Einrichtungsassistent** – [Der Einrichtungsassistent](installation.md#der-einrichtungsassistent) · [Ohne Backup neu einrichten](backup-wiederherstellung.md#beim-neuaufsetzen)
 - **Einstellungen** – [Einstellungen](oberflaeche.md#einstellungen) · [Konfiguration liegt in der Datenbank](architektur.md#konfiguration-liegt-in-der-datenbank)
 - **Entschlüsseln (Backup-Datei, Kommandozeile)** – [Verschlüsselte Datei auf der Kommandozeile entschlüsseln](backup-wiederherstellung.md#verschlüsselte-datei-auf-der-kommandozeile-entschlüsseln)
+- **Einzelpositionen (Arztrechnung)** – [Einzelpositionen der Rechnung](dokumentansicht.md#einzelpositionen-der-rechnung) · [Bearbeiten, hinzufügen, löschen](dokumentansicht.md#positionen-bearbeiten-hinzufügen-und-löschen) · [Differenzbetrag](dokumentansicht.md#automatisch-ermittelter-differenzbetrag)
 - **Einzelnes Dokument weitergeben** – [Einzelnes Dokument weitergeben](export-import.md#einzelnes-dokument-weitergeben)
 - **Embeddings** – [Embeddings](ki-provider.md#embeddings) · [Empfehlungen](ki-provider.md#empfehlungen) · [Kosten und Auslöser](ki-provider.md#kosten-und-kostenpflichtige-aufrufe) · [Zwei Suchmodi](suche-und-assistent.md#zwei-modi)
+- **Eigenbehalt (Gesundheitskosten)** – [Seite Gesundheitskosten](analyse.md)
+- **Endabgerechnet (Filter Gesundheitskosten)** – [Seite Gesundheitskosten](analyse.md)
 - **Erinnerungen** – [Erinnerungen](akten-und-organisation.md#erinnerungen) · [Tägliche Erinnerungen](benachrichtigungen.md#die-täglichen-erinnerungen)
+- **Ersetzen (Rechnung)** – [Sonderfall Korrekturrechnung](dokumentansicht.md#sonderfall-korrekturrechnung)
 - **Erstattungsbescheid** – [Der Erstattungsbescheid kommt](abrechnung-pkv-beihilfe.md#5-der-erstattungsbescheid-kommt) · [Fachblock](dokumentansicht.md#obertyp-erstattungsbescheid) · [Von Hand verknüpfen](dokumentansicht.md#erstattungen-von-hand-verknüpfen)
 - **Etiketten drucken** – [Etiketten drucken](etiketten-drucken.md) · [Was auf dem Etikett steht](etiketten-drucken.md#was-auf-dem-etikett-steht)
+- **Excel-Export (Handwerker, Gesundheitskosten)** – [Excel-Export](analyse.md#excel-export)
+- **Excel-Export (Kürzungen)** – [Kürzungen ansehen](abrechnung-pkv-beihilfe.md#kürzungen-ansehen)
 - **Export** – [Export und Import](export-import.md) · [Wo Export startet](export-import.md#wo-export-startet)
 
 ## F
@@ -114,8 +125,9 @@ ausführlichste Behandlung.
 
 ## G
 
-- **Gemeinsam (Ordner)** – [Ablage nach Person](storage-backends.md#ablage-nach-person)
+- **Gemeinsam (Ordner)** – [Ablagestruktur wählen](storage-backends.md#ablagestruktur-wählen)
 - **Generalschlüssel (Backup-Datei)** – [Was im Dump steht](backup-wiederherstellung.md#was-im-dump-steht) · [Backup-Verschlüsselung](backup-wiederherstellung.md#backup-verschlüsselung)
+- **Gesundheitskosten (Steuer, Eigenbehalt)** – [Seite Gesundheitskosten](analyse.md) · [Excel-Export](analyse.md#excel-export)
 - **Gesehen (Kürzung als gesehen markieren)** – [Kürzungen als gesehen markieren](abrechnung-pkv-beihilfe.md#kürzungen-als-gesehen-markieren) · [Kürzungen bearbeiten](dokumentansicht.md#kürzungen-bearbeiten)
 - **GiroCode (Überweisungs-QR)** – [Zahlung und GiroCode](dokumentansicht.md#zahlung-und-girocode) · [Erkannte QR-Codes](dokumentansicht.md#erkannte-qr-codes)
 - **Grenzen des Assistenten** – [Was der Assistent nicht ändern kann](suche-und-assistent.md#bearbeiten-modus) · [Runden- und Abrufgrenzen](suche-und-assistent.md#wie-er-arbeitet) · [Grenzen der Referenzen](suche-und-assistent.md#dokumente-direkt-referenzieren)
@@ -123,7 +135,7 @@ ausführlichste Behandlung.
 
 ## H
 
-- **Handwerkerrechnung** – [Fachblock](dokumentansicht.md#untertyp-handwerkerrechnung) · [Lohnanteil ermitteln](dokumentansicht.md#wie-der-lohnanteil-ermittelt-wird) · [Seite Handwerker](oberflaeche.md#analyse)
+- **Handwerkerrechnung** – [Fachblock](dokumentansicht.md#untertyp-handwerkerrechnung) · [Lohnanteil ermitteln](dokumentansicht.md#wie-der-lohnanteil-ermittelt-wird) · [Seite Handwerker](oberflaeche.md#analyse) · [Für § 35a EStG ausschließen](dokumentansicht.md#untertyp-handwerkerrechnung)
 - **Hilfe während der Einrichtung** – [Der Einrichtungsassistent](installation.md#der-einrichtungsassistent)
 - **Hilfe im Assistenten** – [Wie der Assistent die Hilfe durchsucht](suche-und-assistent.md#wie-er-arbeitet) · [Automatische Hilfe-Embeddings](ki-provider.md#embeddings)
 - **Hintergrundjobs** – [Hintergrundjobs](architektur.md#hintergrundjobs)
@@ -135,26 +147,30 @@ ausführlichste Behandlung.
 - **Import (Dokumente)** – [Dokumente importieren](dokumente-importieren.md) · [Konfliktverhalten](export-import.md#konfliktverhalten-beim-import)
 - **Installer** – [Weg 1: Installer](installation.md#weg-1-installer) · [Nützliche Aufrufformen](installation.md#nützliche-aufrufformen) · [Lokal im Installationsverzeichnis](installation.md#der-installer-liegt-lokal-im-installationsverzeichnis)
 - **Installationsverzeichnis** – [Weg 1: Installer](installation.md#weg-1-installer) · [Lokal im Installationsverzeichnis](installation.md#der-installer-liegt-lokal-im-installationsverzeichnis)
-- **Invalidieren (Rechnung)** – [Sonderfall Korrekturrechnung](dokumentansicht.md#sonderfall-korrekturrechnung)
-- **Invalidierte Rechnung (Betreff-Präfix)** – [Sonderfall Korrekturrechnung](dokumentansicht.md#sonderfall-korrekturrechnung)
+- **Invalidieren (Rechnung)** – [Rechnung invalidieren](dokumentansicht.md#rechnung-invalidieren)
+- **Invalidierte Rechnung (Betreff-Präfix)** – [Rechnung invalidieren](dokumentansicht.md#rechnung-invalidieren)
 - **iPhone / iPad** – [Als App installieren (nicht getestet)](mobil-und-pwa.md#iphone-und-ipad)
+
+## J
+
+- **Jahresordner** – [Ablagestruktur wählen](storage-backends.md#ablagestruktur-wählen)
 
 ## K
 
 - **KI-Anbieter** – [KI-Anbieter](ki-provider.md) · [Provider](ki-provider.md#provider) · [Voraussetzungen](voraussetzungen.md#ki-anbieter)
 - **Klassifikations-Hinweise** – [Eigene Klassifikations-Hinweise](ki-provider.md#eigene-klassifikations-hinweise)
-- **Korrekturrechnung** – [Sonderfall Korrekturrechnung](dokumentansicht.md#sonderfall-korrekturrechnung) · [Rechnungsblock entfernen](dokumentansicht.md#sonderfall-korrekturrechnung)
+- **Korrekturrechnung** – [Sonderfall Korrekturrechnung](dokumentansicht.md#sonderfall-korrekturrechnung) · [Zahlungen ziehen um](dokumentansicht.md#sonderfall-korrekturrechnung) · [Ersetzung aufheben](dokumentansicht.md#sonderfall-korrekturrechnung)
 - **Kosten** – [Kosten und kostenpflichtige KI-Aufrufe](ki-provider.md#kosten-und-kostenpflichtige-aufrufe) · [Kosten (FAQ)](faq.md#kosten)
 - **Kostenträger-Profile** – [Kostenträger-Profile](ki-provider.md#kostenträger-profile) · [Der Erstattungsbescheid kommt](abrechnung-pkv-beihilfe.md#5-der-erstattungsbescheid-kommt)
 - **Kostenträger-Profile exportieren/importieren** – [Profile weitergeben und übernehmen](ki-provider.md#profile-weitergeben-und-übernehmen)
-- **Kürzungen** – [Kürzungen ansehen](abrechnung-pkv-beihilfe.md#kürzungen-ansehen) · [Kürzungen bearbeiten und ergänzen](dokumentansicht.md#kürzungen-bearbeiten) · [Als gesehen markieren](abrechnung-pkv-beihilfe.md#kürzungen-als-gesehen-markieren) · [Zur PKV-Prüfung vormerken](abrechnung-pkv-beihilfe.md#beihilfe-kürzung-zur-pkv-prüfung-vormerken)
+- **Kürzungen** – [Kürzungen ansehen und filtern](abrechnung-pkv-beihilfe.md#kürzungen-ansehen) · [Kürzungen bearbeiten und ergänzen](dokumentansicht.md#kürzungen-bearbeiten) · [Als gesehen markieren](abrechnung-pkv-beihilfe.md#kürzungen-als-gesehen-markieren) · [Zur PKV-Prüfung vormerken](abrechnung-pkv-beihilfe.md#beihilfe-kürzung-zur-pkv-prüfung-vormerken)
 
 ## L
 
 - **Lebensbereich** – [Grundbegriffe](ueberblick.md#grundbegriffe) · [Nachträglich ändern](dokumentansicht.md#lebensbereich-und-dokumentart-ändern)
-- **Leistungsjahr (Handwerkerrechnung)** – [Fachblock](dokumentansicht.md#untertyp-handwerkerrechnung) · [Seite Handwerker](oberflaeche.md#analyse)
+- **Leistungsjahr (Handwerkerrechnung)** – [Fachblock](dokumentansicht.md#untertyp-handwerkerrechnung) · [Gruppiert wird nach Zahljahr](analyse.md)
 - **Lesezugriff** – [Rollen und Zugänge](sicherheit.md#rollen-und-zugänge) · [Nur eigene Dokumente](sicherheit.md#lesezugriff-auf-die-eigenen-dokumente-beschränken)
-- **Lohnanteil (§ 35a EStG)** – [Wie er ermittelt wird](dokumentansicht.md#wie-der-lohnanteil-ermittelt-wird) · [Seite Handwerker](oberflaeche.md#analyse) · [Archivierte zählen mit](analyse.md)
+- **Lohnanteil (§ 35a EStG)** – [Wie er ermittelt wird](dokumentansicht.md#wie-der-lohnanteil-ermittelt-wird) · [Seite Handwerker](oberflaeche.md#analyse) · [Archivierte zählen mit](analyse.md) · [Rechnung ausschließen](dokumentansicht.md#untertyp-handwerkerrechnung)
 - **Linux (App-Installation)** – [Als App installieren](mobil-und-pwa.md#linux)
 - **localhost (OneDrive-Callback)** – [Localhost-Tunnel von einem anderen Rechner](installation.md#localhost-tunnel-von-einem-anderen-rechner)
 - **Logs** – [Wo man nachsieht](betrieb-troubleshooting.md#wo-man-nachsieht)
@@ -184,6 +200,7 @@ ausführlichste Behandlung.
 
 ## O
 
+- **Ohne Datum (Ordner)** – [Ablagestruktur wählen](storage-backends.md#ablagestruktur-wählen)
 - **OneDrive** – [OneDrive](storage-backends.md#onedrive) · [App registrieren](onedrive-app-registrierung.md) · [OAuth-Sonderfälle](installation.md#onedrive-oauth-die-sonderfälle) · [Zugriffsumfang](sicherheit.md#der-zugriff-auf-die-dateiablage-ist-ein-vollzugriff)
 - **OneDrive-Gerätecode** – [Gerätecode ohne Secret](onedrive-app-registrierung.md#empfohlen-gerätecode-ohne-secret)
 - **OneDrive-App-Registrierung ungültig** – [Häufige Fehlerbilder](betrieb-troubleshooting.md#häufige-fehlerbilder)
@@ -199,15 +216,17 @@ ausführlichste Behandlung.
 - **PDF-Cache (`post_files`, 100 Dokumente)** – [Datenmodell in Stichworten](architektur.md#datenmodell-in-stichworten)
 - **PDF ersetzen** – [PDF ersetzen](dokumentansicht.md#pdf-ersetzen)
 - **PDF-Pflicht (Eingangsformat)** – [Dokumente importieren](dokumente-importieren.md)
+- **Periodenstatus (SAMMELT, EINGEREICHT, ABGESCHLOSSEN, AUSGELASSEN)** – [Grundbegriffe](abrechnung-pkv-beihilfe.md#grundbegriffe) · [Rechnung zuordnen](abrechnung-pkv-beihilfe.md#2-rechnung-einer-periode-zuordnen)
 - **Personen** → siehe *Menschen*
 - **Personenfilter (auch „(ohne)“)** – [Filterleiste](oberflaeche.md#dokumente)
-- **Personenordner** – [Ablage nach Person](storage-backends.md#ablage-nach-person)
+- **Personenfilter auf dem Dashboard** – [Dashboard](oberflaeche.md#dashboard)
+- **Personenordner** – [Ablagestruktur wählen](storage-backends.md#ablagestruktur-wählen)
 - **Pipeline** – [Weg eines Dokuments](architektur.md#weg-eines-dokuments-durch-die-pipeline) · [Was nach dem Import passiert](dokumente-importieren.md#was-danach-passiert) · [Wie ein Dokument durchläuft](ueberblick.md#wie-ein-dokument-durch-das-system-läuft)
 - **PKV** – [Grundbegriffe](abrechnung-pkv-beihilfe.md#grundbegriffe) · [Das Problem](abrechnung-pkv-beihilfe.md#das-problem)
 - **PKV-Prüfvormerkung** – [Beihilfe-Kürzung zur PKV-Prüfung vormerken](abrechnung-pkv-beihilfe.md#beihilfe-kürzung-zur-pkv-prüfung-vormerken)
 - **Postnummer** – [Grundbegriffe](ueberblick.md#grundbegriffe) · [Direkt hinspringen](suche-und-assistent.md#nummer-eingeben--direkt-zu-dokumentakte-springen)
 - **Prüfblock (PKV-Prüfung)** – [Prüfblock für die PKV](abrechnung-pkv-beihilfe.md#4-periode-einreichen--der-abrechnungs-assistent)
-- **Prüffälle (Periodenseite)** – [Beihilfe-Kürzung zur PKV-Prüfung vormerken](abrechnung-pkv-beihilfe.md#beihilfe-kürzung-zur-pkv-prüfung-vormerken)
+- **Prüffälle und „zur Prüfung“ (Periodenseite)** – [Beihilfe-Kürzung zur PKV-Prüfung vormerken](abrechnung-pkv-beihilfe.md#beihilfe-kürzung-zur-pkv-prüfung-vormerken)
 - **Push für alle abschalten (Admin)** – [Push für die ganze Instanz abschalten](benachrichtigungen.md#push-für-die-ganze-instanz-abschalten) · [Cloudfrei-Check](ki-provider.md#cloudfrei-check)
 - **Push-Nachrichten (empfohlen)** – [PWA-/Browser-Push](benachrichtigungen.md#browser-push) · [Die sechs Kategorien](benachrichtigungen.md#die-sechs-kategorien)
 - **PWA (App-Installation und Benachrichtigungen)** – [Als App installieren](mobil-und-pwa.md#als-app-installieren-pwa) · [Push-Nachrichten](benachrichtigungen.md#browser-push) · [Aktualisierungen](mobil-und-pwa.md#aktualisierungen)
@@ -222,7 +241,8 @@ ausführlichste Behandlung.
 
 - **Re-Embedding / Neuberechnung** – [Kosten und Auslöser](ki-provider.md#kosten-und-kostenpflichtige-aufrufe) · [Embeddings](ki-provider.md#embeddings) · [Auswirkung eines Updates](betrieb-troubleshooting.md#was-ein-update-tut)
 - **Rechnung** – [Rechnungs-Fachblock und Grundfunktionen](dokumentansicht.md#obertyp-rechnung) · [Arztrechnung, Laborrechnung, Hilfsmittelrechnung und Rezept](dokumentansicht.md#untertyp-arztrechnung-laborrechnung-hilfsmittelrechnung-rezept) · [Handwerkerrechnung](dokumentansicht.md#untertyp-handwerkerrechnung) · [Sonstige Rechnung](dokumentansicht.md#untertyp-sonstige-rechnung) · [PKV- und Beihilfe-Abrechnung](abrechnung-pkv-beihilfe.md)
-- **Rechnungsblock** – [Was darin steht](dokumentansicht.md#was-im-rechnungsblock-steht) · [Zahlung und GiroCode](dokumentansicht.md#zahlung-und-girocode) · [Löschen bei sonstigen Rechnungen](dokumentansicht.md#untertyp-sonstige-rechnung) · [Entfernen nach einer Korrekturrechnung](dokumentansicht.md#sonderfall-korrekturrechnung) · [Rechnung invalidieren](dokumentansicht.md#sonderfall-korrekturrechnung)
+- **Rechnung (Menü)** – [Was im Rechnungsblock steht](dokumentansicht.md#was-im-rechnungsblock-steht)
+- **Rechnungsblock** – [Was darin steht](dokumentansicht.md#was-im-rechnungsblock-steht) · [Zahlung und GiroCode](dokumentansicht.md#zahlung-und-girocode) · [Löschen bei sonstigen Rechnungen](dokumentansicht.md#untertyp-sonstige-rechnung) · [Menü Rechnung](dokumentansicht.md#was-im-rechnungsblock-steht) · [Rechnung invalidieren](dokumentansicht.md#rechnung-invalidieren)
 - **Referenzieren im Chat (`#P…`, `#A…`)** – [Dokumente direkt referenzieren](suche-und-assistent.md#dokumente-direkt-referenzieren)
 - **Release-Signatur** – [Herkunft der Software](sicherheit.md#herkunft-der-software) · [Versionierung und Auslieferung](architektur.md#versionierung-und-auslieferung)
 - **Restperiode (Teilabrechnung)** – [Restperioden](abrechnung-pkv-beihilfe.md#restperioden--wenn-ein-bescheid-nur-einen-teil-abrechnet) · [Perioden bewerten](abrechnung-pkv-beihilfe.md#5-der-erstattungsbescheid-kommt) · [Von Hand korrigieren](abrechnung-pkv-beihilfe.md#perioden-von-hand-korrigieren)
@@ -252,6 +272,8 @@ ausführlichste Behandlung.
 
 ## T
 
+- **Tierarztkosten (Gesundheitskosten)** – [Seite Gesundheitskosten](analyse.md)
+- **Teilzahlung** – [Teilzahlung](dokumentansicht.md#teilzahlung) · [Zahlung und GiroCode](dokumentansicht.md#zahlung-und-girocode) · [Eine Rechnung bestreiten](dokumentansicht.md#eine-rechnung-bestreiten)
 - **Token-Kosten** – [Kosten und Grenzen der Erfassung](ki-provider.md#kosten-und-kostenpflichtige-aufrufe) · [Logs](betrieb-troubleshooting.md#wo-man-nachsieht)
 - **Token (Dateiablage/OneDrive)** – [Der Zugriff auf die Dateiablage ist ein Vollzugriff](sicherheit.md#der-zugriff-auf-die-dateiablage-ist-ein-vollzugriff) · [Geheimnisse](sicherheit.md#geheimnisse) · [Was im Dump steht](backup-wiederherstellung.md#was-im-dump-steht)
 - **Token (MCP)** – [Token erzeugen](mcp.md#2-token-erzeugen) · [MCP-Token](sicherheit.md#mcp-token)
@@ -261,6 +283,7 @@ ausführlichste Behandlung.
 
 - **Umzug der Dateiablage** – [Umzug zwischen den Dateiablagen](storage-backends.md#umzug-zwischen-den-dateiablagen) · [Der Rückweg](storage-backends.md#der-rückweg)
 - **Umzug auf eine andere Instanz** – [Dokumente umziehen](export-import.md#anwendungsfall-dokumente-in-eine-andere-instanz-umziehen)
+- **Überzahlung** – [Teilzahlung](dokumentansicht.md#teilzahlung) · [Nach einer Ersetzung](dokumentansicht.md#sonderfall-korrekturrechnung)
 - **Undo / Redo** – [Undo/Redo](oberflaeche.md#undoredo)
 - **Update-Agent** – [Der Update-Agent](betrieb-troubleshooting.md#der-update-agent)
 - **Update verfügbar (Kostenträger-Profil)** – [Kostenträger-Profile](ki-provider.md#kostenträger-profile)
@@ -274,6 +297,7 @@ ausführlichste Behandlung.
 - **Verbleib (wo liegt das Papier?)** – [Verbleib](akten-und-organisation.md#verbleib-wo-liegt-das-papier) · [Zuordnen](akten-und-organisation.md#zuordnen) · [Etikett drucken](etiketten-drucken.md#etikett-drucken)
 - **Verschieben/Umbenennen (manuell, in der Dateiablage)** – [Dateien manuell in der Dateiablage verschieben oder umbenennen](storage-backends.md#dateien-manuell-in-der-dateiablage-verschieben-oder-umbenennen)
 - **Versionierung** – [Versionierung und Auslieferung](architektur.md#versionierung-und-auslieferung)
+- **Vollerstattete Rechnungen (Filter Gesundheitskosten)** – [Seite Gesundheitskosten](analyse.md)
 - **Vollzugriff (Dateiablage-Berechtigung, `Files.ReadWrite.All`)** – [Der Zugriff auf die Dateiablage ist ein Vollzugriff](sicherheit.md#der-zugriff-auf-die-dateiablage-ist-ein-vollzugriff) · [OneDrive](storage-backends.md#onedrive)
 - **Vollzugriff (Rolle)** – [Rollen und Zugänge](sicherheit.md#rollen-und-zugänge)
 - **Vorabversionen (Pre-releases)** – [Vorabversionen](betrieb-troubleshooting.md#vorabversionen)
@@ -294,6 +318,8 @@ ausführlichste Behandlung.
 
 ## Z
 
+- **Zahljahr (Steuer)** – [Handwerker und Gesundheitskosten](analyse.md)
+- **Zahlungen umziehen (Korrekturrechnung)** – [Sonderfall Korrekturrechnung](dokumentansicht.md#sonderfall-korrekturrechnung)
 - **Zahlungsziel / Fälligkeit** – [Bezahlen](abrechnung-pkv-beihilfe.md#3-bezahlen) · [Dashboard](oberflaeche.md#dashboard)
 - **Zugang entziehen** – [Wenn ein Zugang endet](sicherheit.md#wenn-ein-zugang-endet)
 - **Zurück-Taste (PWA)** – [Die Zurück-Taste im installierten Zustand](mobil-und-pwa.md#die-zurück-taste-im-installierten-zustand)

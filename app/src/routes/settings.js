@@ -16,7 +16,10 @@
  */
 
 import { Router } from 'express';
-import { loadDynamicSettings, getFolders, getActiveBackendName, getAblageStruktur } from '../config.js';
+import {
+  loadDynamicSettings, getFolders, getActiveBackendName, getAblageStruktur, getAblageEbenen,
+  normalisiereAblageEbenen, ABLAGE_VORLAGEN, ABLAGE_PERSON_QUELLEN, getAblagePersonQuelle,
+} from '../config.js';
 import db from '../db.js';
 import { appLog } from '../app-log.js';
 import { syncWithSettings as syncDiscordGateway } from '../lib/discord-gateway.js';
@@ -24,7 +27,9 @@ import { sendMessage as sendDiscordMessage } from '../lib/discord.js';
 import * as onedriveAuth from '../lib/storage/onedrive.js';
 import * as nextcloud from '../lib/storage/nextcloud.js';
 import { getActiveAdapter, getAdapter, BACKENDS } from '../lib/storage/index.js';
-import { setupFolderStructure, SYSTEM_FOLDERS, ermittleWurzelPfad, GEMEINSAM_ORDNER } from '../service/storage-setup.js';
+import {
+  setupFolderStructure, SYSTEM_FOLDERS, ermittleWurzelPfad, GEMEINSAM_ORDNER, OHNE_DATUM_ORDNER, RICHTUNG_ORDNER,
+} from '../service/storage-setup.js';
 import { getAktiveTaxonomie, getGesamteTaxonomie } from '../lib/taxonomie.js';
 import { raeumeFremdeStrukturAuf } from '../service/storage-legacy-cleanup.js';
 import { getOffenenLauf } from '../service/storage-migration.js';
@@ -1237,25 +1242,52 @@ router.post('/onedrive-folders/relocate-all', async (req, res) => {
   });
 });
 
-// ── Ablagestruktur (LxD oder Personenablage) ─────────────────────────────────
+// ── Ablagestruktur (Vorlage oder benutzerdefinierte Ebenen) ──────────────────
 // Umschalten und Gesamtumzug sind untrennbar: ein Wechsel ohne Umzug ließe einen
-// Mischbestand ohne Besitzer zurück. ablage_struktur steht deshalb bewusst NICHT
-// in ALLOWED_SETTING_KEYS. Ein erneuter Aufruf mit der aktuellen Struktur setzt
-// einen abgebrochenen Umzug fort (relocateAllDocuments ist idempotent).
+// Mischbestand ohne Besitzer zurück. ablage_struktur und ablage_ebenen stehen
+// deshalb bewusst NICHT in ALLOWED_SETTING_KEYS. Ein erneuter Aufruf mit der
+// aktuellen Struktur setzt einen abgebrochenen Umzug fort (relocateAllDocuments
+// ist idempotent).
 
-const ABLAGE_STRUKTUREN = new Set(['lxd', 'person_lxd']);
+/**
+ * Löst eine Anfrage auf Struktur und Ebenen auf. Eine benutzerdefinierte
+ * Folge, die einer Vorlage entspricht, wird zu dieser Vorlage.
+ * @returns {{struktur:string, ebenen:string[]}|null}
+ */
+function loeseStrukturAuf(struktur, ebenen) {
+  if (Object.hasOwn(ABLAGE_VORLAGEN, struktur)) return { struktur, ebenen: [...ABLAGE_VORLAGEN[struktur]] };
+  if (struktur !== 'benutzerdefiniert') return null;
+  const normal = normalisiereAblageEbenen(ebenen);
+  if (!normal) return null;
+  const vorlage = Object.entries(ABLAGE_VORLAGEN).find(([, v]) => v.join('/') === normal.join('/'));
+  return vorlage ? { struktur: vorlage[0], ebenen: normal } : { struktur, ebenen: normal };
+}
 
-/** Kurznamen, die als Ordnername auf erster Ebene kollidieren würden. */
-async function personenordnerKollisionen() {
+/**
+ * Kurznamen, die als Personenordner kollidieren würden. Steht Person auf
+ * erster Ebene, liegen die Personenordner während des Umzugs neben den
+ * Ordnern der bisherigen ersten Ebene – gleichnamige Ordner würden dann
+ * verwechselt.
+ */
+async function personenordnerKollisionen(ebenen) {
+  if (!ebenen.includes('person')) return [];
   const menschen = (await db.query('SELECT kurzname FROM postbuch.mensch ORDER BY kurzname')).rows;
-  const labels = new Set((await getGesamteTaxonomie()).lebensbereiche.map((l) => String(l.label).toLowerCase()));
+  const taxonomie = await getGesamteTaxonomie();
+  const belegt = new Map();
+  if (ebenen[0] === 'person') {
+    for (const l of taxonomie.lebensbereiche) belegt.set(String(l.label).toLowerCase(), 'gleichnamiger Lebensbereich');
+    for (const d of taxonomie.dokumentarten) belegt.set(String(d.label).toLowerCase(), 'gleichnamige Dokumentart');
+    for (const r of Object.values(RICHTUNG_ORDNER)) belegt.set(r.toLowerCase(), 'gleichnamiger Richtungsordner');
+    belegt.set(OHNE_DATUM_ORDNER.toLowerCase(), 'gleichnamiger Jahresordner');
+  }
   const gesehen = new Map();
   const kollisionen = [];
   for (const { kurzname } of menschen) {
     const klein = kurzname.toLowerCase();
     if (klein === GEMEINSAM_ORDNER.toLowerCase()) kollisionen.push({ kurzname, grund: 'reservierter Sammelordner' });
     else if (/^[_.]/.test(kurzname)) kollisionen.push({ kurzname, grund: 'beginnt mit _ oder .' });
-    else if (labels.has(klein)) kollisionen.push({ kurzname, grund: 'gleichnamiger Lebensbereich' });
+    else if (belegt.has(klein)) kollisionen.push({ kurzname, grund: belegt.get(klein) });
+    else if (ebenen[0] === 'person' && /^\d{4}$/.test(kurzname)) kollisionen.push({ kurzname, grund: 'gleichnamiger Jahresordner' });
     else if (gesehen.has(klein)) kollisionen.push({ kurzname, grund: `nur in Groß-/Kleinschreibung verschieden von „${gesehen.get(klein)}“` });
     gesehen.set(klein, kurzname);
   }
@@ -1265,27 +1297,83 @@ async function personenordnerKollisionen() {
 router.get('/ablage-struktur', async (_req, res) => {
   try {
     const settings = await loadDynamicSettings();
-    res.json({ struktur: getAblageStruktur(settings), umzugAktiv: istUmzugAktiv() || strukturWechselLaeuft });
+    res.json({
+      struktur: getAblageStruktur(settings),
+      ebenen: getAblageEbenen(settings),
+      // Zuletzt gespeicherte eigene Folge, zum Vorbelegen der Auswahl.
+      benutzerEbenen: normalisiereAblageEbenen(settings.ablage_ebenen),
+      personQuelle: getAblagePersonQuelle(settings),
+      umzugAktiv: istUmzugAktiv() || !!strukturUmzug,
+    });
   } catch (err) {
     res.status(500).json({ error: clientSafeError(err) });
   }
 });
 
-// Sperrt den Wechsel ab der Anfrage bis zum Ende des Umzugs. istUmzugAktiv()
-// greift erst, wenn relocateAllDocuments tatsächlich läuft; ohne diese Sperre
-// könnte ein zweiter Klick dazwischen das Setting erneut umschalten.
-let strukturWechselLaeuft = false;
+// Laufender Strukturumzug { jobId, controller, fertig }. Eine neue Strukturwahl
+// bricht ihn ab und ersetzt ihn durch einen Umzug in die neue Struktur.
+let strukturUmzug = null;
+// Serialisiert Wechselanfragen: Abbruch des alten Laufs, Umschalten und Start
+// des neuen bilden einen kritischen Abschnitt. Ohne ihn könnten zwei schnelle
+// Klicks das Setting umschalten, während der jeweils andere Lauf noch zieht.
+let wechselSperre = Promise.resolve();
+
+/** Startet den Gesamtumzug samt Aufräumen im Hintergrund. */
+function starteStrukturUmzug() {
+  const jobId = tracker.create('storage-relocate', 'Dokumente in neue Ablagestruktur verschieben', 1, false);
+  const controller = new AbortController();
+  const lauf = { jobId, controller, fertig: null };
+  lauf.fertig = (async () => {
+    try {
+      await tracker.awaitPersisted(jobId);
+      const result = await relocateAllDocuments(({ schritt, gesamt, name }) => {
+        tracker.setTotal(jobId, gesamt);
+        tracker.setStep(jobId, schritt, name);
+      }, { signal: controller.signal });
+      // Ersetzt, bevor aufgeräumt wurde: Das Aufräumen übernimmt der neue
+      // Lauf, sonst löschte dieser hier womöglich frisch angelegte Ordner.
+      if (result.abgebrochen || controller.signal.aborted) {
+        tracker.completeAsCancelled(jobId, { ...result, ersetzt: true });
+        return;
+      }
+      if (result.errors > 0 || result.unresolved > 0) {
+        tracker.fail(jobId,
+          `Umzug mit ${result.errors} Fehler(n) und ${result.unresolved} ungeklärten Zielen beendet. `
+          + 'Alte Ordner bleiben stehen; der Umzug kann erneut gestartet werden.',
+          { fehlerListe: result.fehlerListe });
+        return;
+      }
+      const aufraeumen = await raeumeFremdeStrukturAuf({ taxonomie: await getGesamteTaxonomie() });
+      tracker.complete(jobId, { ...result, aufraeumen });
+    } catch (err) {
+      tracker.fail(jobId, err.message);
+      appLog('ERROR', 'settings', `Wechsel der Ablagestruktur fehlgeschlagen: ${err.message}`);
+    } finally {
+      if (strukturUmzug === lauf) strukturUmzug = null;
+    }
+  })();
+  strukturUmzug = lauf;
+  return jobId;
+}
 
 router.post('/ablage-struktur', async (req, res) => {
-  const struktur = req.body?.struktur;
-  if (!ABLAGE_STRUKTUREN.has(struktur)) return res.status(400).json({ error: 'Unbekannte Ablagestruktur.' });
-  if (strukturWechselLaeuft) {
-    return res.status(409).json({ error: 'Es läuft bereits ein Dokumentumzug – bitte warten, bis er abgeschlossen ist.' });
+  const ziel = loeseStrukturAuf(req.body?.struktur, req.body?.ebenen);
+  if (!ziel) {
+    return res.status(400).json({ error: 'Unbekannte Ablagestruktur oder ungültige Ebenenauswahl (1 bis 4 verschiedene Ebenen).' });
   }
-  strukturWechselLaeuft = true;
-  let hintergrund = false;
+  const { struktur, ebenen } = ziel;
+  const personQuelleRoh = req.body?.personQuelle;
+  if (personQuelleRoh !== undefined && !ABLAGE_PERSON_QUELLEN.includes(personQuelleRoh)) {
+    return res.status(400).json({ error: 'Unbekannte Personenquelle (adressat oder behandelt).' });
+  }
+  const vorige = wechselSperre;
+  let freigeben;
+  wechselSperre = new Promise((resolve) => { freigeben = resolve; });
   try {
-    if (istUmzugAktiv()) {
+    await vorige;
+    // Ein Umzug, der nicht von hier stammt (Setup-Assistent, manueller
+    // Gesamtumzug), wird nicht abgebrochen.
+    if (istUmzugAktiv() && !strukturUmzug) {
       return res.status(409).json({ error: 'Es läuft bereits ein Dokumentumzug – bitte warten, bis er abgeschlossen ist.' });
     }
     // Nur ein laufender oder noch nicht umgeschalteter Speicherumzug sperrt;
@@ -1298,54 +1386,44 @@ router.post('/ablage-struktur', async (req, res) => {
     if (!getFolders(settings).inbox) {
       return res.status(409).json({ error: 'Die Ablage ist noch nicht eingerichtet.' });
     }
-    if (struktur === 'person_lxd') {
-      const kollisionen = await personenordnerKollisionen();
-      if (kollisionen.length) {
-        return res.status(409).json({
-          error: 'Einige Kurznamen eignen sich nicht als Ordnername. Bitte zuerst umbenennen.',
-          code: 'KURZNAME_KOLLISION',
-          kollisionen,
-        });
-      }
+    const kollisionen = await personenordnerKollisionen(ebenen);
+    if (kollisionen.length) {
+      return res.status(409).json({
+        error: 'Einige Kurznamen eignen sich nicht als Ordnername. Bitte zuerst umbenennen.',
+        code: 'KURZNAME_KOLLISION',
+        kollisionen,
+      });
     }
 
-    const vorher = getAblageStruktur(settings);
+    // Erst nach allen Prüfungen abbrechen: Eine abgelehnte Anfrage darf den
+    // laufenden Umzug nicht stoppen. Das gerade bewegte Dokument wird noch
+    // fertig verschoben, danach endet der alte Lauf als abgebrochen.
+    const ersetzt = strukturUmzug;
+    if (ersetzt) {
+      appLog('INFO', 'settings', `Laufender Strukturumzug ${ersetzt.jobId} wird durch neue Strukturwahl ersetzt`);
+      ersetzt.controller.abort();
+      await ersetzt.fertig;
+    }
+
+    const vorher = getAblageEbenen(settings).join('/');
+    const personQuelle = personQuelleRoh ?? getAblagePersonQuelle(settings);
+    // Ebenen zuerst: getAblageStruktur() fällt bei 'benutzerdefiniert' ohne
+    // gültige Ebenen auf LxD zurück. Bei einer Vorlage bleibt die eigene Folge
+    // zum späteren Vorbelegen stehen.
+    if (struktur === 'benutzerdefiniert') await upsertSetting('ablage_ebenen', ebenen);
+    await upsertSetting('ablage_person_quelle', personQuelle);
     await upsertSetting('ablage_struktur', struktur);
-    appLog('INFO', 'settings', `Ablagestruktur: ${vorher} → ${struktur}, Gesamtumzug gestartet`, {
+    appLog('INFO', 'settings', `Ablagestruktur: ${vorher} → ${ebenen.join('/')} (${struktur}, Person: ${personQuelle}), Gesamtumzug gestartet`, {
       entity: 'settings', entityId: req.session?.username || null,
     });
 
-    const jobId = tracker.create('storage-relocate', 'Dokumente in neue Ablagestruktur verschieben', 1, false);
-    res.status(202).json({ ok: true, jobId, struktur });
-    hintergrund = true;
-    void (async () => {
-      try {
-        await tracker.awaitPersisted(jobId);
-        const result = await relocateAllDocuments(({ schritt, gesamt, name }) => {
-          tracker.setTotal(jobId, gesamt);
-          tracker.setStep(jobId, schritt, name);
-        });
-        if (result.errors > 0 || result.unresolved > 0) {
-          tracker.fail(jobId,
-            `Umzug mit ${result.errors} Fehler(n) und ${result.unresolved} ungeklärten Zielen beendet. `
-            + 'Alte Ordner bleiben stehen; der Umzug kann erneut gestartet werden.',
-            { fehlerListe: result.fehlerListe });
-          return;
-        }
-        const aufraeumen = await raeumeFremdeStrukturAuf({ taxonomie: await getGesamteTaxonomie() });
-        tracker.complete(jobId, { ...result, aufraeumen });
-      } catch (err) {
-        tracker.fail(jobId, err.message);
-        appLog('ERROR', 'settings', `Wechsel der Ablagestruktur fehlgeschlagen: ${err.message}`);
-      } finally {
-        strukturWechselLaeuft = false;
-      }
-    })();
+    const jobId = starteStrukturUmzug();
+    res.status(202).json({ ok: true, jobId, struktur, ebenen, personQuelle, ersetztJobId: ersetzt?.jobId || null });
   } catch (err) {
     console.error('[settings] Ablagestruktur:', err);
     if (!res.headersSent) res.status(500).json({ error: clientSafeError(err) });
   } finally {
-    if (!hintergrund) strukturWechselLaeuft = false;
+    freigeben();
   }
 });
 

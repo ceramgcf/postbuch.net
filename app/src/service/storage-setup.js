@@ -12,7 +12,7 @@
  */
 
 import db from '../db.js';
-import { loadDynamicSettings, getActiveBackendName, getFolders, getAblageStruktur } from '../config.js';
+import { loadDynamicSettings, getActiveBackendName, getFolders, getAblageEbenen, getAblagePersonQuelle, ABLAGE_EBENEN } from '../config.js';
 import { getAdapter } from '../lib/storage/index.js';
 import { getAktiveTaxonomie, getGesamteTaxonomie } from '../lib/taxonomie.js';
 import { appLog } from '../app-log.js';
@@ -56,11 +56,12 @@ export async function setupFolderStructure(rootFolderPath, backendName, onProgre
   const cleanRoot = rootFolderPath.replace(/^\/+/, '').replace(/\/+$/, '') || 'postbuch';
   const segments = cleanRoot.split('/').filter(Boolean);
 
-  // Bei Personenablage liegen die Lebensbereiche unter den Personenordnern und
-  // werden dort lazy angelegt; an der Wurzel stünden sie nur leer herum.
-  const personenablage = getAblageStruktur(settings) === 'person_lxd';
+  // Lebensbereichsordner gehören nur an die Wurzel, wenn sie dort die erste
+  // Ebene bilden. Sonst werden sie unter ihrer Vorebene lazy angelegt; an der
+  // Wurzel stünden sie nur leer herum.
+  const lebensbereichZuerst = getAblageEbenen(settings)[0] === 'lebensbereich';
   const taxonomie = await getAktiveTaxonomie();
-  const lebensbereiche = personenablage ? [] : taxonomie.lebensbereiche;
+  const lebensbereiche = lebensbereichZuerst ? taxonomie.lebensbereiche : [];
   const gesamt = segments.length + SYSTEM_FOLDERS.length + lebensbereiche.length;
   let schritt = 0;
   const melde = (name) => onProgress?.({ schritt: ++schritt, gesamt, name });
@@ -213,61 +214,38 @@ export async function saveFolderIds(backend, patch) {
   return patch;
 }
 
-/**
- * Legt den fehlenden Leaf-Ordner einer gültigen LxD-Zelle lazy und race-sicher an.
- *
- * @param {{force?:boolean}} [opts]  force=true überspringt die Cache-Treffer und
- *   löst L- und Leaf-Ordner ab der AKTUELLEN Wurzel neu auf. Gebraucht vom
- *   Gesamtumzug nach einem Wurzelordner- oder Strukturwechsel: gecachte L- und
- *   L×D-Keys können dann noch auf ihren alten (dort weiterhin gültigen) Ort
- *   zeigen – etwa ein L-Ordner, der beim Aufräumen wegen fremder Inhalte
- *   stehen blieb. Ohne Erzwingen würde relocateAllDocuments() solche Zellen
- *   fälschlich als "schon am richtigen Ort" behandeln.
- */
-export async function ensureFolderId(settings, lebensbereichCode, dokumentartCode, backendName, opts = {}) {
-  if (typeof lebensbereichCode !== 'string' || typeof dokumentartCode !== 'string') {
-    throw new Error('Ablageziel braucht Lebensbereich und Dokumentart.');
-  }
-  const backend = backendName || getActiveBackendName(settings);
-  const key = `${lebensbereichCode}/${dokumentartCode}`;
-  const folders = getFolders(settings, backend);
-  if (folders[key] && !opts.force) return folders[key];
+// ── Ablageebenen ──────────────────────────────────────────────────────────────
+//
+// Der Zielordner eines Dokuments ist eine Kette von Ordnern unter der Wurzel,
+// eine Ebene je Eintrag aus getAblageEbenen(). Jeder Ordner der Kette hat in
+// storage_folders[<backend>] einen Cache-Schlüssel, der den logischen Pfad
+// von der Wurzel bis zu ihm beschreibt: die Segmente aller Ebenen bis
+// einschließlich seiner eigenen, mit `/` verbunden. Gleicher Schlüssel heißt
+// damit gleicher logischer Ort, unabhängig davon, aus welcher Struktur er
+// stammt. Die Segmente sind je Ebene unterscheidbar:
+//
+//   Lebensbereich  <code>              (wie seit der LxD-Ablage)
+//   Dokumentart    <code>              (wie seit der LxD-Ablage)
+//   Person         @<mensch-uuid> | @gemeinsam
+//   Jahr           jahr:<JJJJ> | jahr:ohne
+//   Richtung       richtung:eingang | richtung:ausgang
+//
+// Für die beiden Vorlagen ergeben sich exakt die bisherigen Schlüssel
+// (`<L>`, `<L>/<D>`, `@…/<L>/<D>`); bestehende Caches bleiben gültig.
 
-  // Bestandsdokumente duerfen weiterhin in Taxonomie-Zellen liegen, die erst
-  // nach ihrer Ablage deaktiviert wurden. Nur der Setup-Wizard und die neue
-  // Klassifikation arbeiten aktiv-only; die Ordneraufloesung braucht alle.
-  const taxonomie = await getGesamteTaxonomie();
-  const lebensbereich = taxonomie.lebensbereiche.find((x) => x.code === lebensbereichCode);
-  const dokumentart = taxonomie.dokumentarten.find((x) => x.code === dokumentartCode);
-  if (!lebensbereich || !dokumentart) throw new Error(`Unbekannte LxD-Zelle "${key}".`);
-
-  const adapter = getAdapter(backend);
-  let lFolderId = opts.force ? null : folders[lebensbereichCode];
-  if (!lFolderId) {
-    const anchorId = folders.inbox || folders.failed || folders.suspended || folders.trash;
-    if (!anchorId) throw new Error(`Ablage für Backend "${backend}" ist noch nicht eingerichtet.`);
-    const anchor = await adapter.getMeta(anchorId);
-    const created = await adapter.findOrCreateFolder(anchor.parentId, lebensbereich.label, { strict: true });
-    lFolderId = created.id;
-    await saveFolderIds(backend, { [lebensbereichCode]: lFolderId });
-  }
-  // OneDrive verbietet u.a. Schrägstriche, die in lesbaren Taxonomie-Labels
-  // fachlich sinnvoll sein können. Der technische Ordnername bleibt stabil,
-  // die Anzeige in der App kommt weiterhin aus der unveränderten Taxonomie.
-  const folderName = ordnerName(dokumentart.label);
-  const leaf = await adapter.findOrCreateFolder(lFolderId, folderName, { strict: true });
-  await saveFolderIds(backend, { [key]: leaf.id });
-  return leaf.id;
-}
-
-// ── Personenablage ────────────────────────────────────────────────────────────
-
-/** Ordner für Dokumente ohne Familienmitglied bei Personenablage. */
+/** Ordner für Dokumente ohne Familienmitglied bei Ablage nach Person. */
 export const GEMEINSAM_ORDNER = 'Gemeinsam';
+/** Ordner für Dokumente ohne Briefdatum bei Ablage nach Jahr. */
+export const OHNE_DATUM_ORDNER = 'Ohne Datum';
+/** Ordnernamen der Ebene Richtung. */
+export const RICHTUNG_ORDNER = Object.freeze({ eingang: 'Eingang', ausgang: 'Ausgang' });
+
+const JAHR_PRAEFIX = 'jahr:';
+const RICHTUNG_PRAEFIX = 'richtung:';
 
 /**
- * Cache-Schlüssel der Personenablage in storage_folders[<backend>]. Eigener
- * Namensraum mit `@`, damit er nie mit einem LxD-Schlüssel `<L>/<D>` oder einem
+ * Cache-Schlüsselsegment eines Personenordners. Eigener Namensraum mit `@`,
+ * damit er nie mit einem Lebensbereichs-, Dokumentart- oder
  * Systemordner-Schlüssel verwechselt wird. Die Person hängt an der Mensch-UUID,
  * nicht am Kurznamen – eine Umbenennung ändert nur den Ordnernamen.
  */
@@ -275,13 +253,108 @@ export function personSchluessel(menschId) {
   return menschId ? `@${menschId}` : '@gemeinsam';
 }
 
+/** Jahr des Briefdatums ('YYYY-MM-DD' oder Date) als vierstelliger String, sonst null. */
+export function ablageJahr(briefdatum) {
+  if (briefdatum instanceof Date) return Number.isNaN(briefdatum.getTime()) ? null : String(briefdatum.getFullYear());
+  const m = /^(\d{4})-\d{2}-\d{2}/.exec(typeof briefdatum === 'string' ? briefdatum.trim() : '');
+  return m ? m[1] : null;
+}
+
+/** Richtung einer Zeile; fehlend oder unbekannt zählt wie der DB-Default 'eingang'. */
+function ablageRichtung(richtung) {
+  return richtung === 'ausgang' ? 'ausgang' : 'eingang';
+}
+
+/** Segment einer Ebene im Cache-Schlüssel. menschId muss bereits aufgelöst sein. */
+function segment(ebene, row, menschId) {
+  switch (ebene) {
+    case 'lebensbereich': return row.lebensbereich;
+    case 'dokumentart': return row.dokumentart;
+    case 'person': return personSchluessel(menschId);
+    case 'jahr': return `${JAHR_PRAEFIX}${ablageJahr(row.briefdatum) ?? 'ohne'}`;
+    case 'richtung': return `${RICHTUNG_PRAEFIX}${ablageRichtung(row.richtung)}`;
+    default: throw new Error(`Unbekannte Ablageebene "${ebene}".`);
+  }
+}
+
+/**
+ * Prüft, ob ein Schlüsselsegment zu einer Ebene passt. Lebensbereich und
+ * Dokumentart werden gegen die Taxonomie geprüft, die übrigen am Präfix.
+ */
+function segmentPasst(ebene, seg, codes) {
+  switch (ebene) {
+    case 'lebensbereich': return codes.lebensbereiche.has(seg);
+    case 'dokumentart': return codes.dokumentarten.has(seg);
+    case 'person': return seg.startsWith('@');
+    case 'jahr': return seg.startsWith(JAHR_PRAEFIX);
+    case 'richtung': return seg.startsWith(RICHTUNG_PRAEFIX);
+    default: return false;
+  }
+}
+
+function taxonomieCodes(taxonomie) {
+  return {
+    lebensbereiche: new Set(taxonomie.lebensbereiche.map((x) => x.code)),
+    dokumentarten: new Set(taxonomie.dokumentarten.map((x) => x.code)),
+  };
+}
+
+/**
+ * Liefert eine Funktion, die entscheidet, ob ein Cache-Schlüssel ein Ordner
+ * irgendeiner Ablagestruktur ist. System- und Legacy-Schlüssel (inbox,
+ * abrechnung, 'Wohnen' …) sind es nicht.
+ */
+export function istStrukturSchluessel(taxonomie) {
+  const codes = taxonomieCodes(taxonomie);
+  return (key) => key.split('/').every((seg) => ABLAGE_EBENEN.some((e) => segmentPasst(e, seg, codes)));
+}
+
+/**
+ * Liefert eine Funktion, die entscheidet, ob ein Cache-Schlüssel zur
+ * Ablagestruktur mit den angegebenen Ebenen gehört (Präfix ihrer Kette).
+ */
+export function gehoertZurStruktur(ebenen, taxonomie) {
+  const codes = taxonomieCodes(taxonomie);
+  return (key) => {
+    const segs = key.split('/');
+    return segs.length <= ebenen.length && segs.every((seg, i) => segmentPasst(ebenen[i], seg, codes));
+  };
+}
+
 /**
  * Cache-Schlüssel des Blattordners für eine Dokumentzeile im aktuellen
- * Ablagemodus. Reine Funktion; menschId muss bereits aufgelöst sein.
+ * Ablagemodus. Reine Funktion; row.menschId muss bereits aufgelöst sein.
  */
-export function ablageSchluessel(settings, { lebensbereich, dokumentart, menschId }) {
-  const zelle = `${lebensbereich}/${dokumentart}`;
-  return getAblageStruktur(settings) === 'person_lxd' ? `${personSchluessel(menschId)}/${zelle}` : zelle;
+export function ablageSchluessel(settings, row) {
+  return getAblageEbenen(settings).map((e) => segment(e, row, row.menschId)).join('/');
+}
+
+/**
+ * Kennung des Ablageziels einer Zeile für Zwischenspeicher eines Laufs
+ * (Gesamtumzug, Backend-Migration). Enthält alle Achsen, die eine Ebene
+ * bestimmen können; zu fein ist unschädlich, zu grob nicht.
+ */
+export function ablageZielKennung(row) {
+  return [row.familienmitglied ?? '', row.behandelte_person ?? '', row.lebensbereich, row.dokumentart,
+    ablageJahr(row.briefdatum) ?? '', ablageRichtung(row.richtung)].join('|');
+}
+
+/**
+ * SQL-Ausdruck für die eindeutige behandelte Person eines Dokuments, als
+ * Spalte `behandelte_person` in Zeilen für ensureAblageOrdner(). Arztrechnung
+ * und Arztbericht tragen genau eine; ein Erstattungsbescheid nur dann, wenn
+ * alle Positionen dieselbe Person nennen. Sonst NULL.
+ *
+ * @param {string} alias  Alias von postbuch.postbuch in der Abfrage
+ */
+export function behandeltePersonSql(alias) {
+  return `COALESCE(
+      (SELECT ar.behandelte_person FROM postbuch.arztrechnung ar WHERE ar.postid = ${alias}.postid),
+      (SELECT ab.behandelte_person FROM postbuch.arztbericht ab WHERE ab.postid = ${alias}.postid),
+      (SELECT CASE WHEN count(DISTINCT ep.behandelte_person) = 1 AND count(ep.behandelte_person) = count(*)
+                   THEN min(ep.behandelte_person) END
+         FROM postbuch.erstattungsbescheid_einzelposition ep WHERE ep.postid = ${alias}.postid)
+    )`;
 }
 
 /**
@@ -292,6 +365,19 @@ export async function ermittlePerson(familienmitglied) {
   if (!familienmitglied) return null;
   const r = await db.query('SELECT id, kurzname FROM postbuch.mensch WHERE kurzname = $1', [familienmitglied]);
   return r.rows[0] ?? null;
+}
+
+/**
+ * Mensch, dessen Ordner ein Dokument bei Ablage nach Person bekommt. Bei
+ * Personenquelle 'behandelt' zählt die behandelte Person bzw. das Tier, sofern
+ * sie einem erfassten Menschen entspricht; sonst der Adressat.
+ */
+export async function ermittleAblagePerson(settings, row) {
+  if (getAblagePersonQuelle(settings) === 'behandelt' && row.behandelte_person) {
+    const behandelt = await ermittlePerson(row.behandelte_person);
+    if (behandelt) return behandelt;
+  }
+  return ermittlePerson(row.familienmitglied);
 }
 
 /** OneDrive verbietet u. a. Schrägstriche in Ordnernamen. */
@@ -305,62 +391,107 @@ function ordnerName(label) {
  * Typwechsel, PDF-Ersatz, Umzug, Backend-Migration).
  *
  * @param {object} settings
- * @param {{lebensbereich:string, dokumentart:string, familienmitglied?:string|null}} row
+ * @param {{lebensbereich:string, dokumentart:string, familienmitglied?:string|null,
+ *          behandelte_person?:string|null, briefdatum?:string|Date|null,
+ *          richtung?:string|null}} row
  * @param {string} [backendName]  Default: aktives Backend
- * @param {{force?:boolean}} [opts]  force=true löst die gesamte Kette ab der
- *   Wurzel neu auf, statt gecachten IDs zu vertrauen (nach Wurzelordner-Wechsel).
+ * @param {{force?:boolean}} [opts]  force=true überspringt die Cache-Treffer und
+ *   löst die gesamte Ordnerkette ab der AKTUELLEN Wurzel neu auf. Gebraucht vom
+ *   Gesamtumzug nach einem Wurzelordner- oder Strukturwechsel: gecachte
+ *   Schlüssel können dann noch auf ihren alten (dort weiterhin gültigen) Ort
+ *   zeigen – etwa ein Ordner, der beim Aufräumen wegen fremder Inhalte stehen
+ *   blieb. Ohne Erzwingen würde relocateAllDocuments() solche Ziele
+ *   fälschlich als "schon am richtigen Ort" behandeln.
+ *   laufCache (Map) gilt für genau einen Gesamtlauf: Jeder Ordner der Kette
+ *   (und die Wurzel unter dem Schlüssel '') wird darin höchstens einmal
+ *   erzwungen aufgelöst, auch wenn viele Ziele ihn teilen. Gespeichert wird das
+ *   Promise, damit parallele Aufrufe auf dieselbe Auflösung warten, statt den
+ *   Ordner gleichzeitig anzulegen (Nextcloud antwortet darauf mit 423 Locked).
  */
 export async function ensureAblageOrdner(settings, row, backendName, opts = {}) {
-  if (getAblageStruktur(settings) !== 'person_lxd') {
-    return ensureFolderId(settings, row.lebensbereich, row.dokumentart, backendName, opts);
-  }
   const { lebensbereich: lCode, dokumentart: dCode } = row;
   if (typeof lCode !== 'string' || typeof dCode !== 'string') {
     throw new Error('Ablageziel braucht Lebensbereich und Dokumentart.');
   }
   const backend = backendName || getActiveBackendName(settings);
-  const person = await ermittlePerson(row.familienmitglied);
-  const pKey = personSchluessel(person?.id);
-  const lKey = `${pKey}/${lCode}`;
-  const leafKey = `${lKey}/${dCode}`;
+  const ebenen = getAblageEbenen(settings);
+  const person = ebenen.includes('person') ? await ermittleAblagePerson(settings, row) : null;
+  const segmente = ebenen.map((e) => segment(e, row, person?.id));
+  const schluessel = segmente.map((_, i) => segmente.slice(0, i + 1).join('/'));
   const folders = getFolders(settings, backend);
+  const leafKey = schluessel[schluessel.length - 1];
   if (folders[leafKey] && !opts.force) return folders[leafKey];
 
+  // Bestandsdokumente duerfen weiterhin in Taxonomie-Zellen liegen, die erst
+  // nach ihrer Ablage deaktiviert wurden. Nur der Setup-Wizard und die neue
+  // Klassifikation arbeiten aktiv-only; die Ordneraufloesung braucht alle.
   const taxonomie = await getGesamteTaxonomie();
   const lebensbereich = taxonomie.lebensbereiche.find((x) => x.code === lCode);
   const dokumentart = taxonomie.dokumentarten.find((x) => x.code === dCode);
   if (!lebensbereich || !dokumentart) throw new Error(`Unbekannte LxD-Zelle "${lCode}/${dCode}".`);
 
+  // OneDrive verbietet u.a. Schrägstriche, die in lesbaren Taxonomie-Labels
+  // fachlich sinnvoll sein können. Der technische Ordnername bleibt stabil,
+  // die Anzeige in der App kommt weiterhin aus der unveränderten Taxonomie.
+  const namen = {
+    lebensbereich: lebensbereich.label,
+    dokumentart: dokumentart.label,
+    person: person ? person.kurzname : GEMEINSAM_ORDNER,
+    jahr: ablageJahr(row.briefdatum) ?? OHNE_DATUM_ORDNER,
+    richtung: RICHTUNG_ORDNER[ablageRichtung(row.richtung)],
+  };
+
   const adapter = getAdapter(backend);
   const anchorId = folders.inbox || folders.failed || folders.suspended || folders.trash;
   if (!anchorId) throw new Error(`Ablage für Backend "${backend}" ist noch nicht eingerichtet.`);
 
+  const istStruktur = istStrukturSchluessel(taxonomie);
+  const laufCache = opts.laufCache;
+  // Einmal je Lauf: Fehlschläge werden nicht zwischengespeichert, das nächste
+  // Ziel versucht es erneut.
+  const einmalJeLauf = (key, fn) => {
+    if (!laufCache) return fn();
+    if (!laufCache.has(key)) {
+      const p = fn();
+      laufCache.set(key, p);
+      p.catch(() => laufCache.delete(key));
+    }
+    return laufCache.get(key);
+  };
   const patch = {};
-  const loese = async (key, parentId, name) => {
+  const loese = (key, parentId, name) => einmalJeLauf(key, async () => {
     if (folders[key] && !opts.force) return folders[key];
     const { id } = await adapter.findOrCreateFolder(parentId, ordnerName(name), { strict: true });
-    // Dieselbe Ordner-ID unter einem anderen Schlüssel hieße: zwei logische
-    // Ziele teilen sich einen physischen Ordner (z. B. Kurzname = Lebensbereich
-    // nach späterer Umbenennung eines Labels). Lieber abbrechen als vermischen.
-    const fremd = Object.entries(folders).find(([k, v]) => v === id && k !== key);
+    // Dieselbe Ordner-ID unter einem anderen Strukturschlüssel hieße: zwei
+    // logische Ziele teilen sich einen physischen Ordner (z. B. Kurzname =
+    // Lebensbereich nach späterer Umbenennung eines Labels). Lieber abbrechen
+    // als vermischen. System- und Legacy-Schlüssel teilen sich Ordner
+    // dagegen bewusst (etwa 'Wohnen' und 'wohnen') und zählen nicht.
+    const fremd = Object.entries(folders).find(([k, v]) => v === id && k !== key && istStruktur(k));
     if (fremd) {
       throw new Error(`Ordner "${name}" ist bereits als "${fremd[0]}" belegt – Namenskollision in der Ablage.`);
     }
     patch[key] = id;
     folders[key] = id;
     return id;
-  };
+  });
 
-  const rootId = (await adapter.getMeta(anchorId)).parentId;
-  const personId = await loese(pKey, rootId, person ? person.kurzname : GEMEINSAM_ORDNER);
-  const lId = await loese(lKey, personId, lebensbereich.label);
-  const leafId = await loese(leafKey, lId, dokumentart.label);
+  let parentId = await einmalJeLauf('', async () => (await adapter.getMeta(anchorId)).parentId);
+  for (let i = 0; i < ebenen.length; i++) {
+    parentId = await loese(schluessel[i], parentId, namen[ebenen[i]]);
+  }
   await saveFolderIds(backend, patch);
-  return leafId;
+  return parentId;
+}
+
+/** Liegt der Ordner eines Cache-Schlüssels in oder unter einem Personenordner des Menschen? */
+export function istPersonenSchluessel(key, menschId) {
+  return key.split('/').includes(personSchluessel(menschId));
 }
 
 /**
- * Entfernt alle Cache-Schlüssel einer Person (`@<uuid>…`) aus allen Backends.
+ * Entfernt alle Cache-Schlüssel einer Person (jeder Schlüssel mit dem Segment
+ * `@<uuid>`, gleich auf welcher Ebene) aus allen Backends.
  * Nach dem Löschen eines Menschen, damit ein später gleichnamig angelegter
  * Mensch nicht an der ID-Kollisionsprüfung scheitert.
  */
@@ -373,7 +504,7 @@ export async function entfernePersonenSchluessel(menschId) {
               SELECT COALESCE(jsonb_object_agg(b.key, (
                        SELECT COALESCE(jsonb_object_agg(f.key, f.value), '{}'::jsonb)
                          FROM jsonb_each(b.value) f
-                        WHERE f.key <> $1 AND f.key NOT LIKE $1 || '/%'
+                        WHERE '/' || f.key || '/' NOT LIKE '%/' || $1 || '/%'
                      )), '{}'::jsonb)
                 FROM jsonb_each(s.value) b
             ),

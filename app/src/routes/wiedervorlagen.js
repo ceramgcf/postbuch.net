@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { query } from '../db.js';
 import { uiLog } from '../log.js';
+import { offeneRechnungSql } from '../lib/rechnungs-filter.js';
+import { parsePersonenAuswahl, personenBedingung, aktenPersonenBedingung } from '../lib/personen-auswahl.js';
 
 const router = Router();
 
@@ -36,8 +38,16 @@ router.get('/', async (req, res) => {
 });
 
 // ── GET /api/wiedervorlagen/dashboard — überfällige + fällige + nächste 7 Tage (nicht erledigt) ──
+// ?personen=kurzname,…,_ohne: Dokument-WV über familienmitglied, Akten-WV über die Dokumente der Akte.
 router.get('/dashboard', async (req, res) => {
   try {
+    const auswahl = parsePersonenAuswahl(req.query.personen);
+    const params = [];
+    const dokBedingung = personenBedingung('p.familienmitglied', auswahl, params);
+    const akteBedingung = aktenPersonenBedingung('w.akteid', auswahl, params);
+    const personenFilter = auswahl
+      ? `AND (CASE WHEN w.postid IS NOT NULL THEN ${dokBedingung} ELSE ${akteBedingung} END)`
+      : '';
     const result = await query(`
       SELECT w.*,
              p.betreff  AS post_betreff,
@@ -48,8 +58,9 @@ router.get('/dashboard', async (req, res) => {
       LEFT JOIN akte a ON a.akteid = w.akteid
       WHERE w.erledigt = false
         AND w.faellig_am <= CURRENT_DATE + INTERVAL '7 days'
+        ${personenFilter}
       ORDER BY w.faellig_am ASC, w.created_at ASC
-    `);
+    `, params);
     res.json(result.rows);
   } catch (err) {
     console.error('GET /api/wiedervorlagen/dashboard error:', err);
@@ -86,19 +97,19 @@ router.get('/kalender', async (req, res) => {
         SELECT ar.postid, ar.faelligkeit, p.betreff, 'Arztrechnung' AS typ
         FROM arztrechnung ar
         JOIN postbuch p ON p.postid = ar.postid
-        WHERE ar.bezahlt_am IS NULL AND ar.gesamtbetrag > COALESCE(ar.bestritten_betrag, 0) AND ar.faelligkeit IS NOT NULL
+        WHERE ${offeneRechnungSql('ar')} AND ar.faelligkeit IS NOT NULL
           AND ar.faelligkeit BETWEEN $1 AND $2
         UNION ALL
         SELECT hr.postid, hr.faelligkeit, p.betreff, 'Handwerkerrechnung' AS typ
         FROM handwerkerrechnung hr
         JOIN postbuch p ON p.postid = hr.postid
-        WHERE hr.bezahlt_am IS NULL AND hr.gesamtbetrag > COALESCE(hr.bestritten_betrag, 0) AND hr.faelligkeit IS NOT NULL
+        WHERE ${offeneRechnungSql('hr')} AND hr.faelligkeit IS NOT NULL
           AND hr.faelligkeit BETWEEN $1 AND $2
         UNION ALL
         SELECT gr.postid, gr.faelligkeit, p.betreff, 'Rechnung' AS typ
         FROM generische_rechnung gr
         JOIN postbuch p ON p.postid = gr.postid
-        WHERE gr.bezahlt_am IS NULL AND gr.gesamtbetrag > COALESCE(gr.bestritten_betrag, 0) AND gr.faelligkeit IS NOT NULL
+        WHERE ${offeneRechnungSql('gr')} AND gr.faelligkeit IS NOT NULL
           AND gr.faelligkeit BETWEEN $1 AND $2
       ) sub
       ORDER BY sub.faelligkeit ASC

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { query } from '../db.js';
+import pool, { query } from '../db.js';
 import { uiLog } from '../log.js';
 import { appLog } from '../app-log.js';
 import { regenerateEmbedding, activeSignature } from '../lib/embedding.js';
@@ -37,6 +37,8 @@ import {
   istLoeschschutzFehler,
   loeschschutzAntwort,
 } from '../service/document-delete-protection.js';
+import { artwechselSperre } from '../service/rechnung-ersetzung.js';
+import { effektiveGruppe } from '../lib/taxonomie.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { setzeBescheidwirkungZurueck } from '../service/periodenabschluss.js';
 
@@ -207,6 +209,11 @@ router.post('/change-type/:postid', async (req, res) => {
     }
 
     // ── Pfad B: Nicht v-kompatibel — KI-Wiederverarbeitung erforderlich ───
+    // Hier wechselt die Zielart immer in eine andere Spezialgruppe; ob ein
+    // verknüpftes Rechnungspaar das verbietet, steht also schon jetzt fest.
+    const sperre = await artwechselSperre(pool, postid, await effektiveGruppe(newL, newD));
+    if (sperre) return res.status(409).json({ error: sperre });
+
     if (!confirmReprocess) {
       return res.json({
         mode: 'requires_reprocess',

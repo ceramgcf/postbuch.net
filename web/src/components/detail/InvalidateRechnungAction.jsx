@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
@@ -21,10 +21,15 @@ const TIMEOUT = 10 * 60 * 1000;
  * Handwerker- und Pflichttyp-Rechnungen hängen an ihrer LxD-Zelle. Der Server
  * schaltet deshalb auf Korrespondenz um und verarbeitet neu – das kündigt der
  * Dialog an, bevor irgendetwas passiert.
+ *
+ * Mit `open`/`onOpenChange` gesteuert (Menü „Rechnung“), sonst mit eigenem Knopf.
  */
-export function InvalidateRechnungAction({ postid, onChanged }) {
+export function InvalidateRechnungAction({ postid, onChanged, open: openProp, onOpenChange }) {
   const { canWrite } = useAuth();
-  const [open, setOpen] = useState(false);
+  const gesteuert = openProp !== undefined;
+  const [openIntern, setOpenIntern] = useState(false);
+  const open = gesteuert ? openProp : openIntern;
+  const setOpen = gesteuert ? onOpenChange : setOpenIntern;
   const [pruefung, setPruefung] = useState(null);   // Serverantwort auf den Vorablauf
   const [fehler, setFehler] = useState('');
   const [laeuft, setLaeuft] = useState(false);
@@ -33,10 +38,19 @@ export function InvalidateRechnungAction({ postid, onChanged }) {
   const { clearHistory } = useUndoHistory();
   const qc = useQueryClient();
 
+  useEffect(() => {
+    if (gesteuert && openProp && canWrite) pruefen();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gesteuert, openProp]);
+
   if (!canWrite) return null;
 
-  async function oeffnen() {
+  function oeffnen() {
     setOpen(true);
+    pruefen();
+  }
+
+  async function pruefen() {
     setPruefung(null);
     setFehler('');
     try {
@@ -87,7 +101,7 @@ export function InvalidateRechnungAction({ postid, onChanged }) {
 
   return (
     <>
-      <Button
+      {!gesteuert && <Button
         variant="ghost"
         size="sm"
         className="h-7 gap-1.5 text-destructive/60 hover:text-destructive hover:bg-destructive/10"
@@ -96,7 +110,7 @@ export function InvalidateRechnungAction({ postid, onChanged }) {
       >
         <Ban className="h-3.5 w-3.5" />
         Rechnung invalidieren
-      </Button>
+      </Button>}
 
       <Dialog open={open} onOpenChange={setOpen} size="lg">
         <DialogTitle className="flex items-center gap-2">

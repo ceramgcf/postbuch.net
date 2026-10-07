@@ -311,6 +311,77 @@ BEGIN
 END;
 $$;
 
+-- Hält die automatische Differenzposition einer Arztrechnung aktuell:
+-- vorhanden genau dann, wenn es reguläre Positionen gibt, ein Rechnungsbetrag
+-- bekannt ist und beide Summen voneinander abweichen. Eine Differenzzeile, auf
+-- die eine Kürzung verweist, wird nicht gelöscht, sondern auf 0 gesetzt.
+CREATE OR REPLACE FUNCTION postbuch.fn_arz_differenz_abgleichen(p_postid character varying) RETURNS void
+    LANGUAGE plpgsql
+    AS $$
+DECLARE
+  v_gesamt  numeric(12,2);
+  v_anzahl  integer;
+  v_summe   numeric(12,2);
+  v_diff    numeric(12,2);
+  v_subid   integer;
+  v_betrag  numeric(12,2);
+BEGIN
+  SELECT a.gesamtbetrag INTO v_gesamt
+    FROM postbuch.arztrechnung a WHERE a.postid = p_postid FOR UPDATE;
+  IF NOT FOUND THEN RETURN; END IF;
+
+  SELECT count(*), COALESCE(sum(e.betrag), 0) INTO v_anzahl, v_summe
+    FROM postbuch.arztrechnung_einzelposition e
+   WHERE e.postid = p_postid AND NOT e.ist_differenz;
+
+  v_diff := CASE WHEN v_gesamt IS NULL OR v_anzahl = 0 THEN 0 ELSE v_gesamt - v_summe END;
+
+  SELECT e.subid, e.betrag INTO v_subid, v_betrag
+    FROM postbuch.arztrechnung_einzelposition e
+   WHERE e.postid = p_postid AND e.ist_differenz;
+
+  IF v_diff = 0 THEN
+    IF v_subid IS NULL THEN RETURN; END IF;
+    IF EXISTS (SELECT 1 FROM postbuch.erstattungsbescheid_kuerzung k
+                WHERE k.arz_postid = p_postid AND k.arz_subid = v_subid) THEN
+      IF v_betrag IS DISTINCT FROM 0 THEN
+        UPDATE postbuch.arztrechnung_einzelposition SET betrag = 0
+         WHERE postid = p_postid AND subid = v_subid;
+      END IF;
+    ELSE
+      DELETE FROM postbuch.arztrechnung_einzelposition
+       WHERE postid = p_postid AND subid = v_subid;
+    END IF;
+    RETURN;
+  END IF;
+
+  IF v_subid IS NULL THEN
+    INSERT INTO postbuch.arztrechnung_einzelposition (postid, subid, leistung, betrag, ist_differenz)
+    SELECT p_postid, COALESCE(max(e.subid), 0) + 1, 'automatisch ermittelter Differenzbetrag', v_diff, true
+      FROM postbuch.arztrechnung_einzelposition e WHERE e.postid = p_postid;
+  ELSIF v_betrag IS DISTINCT FROM v_diff THEN
+    UPDATE postbuch.arztrechnung_einzelposition SET betrag = v_diff
+     WHERE postid = p_postid AND subid = v_subid;
+  END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION postbuch.fn_tg_arz_differenz() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    PERFORM postbuch.fn_arz_differenz_abgleichen(OLD.postid);
+  ELSE
+    PERFORM postbuch.fn_arz_differenz_abgleichen(NEW.postid);
+    IF TG_OP = 'UPDATE' AND OLD.postid IS DISTINCT FROM NEW.postid THEN
+      PERFORM postbuch.fn_arz_differenz_abgleichen(OLD.postid);
+    END IF;
+  END IF;
+  RETURN NULL;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION postbuch.fn_saldo_buchung_touch() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
@@ -334,6 +405,16 @@ BEGIN
 END;
 $$;
 
+-- Sperrschlüssel der Perioden einer Person je Kostenträger. Schreibende
+-- Periodenoperationen nehmen ihn exklusiv (service/perioden-sperre.js), der
+-- Arztrechnungs-Trigger geteilt. Der Ausdruck ist bewusst identisch mit dem
+-- früheren Schlüssel der Periodennummernvergabe.
+CREATE OR REPLACE FUNCTION postbuch.perioden_sperrschluessel(p_person text, p_kostentraeger text) RETURNS bigint
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE
+    AS $$
+  SELECT hashtextextended(p_person, hashtextextended(p_kostentraeger, 0))
+$$;
+
 CREATE OR REPLACE FUNCTION postbuch.set_abrechnungsperioden_from_buch() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
@@ -347,12 +428,18 @@ BEGIN
     SELECT pkv, beihilfe INTO has_pkv, has_beihilfe
     FROM postbuch.mensch WHERE kurzname = NEW.behandelte_person;
 
+    -- Die geteilte Periodensperre wartet ein laufendes Einreichen oder einen
+    -- Bescheidabschluss ab. Erst danach wird die offene Periode gelesen; ohne
+    -- Sperre fiele eine gleichzeitig eintreffende Rechnung in die Periode, die
+    -- gerade eingereicht wird, und stünde in keinem Einreichungspaket.
     IF NEW.abrechnungsperiode_pkv IS NULL AND COALESCE(has_pkv, false) THEN
+      PERFORM pg_advisory_xact_lock_shared(postbuch.perioden_sperrschluessel(NEW.behandelte_person, 'PKV'));
       SELECT MAX(periode) INTO NEW.abrechnungsperiode_pkv
       FROM postbuch.abrechnungsperiode_buch
       WHERE person = NEW.behandelte_person AND kostentraeger = 'PKV' AND status = 'COLLECTING';
     END IF;
     IF NEW.abrechnungsperiode_beihilfe IS NULL AND COALESCE(has_beihilfe, false) THEN
+      PERFORM pg_advisory_xact_lock_shared(postbuch.perioden_sperrschluessel(NEW.behandelte_person, 'Beihilfe'));
       SELECT MAX(periode) INTO NEW.abrechnungsperiode_beihilfe
       FROM postbuch.abrechnungsperiode_buch
       WHERE person = NEW.behandelte_person AND kostentraeger = 'Beihilfe' AND status = 'COLLECTING';
@@ -962,8 +1049,67 @@ CREATE TABLE IF NOT EXISTS postbuch.arztrechnung_einzelposition (
     begruendung text,
     faktor numeric(5,2),
     betrag numeric(12,2),
+    ist_differenz boolean NOT NULL DEFAULT false,
     PRIMARY KEY (postid, subid)
 );
+
+-- Automatische Differenzposition: Weicht die Summe der Einzelpositionen vom
+-- Rechnungsbetrag ab, führt fn_arz_differenz_abgleichen() genau eine Zeile
+-- mit ist_differenz = true, die den Unterschied aufnimmt. Sie wird nur vom
+-- Trigger gepflegt, nie von Hand bearbeitet.
+ALTER TABLE postbuch.arztrechnung_einzelposition
+    ADD COLUMN IF NOT EXISTS ist_differenz boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS arztrechnung_einzelposition_differenz_uq
+    ON postbuch.arztrechnung_einzelposition (postid) WHERE ist_differenz;
+
+-- Zahlungen zu Rechnungen (Arzt/Handwerker/generisch). Jede Zahlung wird mit
+-- Datum und Betrag geführt, auch eine gewöhnliche Vollzahlung; die Anzeige
+-- fasst eine einzelne Zahlung in Höhe des zu zahlenden Betrags wieder zum
+-- schlichten „Bezahlt am“ zusammen. bezahlt_am an der Rechnung bleibt der
+-- gespeicherte, von service/rechnung-zahlung.js abgeleitete Status.
+CREATE TABLE IF NOT EXISTS postbuch.rechnung_zahlung (
+    zahlung_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    postid character varying(7) NOT NULL REFERENCES postbuch.postbuch(postid) ON DELETE CASCADE,
+    datum date NOT NULL,
+    betrag numeric(12,2) NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT rechnung_zahlung_betrag_ck CHECK (betrag > 0)
+);
+CREATE INDEX IF NOT EXISTS rechnung_zahlung_postid_idx
+    ON postbuch.rechnung_zahlung (postid);
+
+-- Gerichtete Beziehungen zwischen Dokumenten. art 'ersetzt': von_postid ist
+-- eine Korrekturrechnung, die die Rechnung zu_postid ersetzt. Die ersetzte
+-- Rechnung gilt als erledigt (lib/rechnungs-filter.js), ihre Zahlungen sind auf
+-- die Nachfolgerin umgezogen; umgezogene_zahlungen hält diesen Stand als
+-- [{datum, betrag}] für das Rückgängigmachen fest.
+-- Die Fremdschlüssel prüfen erst beim Commit und kaskadieren nicht: Eine
+-- Wiederverarbeitung löscht die Dokumentzeile und legt sie in derselben
+-- Transaktion unter derselben PostID neu an, ein echtes Löschen scheitert.
+CREATE TABLE IF NOT EXISTS postbuch.dokument_beziehung (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    von_postid character varying(7) NOT NULL
+        REFERENCES postbuch.postbuch(postid) DEFERRABLE INITIALLY DEFERRED,
+    zu_postid character varying(7) NOT NULL
+        REFERENCES postbuch.postbuch(postid) DEFERRABLE INITIALLY DEFERRED,
+    art text NOT NULL,
+    umgezogene_zahlungen jsonb NOT NULL DEFAULT '[]'::jsonb,
+    -- bezahlt_am_manuell beider Rechnungen vor der Ersetzung; das Aufheben
+    -- stellt ihn wieder her.
+    alt_bezahlt_am_manuell boolean NOT NULL DEFAULT false,
+    neu_bezahlt_am_manuell boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    created_by text,
+    CONSTRAINT dokument_beziehung_art_ck CHECK (art IN ('ersetzt')),
+    CONSTRAINT dokument_beziehung_selbstbezug_ck CHECK (von_postid <> zu_postid)
+);
+-- Spalte kam nach der ersten Anlage der Tabelle hinzu.
+ALTER TABLE postbuch.dokument_beziehung
+    ADD COLUMN IF NOT EXISTS neu_bezahlt_am_manuell boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS dokument_beziehung_ersetzt_zu_uq
+    ON postbuch.dokument_beziehung (zu_postid) WHERE art = 'ersetzt';
+CREATE UNIQUE INDEX IF NOT EXISTS dokument_beziehung_ersetzt_von_uq
+    ON postbuch.dokument_beziehung (von_postid) WHERE art = 'ersetzt';
 
 -- Erstattungsbescheid (abhängig von postbuch)
 
@@ -1122,6 +1268,11 @@ BEGIN
     CHECK (leistungsjahr IS NULL OR leistungsjahr BETWEEN 1900 AND 2100);
 END $$;
 
+-- § 35a EStG: Der Nutzer kann eine Handwerkerrechnung ausdrücklich als nicht
+-- steuerlich relevant markieren (z. B. Neubau, vermietete Wohnung). Die KI
+-- setzt das Feld nie; Standard ist false, Analyse → Handwerker filtert darauf.
+ALTER TABLE postbuch.handwerkerrechnung ADD COLUMN IF NOT EXISTS estg35a_irrelevant boolean DEFAULT false NOT NULL;
+
 -- Saldo-Buchung-Manuell (abhängig von saldo)
 
 CREATE TABLE IF NOT EXISTS postbuch.saldo_buchung_manuell (
@@ -1248,6 +1399,28 @@ CREATE OR REPLACE TRIGGER tg_block_arz_delete_with_eb
 CREATE OR REPLACE TRIGGER tg_block_arz_position_delete_with_eb
     BEFORE DELETE ON postbuch.arztrechnung_einzelposition
     FOR EACH ROW EXECUTE FUNCTION postbuch.fn_block_arz_position_delete_with_eb();
+
+-- Differenzposition: zurückgestellt bis zum Commit, damit eine Transaktion
+-- (KI-Insert, Archiv-Import, Wiederverarbeitung) alle Positionen fertig
+-- schreiben kann, bevor die Differenz berechnet und eine freie subid vergeben
+-- wird. Der Abgleich ist idempotent; seine eigene Schreibung löst ihn zwar
+-- erneut aus, findet dann aber nichts mehr zu tun.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'tg_arz_position_differenz'
+                   AND tgrelid = 'postbuch.arztrechnung_einzelposition'::regclass) THEN
+    CREATE CONSTRAINT TRIGGER tg_arz_position_differenz
+      AFTER INSERT OR UPDATE OR DELETE ON postbuch.arztrechnung_einzelposition
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION postbuch.fn_tg_arz_differenz();
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'tg_arz_gesamtbetrag_differenz'
+                   AND tgrelid = 'postbuch.arztrechnung'::regclass) THEN
+    CREATE CONSTRAINT TRIGGER tg_arz_gesamtbetrag_differenz
+      AFTER UPDATE OF gesamtbetrag ON postbuch.arztrechnung
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION postbuch.fn_tg_arz_differenz();
+  END IF;
+END $$;
 
 CREATE OR REPLACE TRIGGER tg_saldo_buchung_touch
     AFTER INSERT OR DELETE OR UPDATE ON postbuch.saldo_buchung_manuell
@@ -1498,6 +1671,8 @@ CREATE TABLE IF NOT EXISTS postbuch._pipeline_file_journal (
     replacement_mode text,
     replaced_storage_id text,
     replaced_filename text,
+    eb_korrektur_anweisung text,
+    eb_model_tier     text,
     state             text NOT NULL DEFAULT 'prepared',
     created_at        timestamptz NOT NULL DEFAULT now(),
     updated_at        timestamptz NOT NULL DEFAULT now(),
@@ -1516,6 +1691,12 @@ ALTER TABLE postbuch._pipeline_file_journal
   ADD COLUMN IF NOT EXISTS replaced_storage_id text;
 ALTER TABLE postbuch._pipeline_file_journal
   ADD COLUMN IF NOT EXISTS replaced_filename text;
+-- Auftrag des EB-Fachjobs: Korrektur und Modellstufe der Wiederverarbeitung
+-- müssen eine Wiederholung durch die Pipeline-Recovery überstehen.
+ALTER TABLE postbuch._pipeline_file_journal
+  ADD COLUMN IF NOT EXISTS eb_korrektur_anweisung text;
+ALTER TABLE postbuch._pipeline_file_journal
+  ADD COLUMN IF NOT EXISTS eb_model_tier text;
 ALTER TABLE postbuch._pipeline_file_journal
   DROP CONSTRAINT IF EXISTS pipeline_file_journal_state_ck;
 ALTER TABLE postbuch._pipeline_file_journal
@@ -2351,3 +2532,29 @@ ALTER TABLE postbuch.postbuch ADD COLUMN IF NOT EXISTS qr_codes jsonb;
 -- Schritt II — Einreichungsseiten: Spalten einreichung_seite_von/_bis stehen
 -- bei CREATE TABLE postbuch.arztrechnung weiter oben (fachlich dort zuhause,
 -- da nur Arztrechnungen zusammengestellt und eingereicht werden).
+
+-- Bestand an die Differenzregel angleichen. Idempotent: Rechnungen, deren
+-- Positionen bereits stimmen bzw. deren Differenzzeile aktuell ist, bleiben
+-- unberührt.
+DO $$ BEGIN
+  PERFORM postbuch.fn_arz_differenz_abgleichen(a.postid) FROM postbuch.arztrechnung a;
+END $$;
+
+-- Zahlungen: Jede bezahlte Rechnung mit zu zahlendem Betrag führt mindestens
+-- eine Zahlung. Bestand ohne Zahlungszeile erhält eine Zahlung über den
+-- heute zu zahlenden Betrag zum vorhandenen Bezahldatum. Die Rechnungszeile
+-- selbst bleibt unberührt. Idempotent: Rechnungen mit Zahlungen, ohne
+-- Bezahldatum oder ohne positiven zu zahlenden Betrag werden übergangen.
+INSERT INTO postbuch.rechnung_zahlung (postid, datum, betrag)
+SELECT r.postid, r.bezahlt_am, r.gesamtbetrag - COALESCE(r.bestritten_betrag, 0)
+  FROM (
+        SELECT postid, bezahlt_am, gesamtbetrag, bestritten_betrag FROM postbuch.arztrechnung
+        UNION ALL
+        SELECT postid, bezahlt_am, gesamtbetrag, bestritten_betrag FROM postbuch.handwerkerrechnung
+        UNION ALL
+        SELECT postid, bezahlt_am, gesamtbetrag, bestritten_betrag FROM postbuch.generische_rechnung
+       ) r
+ WHERE r.bezahlt_am IS NOT NULL
+   AND r.gesamtbetrag IS NOT NULL
+   AND r.gesamtbetrag - COALESCE(r.bestritten_betrag, 0) > 0
+   AND NOT EXISTS (SELECT 1 FROM postbuch.rechnung_zahlung z WHERE z.postid = r.postid);

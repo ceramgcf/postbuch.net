@@ -24,6 +24,8 @@ Im Mobilmodus ändert sich gegenüber dem Desktop:
 - Die ![Spalten-Symbol](icons/columns-3.svg) Spaltenauswahl öffnet sich als
   eingebettetes Feld statt als schwebendes Menü.
 - Die Seitenleiste klappt nicht beim Überfahren auf, sondern erst auf Tippen.
+  Im Hochformat bleibt sie schmal, auch wenn sie angeheftet ist; die
+  Anheften-Einstellung gilt wieder, sobald das Gerät quer liegt.
 
 ## Die Querformat-Sperre
 

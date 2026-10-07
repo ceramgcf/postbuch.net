@@ -14,6 +14,8 @@ import pool from '../db.js';
 import { retrieveDocument } from './document-retriever.js';
 import { extractDocumentText } from '../lib/text-extractor.js';
 import { getAkteWithDocuments } from './akten-service.js';
+import { ermittleZahlungslage } from './rechnung-zahlung.js';
+import { ladeErsetzung } from './rechnung-ersetzung.js';
 
 // Obergrenze pro Nachricht — begrenzt Token-Kosten (max. ~5 × 16.000 Zeichen Volltext)
 const MAX_REFS = 5;
@@ -60,9 +62,16 @@ async function loadDocumentSection(postid, ctx) {
     ctx.usedSources.get(postid).read = true;
   }
 
+  // Zahlungen stehen in rechnung_zahlung, nicht im PDF. Ohne diese Zeilen
+  // liest das Modell einen Zahlungsvermerk im Volltext als Stand und nennt
+  // einen falschen offenen Rest; get_document_metadata soll es hier ja
+  // gerade nicht mehr aufrufen.
+  const zahlungLines = await ladeZahlungLines(postid);
+
   const metaLines = [
     `Datum: ${d.briefdatum || '?'} · Art: ${d.art || '?'} · Kontakt: ${d.kontakt || '?'} · Status: ${d.status || '?'}${d.historisch ? ' · ARCHIVIERT' : ''}`,
     d.betrag != null ? `Betrag: ${d.betrag} EUR` : null,
+    ...zahlungLines,
     d.familienmitglied ? `Familienmitglied: ${d.familienmitglied}${d.richtung ? ` · Richtung: ${d.richtung}` : ''}` : null,
     d.schlagwoerter?.length ? `Schlagwörter: ${d.schlagwoerter.join(', ')}` : null,
     d.fremdes_zeichen ? `Fremdes Zeichen: ${d.fremdes_zeichen}` : null,
@@ -84,6 +93,25 @@ async function loadDocumentSection(postid, ctx) {
   }
 
   return `=== Dokument [${postid}] — ${d.betreff || d.kontakt || d.art || ''} ===\n${metaLines.join('\n')}\n${textPart}`;
+}
+
+async function ladeZahlungLines(postid) {
+  const lage = await ermittleZahlungslage(pool, postid);
+  if (!lage) return [];
+  const { ersetzt, ersetzt_durch: ersetztDurch } = await ladeErsetzung(pool, postid);
+  if (ersetztDurch) {
+    return [`Zahlungsstand (Datenbank): Rechnung ist durch die Korrekturrechnung [${ersetztDurch.postid}] ersetzt und erledigt; Zahlungen und offener Rest stehen dort.`];
+  }
+  const zahlungen = lage.zahlungen.length
+    ? lage.zahlungen.map(z => `${z.datum || '?'}: ${z.betrag} EUR`).join('; ')
+    : 'keine erfasst';
+  return [
+    ersetzt
+      ? `Korrekturrechnung: ersetzt die Rechnung [${ersetzt.postid}] (dort erledigt); deren Zahlungen sind hier mitgezählt. Bei Fragen zu dieser Rechnung immer erwähnen.`
+      : null,
+    `Zahlungsstand (Datenbank, maßgeblich – Zahlungsvermerke im Volltext können veraltet sein): zu zahlen ${lage.zu_zahlen ?? '?'} EUR · gezahlt ${lage.gezahlt} EUR · offen ${lage.offen ?? '?'} EUR${lage.ueberzahlt ? ` · überzahlt ${lage.ueberzahlt} EUR` : ''}`,
+    `Erfasste Zahlungen: ${zahlungen}`,
+  ].filter(Boolean);
 }
 
 async function loadAkteSection(akteid, ctx) {

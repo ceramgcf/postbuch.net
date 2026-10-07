@@ -14,11 +14,12 @@
 
 import db from '../db.js';
 import { loadDynamicSettings, getActiveBackendName } from '../config.js';
-import { ensureAblageOrdner } from './storage-setup.js';
+import { ensureAblageOrdner, behandeltePersonSql } from './storage-setup.js';
 import { getActiveAdapterFor } from '../lib/storage/index.js';
 import { appLog } from '../app-log.js';
 import { cleanupLegacyDocumentFolders } from './storage-legacy-cleanup.js';
 import { istBestaetigterDateiFehlt, markiereDateiFehlend } from './storage-missing.js';
+import { fuerJedesBegrenzt } from '../lib/parallel.js';
 
 // ── Alle Dokumente aus der DB in ihre richtigen Ordner verschieben ───────────
 
@@ -30,6 +31,11 @@ import { istBestaetigterDateiFehlt, markiereDateiFehlend } from './storage-missi
 // Dateien in die Quere kommen.
 let _laufAktiv = false;
 
+// Gleichzeitige Verschiebungen. Jede kostet bei Nextcloud auf kleiner Hardware
+// rund eine halbe Sekunde Roundtrip; mehr als drei bringen dort kaum noch etwas
+// und erhöhen das Risiko von 423 Locked.
+const UMZUG_PARALLEL = 3;
+
 export function istUmzugAktiv() {
   return _laufAktiv;
 }
@@ -39,9 +45,13 @@ export function istUmzugAktiv() {
  * Wird nach dem Setup-Assistenten im Hintergrund aufgerufen.
  * Fehler bei einzelnen Dokumenten unterbrechen den Batch nicht.
  *
- * @returns {{ moved: number, skipped: number, errors: number }}
+ * @param {(p:{schritt:number,gesamt:number,name:string}) => void} [onProgress]
+ * @param {{signal?: AbortSignal}} [opts]  Ein abgebrochenes Signal beendet den
+ *   Lauf vor dem nächsten Dokument; die gerade bewegten (höchstens
+ *   UMZUG_PARALLEL) werden noch fertig verschoben. Ein abgebrochener Lauf räumt keine Ordner auf.
+ * @returns {{ moved: number, skipped: number, errors: number, abgebrochen?: boolean }}
  */
-export async function relocateAllDocuments(onProgress) {
+export async function relocateAllDocuments(onProgress, opts = {}) {
   if (_laufAktiv) {
     const err = new Error('Es läuft bereits ein Dokumentumzug — bitte warten, bis er abgeschlossen ist.');
     err.statusCode = 409;
@@ -49,13 +59,13 @@ export async function relocateAllDocuments(onProgress) {
   }
   _laufAktiv = true;
   try {
-    return await relocateAllDocumentsImpl(onProgress);
+    return await relocateAllDocumentsImpl(onProgress, opts.signal);
   } finally {
     _laufAktiv = false;
   }
 }
 
-async function relocateAllDocumentsImpl(onProgress) {
+async function relocateAllDocumentsImpl(onProgress, signal) {
   appLog('INFO', 'relocate', 'Umzug aller Dokumente gestartet (nach Setup-Assistent)');
 
   let settings;
@@ -71,7 +81,7 @@ async function relocateAllDocumentsImpl(onProgress) {
   let rows;
   try {
     rows = await db.query(
-      `SELECT postid, art::text AS art, lebensbereich, dokumentart, familienmitglied, storage_id, storage_filename
+      `SELECT postid, storage_id
          FROM postbuch.postbuch
         WHERE storage_id IS NOT NULL AND storage_backend = $1
         ORDER BY postid`,
@@ -92,36 +102,37 @@ async function relocateAllDocumentsImpl(onProgress) {
   // dass erkennbar war, WELCHES Dokument betroffen ist.
   const fehlerListe = [];
 
-  // Ablageziele, deren Ordnerkette in diesem Lauf bereits erzwungen neu
-  // aufgelöst wurde. Gecachte IDs können nach einem Wurzelordner-Wechsel noch
-  // auf den alten Ort zeigen; relocateAllDocuments() ist der einzige
-  // unterstützte Aufrufer danach. Deshalb wird jedes Ziel einmal je Lauf
-  // zwangsweise neu aufgelöst und der Wert für alle weiteren Dokumente
-  // desselben Ziels wiederverwendet.
-  const frischAufgeloest = new Map();
+  // Ordnerketten, die in diesem Lauf bereits erzwungen neu aufgelöst wurden.
+  // Gecachte IDs können nach einem Wurzelordner-Wechsel noch auf den alten Ort
+  // zeigen; relocateAllDocuments() ist der einzige unterstützte Aufrufer
+  // danach. Deshalb wird jeder Ordner einmal je Lauf zwangsweise neu aufgelöst
+  // und für alle weiteren Dokumente wiederverwendet (siehe ensureAblageOrdner).
+  const laufCache = new Map();
 
   let schritt = 0;
-  for (const listenRow of rows.rows) {
+  const fortschritt = (name) => onProgress?.({ schritt: ++schritt, gesamt: Math.max(1, total), name });
+
+  const verschiebeEines = async (listenRow) => {
     // Zeile frisch lesen: Der Lauf dauert, und eine parallele Änderung von
     // Familienmitglied oder Klassifikation darf nicht mit dem Stand vom
     // Laufbeginn überschrieben werden.
     const aktuell = await db.query(
-      `SELECT postid, lebensbereich, dokumentart, familienmitglied, storage_id, storage_filename, storage_backend
-         FROM postbuch.postbuch WHERE postid = $1`,
+      `SELECT p.postid, p.lebensbereich, p.dokumentart, p.familienmitglied, p.briefdatum, p.richtung::text AS richtung,
+              ${behandeltePersonSql('p')} AS behandelte_person,
+              p.storage_id, p.storage_filename, p.storage_backend
+         FROM postbuch.postbuch p WHERE p.postid = $1`,
       [listenRow.postid],
     ).catch(() => null);
     const row = aktuell?.rows[0];
     if (!row || row.storage_id !== listenRow.storage_id || row.storage_backend !== getActiveBackendName(settings)) {
       skipped++;
-      onProgress?.({ schritt: ++schritt, gesamt: Math.max(1, total), name: `${listenRow.postid} übersprungen` });
-      continue;
+      fortschritt(`${listenRow.postid} übersprungen`);
+      return;
     }
-    const ziel = `${row.familienmitglied ?? ''}|${row.lebensbereich}/${row.dokumentart}`;
-    let targetFolderId = frischAufgeloest.get(ziel);
-    if (!targetFolderId && row.lebensbereich && row.dokumentart) {
+    let targetFolderId = null;
+    if (row.lebensbereich && row.dokumentart) {
       try {
-        targetFolderId = await ensureAblageOrdner(settings, row, undefined, { force: true });
-        frischAufgeloest.set(ziel, targetFolderId);
+        targetFolderId = await ensureAblageOrdner(settings, row, undefined, { force: true, laufCache });
       } catch (err) {
         appLog('WARN', 'relocate',
           `Kein Ablageziel für ${row.postid} (${row.lebensbereich}/${row.dokumentart}): ${err.message}`);
@@ -132,8 +143,8 @@ async function relocateAllDocumentsImpl(onProgress) {
         `Kein Zielordner für ${row.lebensbereich}/${row.dokumentart} (${row.postid}) — übersprungen`);
       skipped++;
       unresolved++;
-      onProgress?.({ schritt: ++schritt, gesamt: Math.max(1, total), name: `${row.postid} übersprungen` });
-      continue;
+      fortschritt(`${row.postid} übersprungen`);
+      return;
     }
 
     try {
@@ -142,7 +153,7 @@ async function relocateAllDocumentsImpl(onProgress) {
       // Bereits im richtigen Ordner → überspringen
       if (meta.parentId === targetFolderId) {
         skipped++;
-        continue;
+        return;
       }
 
       await storage.move(row.storage_id, targetFolderId, meta.name);
@@ -162,11 +173,23 @@ async function relocateAllDocumentsImpl(onProgress) {
       appLog('ERROR', 'relocate',
         `${row.postid} (${row.storage_id}) Fehler: ${err.message}`);
     } finally {
-      if (schritt < total) {
-        schritt++;
-        onProgress?.({ schritt, gesamt: Math.max(1, total), name: row.postid });
-      }
+      fortschritt(row.postid);
     }
+  };
+
+  // Ein Fehler beim Fortschritt oder Log darf den Lauf nicht abbrechen,
+  // sondern zählt wie ein Dokumentfehler.
+  await fuerJedesBegrenzt(rows.rows, UMZUG_PARALLEL, (listenRow) => verschiebeEines(listenRow).catch((err) => {
+    errors++;
+    fehlerListe.push({ postid: listenRow.postid, filename: null, message: err.message });
+    appLog('ERROR', 'relocate', `${listenRow.postid} Fehler: ${err.message}`);
+  }), { signal });
+  const abgebrochen = !!signal?.aborted && schritt < total;
+
+  if (abgebrochen) {
+    appLog('INFO', 'relocate',
+      `Umzug abgebrochen nach ${schritt} von ${total} Dokumenten — verschoben: ${moved}, Fehler: ${errors}`);
+    return { moved, skipped, unresolved, errors, legacyCleanup: null, fehlerListe, abgebrochen: true };
   }
 
   appLog('INFO', 'relocate',

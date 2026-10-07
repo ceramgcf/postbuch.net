@@ -27,10 +27,17 @@
  *      Eine Restperiode, an der inzwischen weitergearbeitet wurde, bleibt
  *      unangetastet und wird protokolliert.
  *   B. Bewertung — der aktuelle Trefferstand wird neu angewendet.
+ *
+ * Gleichzeitigkeit: Beide Phasen sperren zuerst die Bescheidzuordnung des
+ * Kostenträgers und danach die Perioden aller berührten Personen (Reihenfolge
+ * siehe service/perioden-sperre.js). Erst danach wird gelesen — Treffer,
+ * Periodenstatus und Rechnungsbestand stammen damit immer aus dem Stand nach
+ * jedem konkurrierenden Bescheid, jeder Einreichung und jeder neuen Rechnung.
  */
 
 import pool from '../db.js';
 import { appLog } from '../app-log.js';
+import { sperreBescheidzuordnung, sperrePerioden } from './perioden-sperre.js';
 
 /** Periodenspalte der Arztrechnung je Kostenträger. Nie aus Nutzereingaben. */
 const PERIODE_SPALTE = {
@@ -129,6 +136,15 @@ async function ermittleRuecknahmeHindernis(client, person, kostentraeger, rest) 
  * @returns {Promise<{aufgeloest: Array, behalten: Array}>}
  */
 async function nimmBescheidwirkungZurueck(client, ebPostid, grund) {
+  // Vor der ersten Zeilensperre alle betroffenen Personen sperren. Unter der
+  // Bescheidzuordnungs-Sperre ändert niemand sonst, welche Perioden diesen
+  // Bescheid tragen; die Menge ist also stabil.
+  const betroffen = await client.query(
+    `SELECT DISTINCT person, kostentraeger FROM postbuch.abrechnungsperiode_buch WHERE eb_postid = $1`,
+    [ebPostid],
+  );
+  await sperrePerioden(client, betroffen.rows);
+
   const eltern = await client.query(
     `SELECT person, kostentraeger, periode
        FROM postbuch.abrechnungsperiode_buch
@@ -223,25 +239,6 @@ async function ermittleTreffer(client, ebPostid, spalte) {
 }
 
 /**
- * Serialisiert die Vergabe der nächsten Periodennummer je Person und
- * Kostenträger. Die Elternzeile allein reicht dafür nicht: Zwei Bescheide
- * können gleichzeitig unterschiedliche Elternperioden derselben Person
- * bewerten, würden dann beide denselben MAX(periode)+1 lesen und sich an der
- * Primärschlüssel-FK unnötig mit einem rohen Unique-Fehler begegnen.
- *
- * Der Lock ist transaktional und wird in der sortierten Trefferreihenfolge
- * erworben; er endet automatisch mit dem Commit/Rollback.
- */
-async function sperrePeriodennummern(client, person, kostentraeger) {
-  await client.query(
-    `SELECT pg_advisory_xact_lock(
-       hashtextextended($1, hashtextextended($2, 0))
-     )`,
-    [person, kostentraeger],
-  );
-}
-
-/**
  * Phase B — wendet den aktuellen Trefferstand auf die betroffenen Perioden an.
  */
 async function bewerteTreffer(client, ebPostid, kostentraeger, grund) {
@@ -249,10 +246,26 @@ async function bewerteTreffer(client, ebPostid, kostentraeger, grund) {
   const abgeschlossen = [];
   const restperioden = [];
 
+  // Erst alle Personen sperren, dann die Treffer lesen. Umgekehrt könnte ein
+  // parallel abschließender Vorgang eine Rechnung zwischen Lesen und Sperren
+  // in eine Restperiode verschieben — die Gruppe zeigte dann auf die bereits
+  // abgeschlossene Elternperiode, und die Restperiode bliebe trotz Treffer offen.
+  const personen = await client.query(
+    `SELECT DISTINCT a.behandelte_person AS person
+       FROM postbuch.erstattungsbescheid_einzelposition ep
+       JOIN postbuch.arztrechnung a ON a.postid = ep.arz_postid
+      WHERE ep.postid = $1 AND a.behandelte_person IS NOT NULL`,
+    [ebPostid],
+  );
+  await sperrePerioden(client, personen.rows.map(({ person }) => ({ person, kostentraeger })));
+
   for (const gruppe of await ermittleTreffer(client, ebPostid, spalte)) {
     const { person, periode, postids } = gruppe;
 
-    await sperrePeriodennummern(client, person, kostentraeger);
+    // Nachsperre für den Fall, dass sich die behandelte Person einer Rechnung
+    // seit der Vorab-Abfrage geändert hat. Bereits gehaltene Sperren sind
+    // wiedereintrittsfähig und kosten hier nichts.
+    await sperrePerioden(client, [{ person, kostentraeger }]);
 
     const periodenZeile = await client.query(
       `SELECT status, satz FROM postbuch.abrechnungsperiode_buch
@@ -341,8 +354,34 @@ async function bewerteTreffer(client, ebPostid, kostentraeger, grund) {
  * Wird vor einer Wiederverarbeitung gebraucht: erst danach steht wieder der
  * ungeteilte Rechnungsbestand für das Matching bereit.
  */
+/**
+ * Sperrt die Bescheidzuordnung für alle Kostenträger, die dieser Bescheid
+ * berührt: den gespeicherten und den jeder Periode, die er noch als Abschluss
+ * trägt (nach einer Wiederverarbeitung mit geändertem Kostenträger können die
+ * beiden auseinanderfallen).
+ *
+ * @returns {Promise<string|null>} gespeicherter Kostenträger des Bescheids
+ */
+export async function sperreZuordnungFuerBescheid(client, ebPostid) {
+  const r = await client.query(
+    `SELECT (SELECT kostentraeger FROM postbuch.erstattungsbescheid WHERE postid = $1) AS kostentraeger,
+            ARRAY(SELECT DISTINCT kostentraeger FROM postbuch.abrechnungsperiode_buch
+                   WHERE eb_postid = $1) AS perioden_kt`,
+    [ebPostid],
+  );
+  const { kostentraeger, perioden_kt: periodenKt } = r.rows[0];
+  // Ohne gespeicherten Kostenträger gibt es nur noch die Perioden, die der
+  // Bescheid trägt — ist auch davon keine da, ist nichts zu sperren.
+  const zuSperren = [kostentraeger, ...periodenKt].filter((kt) => kt != null);
+  if (zuSperren.length > 0) await sperreBescheidzuordnung(client, zuSperren);
+  return kostentraeger;
+}
+
 export async function setzeBescheidwirkungZurueck(ebPostid, { grund = 'wiederverarbeitung', db = null } = {}) {
-  return inTransaktion(db, (client) => nimmBescheidwirkungZurueck(client, ebPostid, grund));
+  return inTransaktion(db, async (client) => {
+    await sperreZuordnungFuerBescheid(client, ebPostid);
+    return nimmBescheidwirkungZurueck(client, ebPostid, grund);
+  });
 }
 
 /**
@@ -357,11 +396,7 @@ export async function setzeBescheidwirkungZurueck(ebPostid, { grund = 'wiederver
  */
 export async function bewertePeriodenNachBescheid(ebPostid, { grund = 'bewertung', db = null } = {}) {
   return inTransaktion(db, async (client) => {
-    const bescheid = await client.query(
-      `SELECT kostentraeger FROM postbuch.erstattungsbescheid WHERE postid = $1`,
-      [ebPostid],
-    );
-    const kostentraeger = bescheid.rows[0]?.kostentraeger;
+    const kostentraeger = await sperreZuordnungFuerBescheid(client, ebPostid);
     if (!PERIODE_SPALTE[kostentraeger]) {
       return { abgeschlossen: [], restperioden: [], aufgeloest: [], behalten: [] };
     }

@@ -25,7 +25,7 @@ Darunter zwei Gruppen:
 **Krankenversicherung** – erscheint nur, wenn mindestens ein Mensch als PKV-
 oder Beihilfe-versichert eingetragen ist: ![Kürzungen-Symbol](icons/scissors.svg) Kürzungen · ![Abrechnungsperioden-Symbol](icons/calendar-range.svg) Abrechnungsperioden
 
-**Analyse:** ![Unbezahlt-Symbol](icons/circle-alert.svg) Unbezahlt · ![Handwerker-Symbol](icons/wrench.svg) Handwerker · ![Kalender-Symbol](icons/calendar-clock.svg) Kalender · ![Salden-Symbol](icons/scale.svg) Salden _(für Nicht-Admins
+**Analyse:** ![Unbezahlt-Symbol](icons/circle-alert.svg) Unbezahlt · ![Handwerker-Symbol](icons/wrench.svg) Handwerker · ![Gesundheitskosten-Symbol](icons/heart-pulse.svg) Gesundheitskosten · ![Kalender-Symbol](icons/calendar-clock.svg) Kalender · ![Salden-Symbol](icons/scale.svg) Salden _(für Nicht-Admins
 ausblendbar)_
 
 Ganz unten stehen ![Hilfe-Symbol](icons/book-open.svg) **Hilfe**, ![Einstellungen-Symbol](icons/settings.svg) **Einstellungen** und der ![Abmelden-Symbol](icons/log-out.svg) Abmelden-Knopf. Ein
@@ -56,7 +56,18 @@ lebt im aktuellen Browser-Tab.
 
 ## Dashboard
 
-Oben stehen **Banner**, die nur bei Bedarf erscheinen und jeweils direkt zur
+Gibt es mehr als eine Person, steht ganz oben der **Personenfilter**: je Person
+ein Knopf in ihrer Farbe, dazu **ohne Zuordnung** und **Alle**. Mehrere
+Personen lassen sich gleichzeitig wählen; **Alle** hebt die Auswahl auf. Der
+Filter wirkt nur auf das Dashboard. Dokumente, Rechnungen, Wiedervorlagen und
+Verteilungen zählen über die Person des Dokuments, die Kürzungen über die
+behandelte Person; eine Akte gehört zu einer Person, sobald sie ein Dokument
+dieser Person enthält. Salden und Banner bleiben ungefiltert. Ein Klick in die
+Dokumentliste oder zu den Kürzungen nimmt die Auswahl als dortigen
+Personenfilter mit. Der Browser merkt sich die Auswahl je Benutzer. Wer nur die
+eigenen Dokumente sieht, bekommt keinen Personenfilter.
+
+Darunter stehen **Banner**, die nur bei Bedarf erscheinen und jeweils direkt zur
 Lösung verlinken:
 
 - kein Backup aktiv
@@ -188,7 +199,8 @@ Die beiden Seiten erscheinen nur bei versicherten Personen. Siehe
 | Seite                   | Inhalt                                                                                                                                                                                                    |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ![Unbezahlt-Symbol](icons/circle-alert.svg) **Unbezahlt**           | Alle offenen Rechnungen mit Fälligkeit und Summe                                                                                                                                                          |
-| ![Handwerker-Symbol](icons/wrench.svg) **Handwerker**          | Handwerkerrechnungen nach Leistungsjahr gruppiert, mit dem steuerlich absetzbaren Lohnanteil – standardmäßig die letzten zwei Jahre; archivierte Rechnungen zählen mit und sind als solche gekennzeichnet |
+| ![Handwerker-Symbol](icons/wrench.svg) **Handwerker**          | Handwerkerrechnungen nach Zahljahr gruppiert, mit dem steuerlich absetzbaren Lohnanteil – standardmäßig die letzten zwei Jahre und nur die für § 35a EStG relevanten Rechnungen; archivierte Rechnungen zählen mit und sind als solche gekennzeichnet; Excel-Export der Auswahl |
+| ![Gesundheitskosten-Symbol](icons/heart-pulse.svg) **Gesundheitskosten** | Gesundheitskosten (standardmäßig nur nicht vollständig erstattete) nach Zahljahr und behandelter Person, mit Rechnungssumme, Erstattung und Eigenbehalt; Excel-Export der Auswahl |
 | ![Kalender-Symbol](icons/calendar-clock.svg) **Kalender**            | Monatsansicht aller Wiedervorlagen und (Zahlungs-)Fristen                                                                                                                                                            |
 | ![Salden-Symbol](icons/scale.svg) **Salden**              | Frei definierbare Konten mit manuellen Buchungen, optional zusätzlich aus einer hinterlegten SQL-Abfrage                                                                                                  |
 

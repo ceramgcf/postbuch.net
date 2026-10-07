@@ -1,5 +1,13 @@
 import { Router } from 'express';
 import { query } from '../db.js';
+import { offenerBetragSql, offeneRechnungSql } from '../lib/rechnungs-filter.js';
+import {
+  handwerkerNachZahljahr, handwerkerExcel,
+  gesundheitskostenNachZahljahr, gesundheitskostenFilterwerte, gesundheitskostenExcel,
+  parseFilterListe, GRUPPEN, RELEVANZ,
+} from '../service/steuer-auswertungen.js';
+import { ladeKuerzungen, filtereKuerzungen, kuerzungenExcel, parseGesehen } from '../service/kuerzungen.js';
+import { sendeExcel } from '../lib/excel.js';
 
 const router = Router();
 
@@ -9,30 +17,30 @@ router.get('/unbezahlt', async (req, res) => {
     const result = await query(`
       SELECT p.postid, p.briefdatum, p.kontakt, p.dokumentart AS art, p.lebensbereich, p.dokumentart,
              a.name_arzt, a.behandelte_person, a.gesamtbetrag, a.bestritten_betrag,
-             a.gesamtbetrag - COALESCE(a.bestritten_betrag, 0) AS offener_betrag, a.faelligkeit,
+             ${offenerBetragSql('a')} AS offener_betrag, a.faelligkeit,
              a.re_nr, a.rechnungsdatum, a.bezahlt_am,
              'arztrechnung' AS typ
       FROM postbuch p
       JOIN arztrechnung a ON a.postid = p.postid
-      WHERE a.bezahlt_am IS NULL AND a.gesamtbetrag > COALESCE(a.bestritten_betrag, 0) AND p.historisch = false
+      WHERE ${offeneRechnungSql('a')} AND p.historisch = false
       UNION ALL
       SELECT p.postid, p.briefdatum, p.kontakt, p.dokumentart AS art, p.lebensbereich, p.dokumentart,
              h.name_unternehmen, NULL, h.gesamtbetrag, h.bestritten_betrag,
-             h.gesamtbetrag - COALESCE(h.bestritten_betrag, 0) AS offener_betrag, h.faelligkeit,
+             ${offenerBetragSql('h')} AS offener_betrag, h.faelligkeit,
              h.re_nr, h.rechnungsdatum, h.bezahlt_am,
              'handwerkerrechnung' AS typ
       FROM postbuch p
       JOIN handwerkerrechnung h ON h.postid = p.postid
-      WHERE h.bezahlt_am IS NULL AND h.gesamtbetrag > COALESCE(h.bestritten_betrag, 0) AND p.historisch = false
+      WHERE ${offeneRechnungSql('h')} AND p.historisch = false
       UNION ALL
       SELECT p.postid, p.briefdatum, p.kontakt, p.dokumentart AS art, p.lebensbereich, p.dokumentart,
              g.absender, NULL, g.gesamtbetrag, g.bestritten_betrag,
-             g.gesamtbetrag - COALESCE(g.bestritten_betrag, 0) AS offener_betrag, g.faelligkeit,
+             ${offenerBetragSql('g')} AS offener_betrag, g.faelligkeit,
              g.re_nr, g.rechnungsdatum, g.bezahlt_am,
              'generische_rechnung' AS typ
       FROM postbuch p
       JOIN generische_rechnung g ON g.postid = p.postid
-      WHERE g.bezahlt_am IS NULL AND g.gesamtbetrag > COALESCE(g.bestritten_betrag, 0) AND p.historisch = false
+      WHERE ${offeneRechnungSql('g')} AND p.historisch = false
       ORDER BY faelligkeit ASC NULLS LAST
     `);
 
@@ -43,130 +51,96 @@ router.get('/unbezahlt', async (req, res) => {
   }
 });
 
-// GET /api/analyse/kuerzungen?gesehen=offen|alle|gesehen — Alle Kürzungen mit Verknüpfungen
+// GET /api/analyse/kuerzungen?gesehen=offen|alle|gesehen — Alle Kürzungen mit Verknüpfungen;
+// die übrigen Filter wendet das Frontend selbst an (service/kuerzungen.js)
 router.get('/kuerzungen', async (req, res) => {
   try {
-    const gesehenFilter = ['offen', 'alle', 'gesehen'].includes(req.query.gesehen)
-      ? req.query.gesehen
-      : 'offen';
-    const gesehenWhere = gesehenFilter === 'offen'
-      ? 'AND k.gesehen_am IS NULL'
-      : gesehenFilter === 'gesehen'
-        ? 'AND k.gesehen_am IS NOT NULL'
-        : '';
-
-    const result = await query(`
-      SELECT
-        k.postid AS eb_postid,
-        e.kostentraeger,
-        e.bescheiddatum,
-        ep.subid AS eb_subid,
-        ep.arz_postid,
-        ep.behandelte_person,
-        ep.rechnungsbetrag,
-        ep.erstattungsbetrag,
-        ep.ohne_rechnungsbezug_bestaetigt_am,
-        (ep.arz_postid IS NULL AND ep.ohne_rechnungsbezug_bestaetigt_am IS NULL) AS zuordnung_offen,
-        k.kuerzung_id,
-        k.kuerzungsbetrag,
-        k.gesehen_am,
-        k.gesehen_von,
-        bkpp.status AS pkv_pruefung_status,
-        bkpp.periode AS pkv_pruefung_periode,
-        bkpp.erlaeuterung AS pkv_pruefung_erlaeuterung,
-        CASE
-          WHEN COALESCE(
-            CASE WHEN e.kostentraeger = 'PKV' THEN arz_ep.pkv_satz_override ELSE arz_ep.beihilfe_satz_override END,
-            ab.satz,
-            CASE WHEN e.kostentraeger = 'PKV' THEN per.pkv_satz ELSE per.beihilfe_satz END
-          ) IS NOT NULL
-            THEN ROUND(k.kuerzungsbetrag * COALESCE(
-              CASE WHEN e.kostentraeger = 'PKV' THEN arz_ep.pkv_satz_override ELSE arz_ep.beihilfe_satz_override END,
-              ab.satz,
-              CASE WHEN e.kostentraeger = 'PKV' THEN per.pkv_satz ELSE per.beihilfe_satz END
-            ) / 100, 2)
-          ELSE k.kuerzungsbetrag
-        END AS kuerzungsbetrag_effektiv,
-        k.begruendung,
-        k.arz_subid,
-        a.name_arzt,
-        a.re_nr AS arz_re_nr,
-        ae.leistung AS arz_leistung,
-        ae.goa_goz_gebueh_pzn AS arz_ziffer,
-        ae.betrag AS arz_betrag
-      FROM erstattungsbescheid_kuerzung k
-      JOIN erstattungsbescheid_einzelposition ep ON ep.postid = k.postid AND ep.subid = k.eb_subid
-      JOIN erstattungsbescheid e ON e.postid = k.postid
-      JOIN postbuch p ON p.postid = k.postid
-      LEFT JOIN arztrechnung a ON a.postid = k.arz_postid
-      LEFT JOIN arztrechnung_einzelposition ae ON ae.postid = k.arz_postid AND ae.subid = k.arz_subid
-      LEFT JOIN postbuch.mensch per ON per.kurzname = ep.behandelte_person
-      LEFT JOIN arztrechnung arz_ep ON arz_ep.postid = ep.arz_postid
-      LEFT JOIN abrechnungsperiode_buch ab ON ab.person = ep.behandelte_person
-        AND ab.kostentraeger = e.kostentraeger
-        AND ab.periode = CASE
-          WHEN e.kostentraeger = 'PKV' THEN arz_ep.abrechnungsperiode_pkv
-          ELSE arz_ep.abrechnungsperiode_beihilfe
-        END
-      LEFT JOIN beihilfe_kuerzung_pkv_pruefung bkpp
-        ON bkpp.eb_postid = k.postid AND bkpp.eb_subid = k.eb_subid AND bkpp.kuerzung_id = k.kuerzung_id
-      WHERE p.historisch = false ${gesehenWhere}
-      ORDER BY e.bescheiddatum DESC, k.postid, k.eb_subid, k.kuerzung_id
-    `);
-
-    res.json({ data: result.rows });
+    res.json({ data: await ladeKuerzungen(parseGesehen(req.query.gesehen)) });
   } catch (err) {
     console.error('GET /api/analyse/kuerzungen error:', err);
     res.status(500).json({ error: 'Interner Serverfehler' });
   }
 });
 
-// GET /api/analyse/handwerker — Handwerkerrechnungen gruppiert nach Leistungsjahr
-// (Fallback für Altfälle ohne gesetztes leistungsjahr: Jahreszahl per Regex aus
-// dem freien Leistungsdatum-Text)
-// Archivierte Dokumente zählen hier bewusst mit: „historisch" heißt weggeräumt,
-// nicht ungültig. Der Lohnanteil nach § 35a EStG bleibt für das Leistungsjahr
-// absetzbar, auch wenn der Vorgang abgeschlossen und archiviert ist. Damit die
-// Summen nachvollziehbar bleiben, wird der archivierte Anteil getrennt
-// ausgewiesen und jede Zeile trägt ihr `historisch`-Flag.
+// GET /api/analyse/kuerzungen/export?gesehen=offen&person=Anna,_ohne&kostentraeger=PKV&jahre=2025&periode=3
+// — Excel, wie auf der Seite gefiltert; fehlender Parameter = kein Filter
+router.get('/kuerzungen/export', async (req, res) => {
+  try {
+    const zeilen = filtereKuerzungen(await ladeKuerzungen(parseGesehen(req.query.gesehen)), {
+      personen: parseFilterListe(req.query.person),
+      kostentraeger: parseFilterListe(req.query.kostentraeger),
+      jahre: parseFilterListe(req.query.jahre),
+      periode: req.query.periode,
+    });
+    sendeExcel(res, await kuerzungenExcel(zeilen), 'Kuerzungen');
+  } catch (err) {
+    console.error('GET /api/analyse/kuerzungen/export error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// GET /api/analyse/handwerker?relevanz=relevant — Handwerkerrechnungen gruppiert
+// nach Zahljahr; relevanz: relevant (Standard) | irrelevant | alle bezogen auf
+// den vom Nutzer gesetzten § 35a-Ausschluss
+// (Logik und Begründung: service/steuer-auswertungen.js)
 router.get('/handwerker', async (req, res) => {
   try {
-    const result = await query(`
-      SELECT
-        COALESCE(
-          h.leistungsjahr,
-          (regexp_match(h.leistungsdatum, '((?:19|20)[0-9]{2})'))[1]::integer
-        ) AS jahr,
-        COUNT(*)::integer AS anzahl,
-        COUNT(*) FILTER (WHERE p.historisch)::integer AS anzahl_archiviert,
-        COALESCE(SUM(h.gesamtbetrag), 0) AS summe_gesamt,
-        COALESCE(SUM(h.lohnkosten), 0) AS summe_lohnkosten,
-        COALESCE(SUM(h.gesamtbetrag) FILTER (WHERE p.historisch), 0) AS summe_gesamt_archiviert,
-        COALESCE(SUM(h.lohnkosten) FILTER (WHERE p.historisch), 0) AS summe_lohnkosten_archiviert,
-        json_agg(
-          json_build_object(
-            'postid',          h.postid,
-            'name_unternehmen', h.name_unternehmen,
-            'leistung',        h.leistung,
-            'leistungsjahr',   h.leistungsjahr,
-            'leistungsdatum',  h.leistungsdatum,
-            'rechnungsdatum',  h.rechnungsdatum,
-            're_nr',           h.re_nr,
-            'gesamtbetrag',    h.gesamtbetrag,
-            'lohnkosten',      h.lohnkosten,
-            'bezahlt_am',      h.bezahlt_am,
-            'historisch',      p.historisch
-          ) ORDER BY h.rechnungsdatum ASC NULLS LAST
-        ) AS rechnungen
-      FROM postbuch.handwerkerrechnung h
-      JOIN postbuch p ON p.postid = h.postid
-      GROUP BY jahr
-      ORDER BY jahr DESC NULLS LAST
-    `);
-
-    res.json({ data: result.rows });
+    const relevanz = req.query.relevanz ?? 'relevant';
+    if (!RELEVANZ.includes(relevanz)) return res.status(400).json({ error: 'Ungültige Relevanz' });
+    res.json({ data: await handwerkerNachZahljahr({ relevanz }) });
   } catch (err) {
     console.error('GET /api/analyse/handwerker error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// GET /api/analyse/handwerker/export?jahre=2025,offen&relevanz=relevant — Excel, wie gefiltert
+router.get('/handwerker/export', async (req, res) => {
+  try {
+    const relevanz = req.query.relevanz ?? 'relevant';
+    if (!RELEVANZ.includes(relevanz)) return res.status(400).json({ error: 'Ungültige Relevanz' });
+    const gruppen = await handwerkerNachZahljahr({ jahre: parseFilterListe(req.query.jahre), relevanz });
+    sendeExcel(res, await handwerkerExcel(gruppen), 'Handwerkerrechnungen');
+  } catch (err) {
+    console.error('GET /api/analyse/handwerker/export error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// GET /api/analyse/gesundheitskosten — Gesundheitskosten je Zahljahr und
+// behandelter Person, einschließlich vollständig erstatteter (`vollerstattet`);
+// das Frontend filtert selbst
+router.get('/gesundheitskosten', async (req, res) => {
+  try {
+    const [data, filter] = await Promise.all([
+      gesundheitskostenNachZahljahr({ mitVollerstatteten: true }),
+      gesundheitskostenFilterwerte(),
+    ]);
+    res.json({ data, filter });
+  } catch (err) {
+    console.error('GET /api/analyse/gesundheitskosten error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// GET /api/analyse/gesundheitskosten/export?gruppe=personen&endabgerechnet=1&jahre=2025&personen=Anna,ohne
+// — Excel, wie gefiltert; gruppe: personen (Standard) | tiere | alle;
+// endabgerechnet: 1 (Standard) blendet Rechnungen laufender Perioden aus, 0 zeigt sie;
+// vollerstattet: 1 nimmt vollständig erstattete Rechnungen auf (Standard: 0)
+router.get('/gesundheitskosten/export', async (req, res) => {
+  try {
+    const gruppe = req.query.gruppe ?? 'personen';
+    if (!GRUPPEN.includes(gruppe)) return res.status(400).json({ error: 'Ungültige Gruppe' });
+    const gruppen = await gesundheitskostenNachZahljahr({
+      gruppe,
+      nurEndabgerechnet: req.query.endabgerechnet !== '0',
+      mitVollerstatteten: req.query.vollerstattet === '1',
+      jahre: parseFilterListe(req.query.jahre),
+      personen: parseFilterListe(req.query.personen),
+    });
+    sendeExcel(res, await gesundheitskostenExcel(gruppen), 'Gesundheitskosten');
+  } catch (err) {
+    console.error('GET /api/analyse/gesundheitskosten/export error:', err);
     res.status(500).json({ error: 'Interner Serverfehler' });
   }
 });
@@ -223,7 +197,21 @@ router.get('/perioden', async (req, res) => {
                 OR (ab.kostentraeger = 'Beihilfe' AND ra.abrechnungsperiode_beihilfe IS NOT NULL AND ra.abrechnungsperiode_beihilfe < ab.periode)
               )
           )
-        END AS referenz_datum
+        END AS referenz_datum,
+        (
+          SELECT COUNT(*) FROM dokument_pin dp
+          WHERE dp.person = ab.person AND dp.kostentraeger = ab.kostentraeger
+            AND dp.periode = ab.periode AND dp.status IN ('VORGEMERKT', 'EINGEREICHT')
+        )::int AS anzahl_angepinnt,
+        -- Gleiche Auswahl wie die Prüffall-Liste der Periodenseite (Kürzungen
+        -- archivierter Bescheide bleiben außen vor).
+        (
+          SELECT COUNT(*) FROM beihilfe_kuerzung_pkv_pruefung bkpp
+          JOIN postbuch eb_p ON eb_p.postid = bkpp.eb_postid
+          WHERE bkpp.person = ab.person AND bkpp.kostentraeger = ab.kostentraeger
+            AND bkpp.periode = ab.periode AND bkpp.status IN ('VORGEMERKT', 'EINGEREICHT')
+            AND eb_p.historisch = false
+        )::int AS anzahl_pruefung
       FROM abrechnungsperiode_buch ab
       LEFT JOIN postbuch.mensch per ON per.kurzname = ab.person
       LEFT JOIN arztrechnung a ON
@@ -329,6 +317,34 @@ router.get('/perioden/:person/:kostentraeger/:periode/rechnungen', async (req, r
     res.json({ data: result.rows });
   } catch (err) {
     console.error('GET /api/analyse/perioden/.../rechnungen error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// GET /api/analyse/perioden/:person/:kostentraeger/:periode/pins — an die
+// Periode angepinnte Dokumente (offen vorgemerkt oder bereits eingereicht)
+router.get('/perioden/:person/:kostentraeger/:periode/pins', async (req, res) => {
+  try {
+    const { person, kostentraeger, periode } = req.params;
+    const periodeNum = parseInt(periode, 10);
+    if (!Number.isFinite(periodeNum)) {
+      return res.status(400).json({ error: 'Ungültige Periodenummer' });
+    }
+    if (!['PKV', 'Beihilfe'].includes(kostentraeger)) {
+      return res.status(400).json({ error: 'Ungültiger Kostenträger' });
+    }
+    const result = await query(`
+      SELECT dp.postid, dp.grund, dp.status, dp.vorgemerkt_am, dp.eingereicht_am,
+             p.betreff, p.briefdatum, p.dokumentart AS art
+      FROM dokument_pin dp
+      JOIN postbuch p ON p.postid = dp.postid
+      WHERE dp.person = $1 AND dp.kostentraeger = $2 AND dp.periode = $3
+        AND dp.status IN ('VORGEMERKT', 'EINGEREICHT')
+      ORDER BY dp.id
+    `, [person, kostentraeger, periodeNum]);
+    res.json({ data: result.rows });
+  } catch (err) {
+    console.error('GET /api/analyse/perioden/.../pins error:', err);
     res.status(500).json({ error: 'Interner Serverfehler' });
   }
 });

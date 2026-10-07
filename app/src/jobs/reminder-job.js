@@ -24,6 +24,7 @@ import { query } from '../db.js';
 import { loadDynamicSettings } from '../config.js';
 import { sendPushToAllUsers, PUSH_CATEGORIES } from '../lib/webpush.js';
 import { appLog } from '../app-log.js';
+import { offenerBetragSql, offeneRechnungSql } from '../lib/rechnungs-filter.js';
 
 const REMINDER_CRON = '0 * * * *';  // jede Stunde zur Minute 0 (Europe/Berlin)
 const DEFAULT_OFFSET = 3;
@@ -32,8 +33,12 @@ const DEFAULT_REMINDER_HOUR = 9;
 let _cronJob = null;
 let _running = false;
 
+// Kalendertag in Europe/Berlin – wie Cron und DB-Session. toISOString() läge
+// zwischen Mitternacht und 1 bzw. 2 Uhr noch auf dem UTC-Vortag.
 function todayISO() {
-  return new Date().toISOString().split('T')[0];
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date());
 }
 
 function appUrl(settings, path) {
@@ -208,36 +213,33 @@ async function fetchUpcomingDueInvoices(offsetDays) {
        SELECT ar.postid,
               ar.faelligkeit,
               p.betreff,
-              ar.gesamtbetrag - COALESCE(ar.bestritten_betrag, 0) AS gesamtbetrag,
+              ${offenerBetragSql('ar')} AS gesamtbetrag,
               'arztrechnung'::text AS typ
          FROM postbuch.arztrechnung ar
          JOIN postbuch.postbuch p ON p.postid = ar.postid
-        WHERE ar.bezahlt_am IS NULL
-          AND ar.gesamtbetrag IS NOT NULL AND ar.gesamtbetrag > COALESCE(ar.bestritten_betrag, 0)
+        WHERE ${offeneRechnungSql('ar')}
           AND ar.faelligkeit IS NOT NULL
           AND ar.faelligkeit BETWEEN CURRENT_DATE AND CURRENT_DATE + ($1::int * INTERVAL '1 day')
        UNION ALL
        SELECT hr.postid,
               hr.faelligkeit,
               p.betreff,
-              hr.gesamtbetrag - COALESCE(hr.bestritten_betrag, 0) AS gesamtbetrag,
+              ${offenerBetragSql('hr')} AS gesamtbetrag,
               'handwerkerrechnung'
          FROM postbuch.handwerkerrechnung hr
          JOIN postbuch.postbuch p ON p.postid = hr.postid
-        WHERE hr.bezahlt_am IS NULL
-          AND hr.gesamtbetrag IS NOT NULL AND hr.gesamtbetrag > COALESCE(hr.bestritten_betrag, 0)
+        WHERE ${offeneRechnungSql('hr')}
           AND hr.faelligkeit IS NOT NULL
           AND hr.faelligkeit BETWEEN CURRENT_DATE AND CURRENT_DATE + ($1::int * INTERVAL '1 day')
        UNION ALL
        SELECT gr.postid,
               gr.faelligkeit,
               p.betreff,
-              gr.gesamtbetrag - COALESCE(gr.bestritten_betrag, 0) AS gesamtbetrag,
+              ${offenerBetragSql('gr')} AS gesamtbetrag,
               'rechnung'
          FROM postbuch.generische_rechnung gr
          JOIN postbuch.postbuch p ON p.postid = gr.postid
-        WHERE gr.bezahlt_am IS NULL
-          AND gr.gesamtbetrag IS NOT NULL AND gr.gesamtbetrag > COALESCE(gr.bestritten_betrag, 0)
+        WHERE ${offeneRechnungSql('gr')}
           AND gr.faelligkeit IS NOT NULL
           AND gr.faelligkeit BETWEEN CURRENT_DATE AND CURRENT_DATE + ($1::int * INTERVAL '1 day')
      )

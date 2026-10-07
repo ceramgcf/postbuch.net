@@ -14,6 +14,8 @@ import { appLog } from '../app-log.js';
 import { toDate, toNumeric, toStr } from '../lib/coerce.js';
 import { effektiveGruppe } from '../lib/taxonomie.js';
 import * as tracker from '../jobs/tracker.js';
+import { ergaenzeErkannteZahlung } from './rechnung-zahlung.js';
+import { zieheNachBehandelterPerson } from './ablage-sollort.js';
 
 const laufendeErstattungsbescheide = new Map();
 
@@ -185,7 +187,10 @@ export async function insert(postid, extractedData, client, korrekturAnweisung =
   }
 
   const gruppe = await effektiveGruppe(extractedData.lebensbereich, extractedData.dokumentart);
-  if (gruppe === 'arztrechnung') return insertArztrechnung(postid, extractedData, c);
+  if (gruppe === 'arztrechnung') {
+    await insertArztrechnung(postid, extractedData, c);
+    return ergaenzeErkannteZahlung(c, postid);
+  }
   if (gruppe === 'erstattungsbescheid') {
     if (options.deferErstattungsbescheid) {
       return { erstattungsbescheidAusstehend: true };
@@ -193,13 +198,23 @@ export async function insert(postid, extractedData, client, korrekturAnweisung =
     starteErstattungsbescheidVerarbeitung(postid, korrekturAnweisung).catch(() => {});
     return { erstattungsbescheidAusstehend: true };
   }
-  if (gruppe === 'handwerker') return insertHandwerkerrechnung(postid, extractedData, c);
+  if (gruppe === 'handwerker') {
+    await insertHandwerkerrechnung(postid, extractedData, c);
+    return ergaenzeErkannteZahlung(c, postid);
+  }
   if (gruppe === 'arztbericht') return insertArztbericht(postid, extractedData, c);
-  if (extractedData.istRechnung) return insertGenerischeRechnung(postid, extractedData, c);
+  if (extractedData.istRechnung) {
+    await insertGenerischeRechnung(postid, extractedData, c);
+    // Von der KI erkannte Zahlung („bereits bezahlt am …“) mit Betrag führen.
+    return ergaenzeErkannteZahlung(c, postid);
+  }
 }
 
-/** Startet den bewusst separaten Fachjob erst nach einem ggf. offenen DB-Commit. */
-export function starteErstattungsbescheidVerarbeitung(postid, korrekturAnweisung = '') {
+/**
+ * Startet den bewusst separaten Fachjob erst nach einem ggf. offenen DB-Commit.
+ * `opts.modelTier` reicht die manuelle Modellstufe einer Wiederverarbeitung durch.
+ */
+export function starteErstattungsbescheidVerarbeitung(postid, korrekturAnweisung = '', opts = {}) {
     if (laufendeErstattungsbescheide.has(postid)) {
       return laufendeErstattungsbescheide.get(postid);
     }
@@ -208,7 +223,12 @@ export function starteErstattungsbescheidVerarbeitung(postid, korrekturAnweisung
     // Hintergrundjob, damit ein Nutzer der auf ein frisch "fertiges" EB-Dokument
     // klickt sieht, dass der Matching-Fachblock noch aussteht statt einfach zu fehlen.
     const jobId = tracker.create('eb-matching', `Erstattungsbescheid-Abgleich ${postid}`, 0, false);
-    const lauf = processErstattungsbescheid(postid, korrekturAnweisung).then((result) => {
+    const lauf = processErstattungsbescheid(postid, korrekturAnweisung, opts).then(async (result) => {
+      // Die behandelten Personen stehen erst jetzt fest; bei Ablage nach
+      // behandelter Person kann sich der Personenordner dadurch ändern. Der
+      // Job gilt erst als fertig, wenn die Datei an ihrem Sollort liegt.
+      tracker.setStep(jobId, 0, 'Ablageort wird angepasst');
+      await zieheNachBehandelterPerson(postid);
       tracker.complete(jobId, { postid, betreff: result?.matchingSummary || null });
       return result;
     }).catch(err => {

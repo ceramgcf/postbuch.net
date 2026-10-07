@@ -34,6 +34,17 @@ function fmtBytes(bytes) {
   return `${bytes} B`;
 }
 
+// ─── Dateinamen der Downloads ────────────────────────────────────────────────
+// Identisch mit den Namen in der Ablage und den Content-Disposition-Headern
+// (routes/abrechnungsperiode.js), damit „Prüfen“ und „Einreichen“ gleich benennen.
+function groupFileName(group) {
+  return group.fileName || `${group.fileNamePart || 'Abrechnung'}.pdf`;
+}
+
+function chunkFileName(group, chunkIndex) {
+  return groupFileName(group).replace(/\.pdf$/i, `_Teil${chunkIndex + 1}.pdf`);
+}
+
 // ─── Step-Indicator ───────────────────────────────────────────────────────────
 function StepIndicator({ step }) {
   const steps = ['Auswahl', 'Prüfen', 'Einreichen', 'Bestätigen'];
@@ -174,7 +185,7 @@ function Step1Selection({ onStart, onCancel, istTier }) {
   if (availablePersons.length === 0) {
     return (
       <div className="py-3 text-sm text-muted-foreground">
-        Keine aktiven COLLECTING-Perioden mit Dokumenten vorhanden.
+        Keine aktiven SAMMELT-Perioden mit Dokumenten vorhanden.
       </div>
     );
   }
@@ -276,7 +287,7 @@ function Step2Review({ session, onNext, onCancel, isRejecting }) {
     return (
       <MobilePdfOverlay
         pdfUrl={api.abrechnungsperiode.pdfUrl(session.sessionId, activeGroup)}
-        fileName={group.fileName || `${group.fileNamePart || 'Abrechnung'}.pdf`}
+        fileName={groupFileName(group)}
       />
     );
   }
@@ -331,7 +342,7 @@ function Step2Review({ session, onNext, onCancel, isRejecting }) {
             <div className="flex flex-col items-end gap-1 shrink-0">
               <a
                 href={api.abrechnungsperiode.pdfUrl(session.sessionId, activeGroup)}
-                download={group.fileName || `${group.fileNamePart || 'Abrechnung'}.pdf`}
+                download={groupFileName(group)}
                 className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
               >
                 <Download className="h-3.5 w-3.5" />
@@ -363,7 +374,7 @@ function Step2Review({ session, onNext, onCancel, isRejecting }) {
                   <a
                     key={ci}
                     href={api.abrechnungsperiode.chunkUrl(session.sessionId, activeGroup, ci)}
-                    download={`${group.fileNamePart || 'Abrechnung'}_Teil${ci + 1}.pdf`}
+                    download={chunkFileName(group, ci)}
                     className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-900 dark:text-amber-200 bg-white dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700 rounded-md px-2.5 py-1.5 hover:bg-amber-50 dark:hover:bg-amber-900/50 transition-colors"
                   >
                     <Download className="h-3.5 w-3.5" />
@@ -388,7 +399,7 @@ function Step2Review({ session, onNext, onCancel, isRejecting }) {
             </div>
             <a
               href={api.abrechnungsperiode.pdfUrl(session.sessionId, activeGroup)}
-              download={`${group.fileNamePart || 'Abrechnung'}.pdf`}
+              download={groupFileName(group)}
               className="flex items-center justify-center gap-1.5 text-sm text-primary font-medium w-full rounded-md border border-primary/30 py-2"
             >
               <Download className="h-4 w-4" />
@@ -405,7 +416,7 @@ function Step2Review({ session, onNext, onCancel, isRejecting }) {
                     <a
                       key={ci}
                       href={api.abrechnungsperiode.chunkUrl(session.sessionId, activeGroup, ci)}
-                      download={`${group.fileNamePart || 'Abrechnung'}_Teil${ci + 1}.pdf`}
+                      download={chunkFileName(group, ci)}
                       className="flex items-center justify-center gap-1.5 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-md py-2 font-medium"
                     >
                       <Download className="h-4 w-4" />
@@ -472,12 +483,12 @@ function Step3Submit({ session, onNext, onBack, onCancel, isRejecting }) {
         {groups.map((group, groupIndex) => (
           <div key={`${group.kostentraeger}-${groupIndex}`} className="rounded-lg border p-3 space-y-2">
             <PdfIdentity group={group} />
-            <p className="text-base font-semibold break-all">{group.fileName || `${group.fileNamePart || 'Abrechnung'}.pdf`}</p>
+            <p className="text-base font-semibold break-all">{groupFileName(group)}</p>
             <p className="text-xs text-muted-foreground">{group.documentCount} Dokument{group.documentCount !== 1 ? 'e' : ''}{group.totalSizeBytes ? ` · ${fmtBytes(group.totalSizeBytes)}` : ''}</p>
-            <a href={api.abrechnungsperiode.pdfUrl(session.sessionId, groupIndex)} download={group.fileName || `${group.fileNamePart || 'Abrechnung'}.pdf`} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+            <a href={api.abrechnungsperiode.pdfUrl(session.sessionId, groupIndex)} download={groupFileName(group)} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
               <Download className="h-4 w-4" />PDF herunterladen
             </a>
-            {group.chunks?.length > 1 && <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200 space-y-1.5"><p className="font-medium">Für den Upload bei {group.kostentraeger} bitte diese Teil-PDFs verwenden:</p>{group.chunks.map((chunk, chunkIndex) => <a key={chunkIndex} href={api.abrechnungsperiode.chunkUrl(session.sessionId, groupIndex, chunkIndex)} download={`${group.fileNamePart || 'Abrechnung'}_Teil${chunkIndex + 1}.pdf`} className="flex items-center gap-1 underline"><Download className="h-3.5 w-3.5" />{chunk.label}</a>)}</div>}
+            {group.chunks?.length > 1 && <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200 space-y-1.5"><p className="font-medium">Für den Upload bei {group.kostentraeger} bitte diese Teil-PDFs verwenden:</p>{group.chunks.map((chunk, chunkIndex) => <a key={chunkIndex} href={api.abrechnungsperiode.chunkUrl(session.sessionId, groupIndex, chunkIndex)} download={chunkFileName(group, chunkIndex)} className="flex items-center gap-1 underline"><Download className="h-3.5 w-3.5" />{chunk.label}</a>)}</div>}
           </div>
         ))}
       </div>
@@ -520,7 +531,7 @@ function Step4Confirm({ session, onConfirm, onReject, isConfirming, isRejecting 
         </ul>
       </div>
       <p className="text-xs text-muted-foreground">
-        Nach der Bestätigung werden die Perioden auf SUBMITTED gesetzt und neue COLLECTING-Perioden angelegt.
+        Nach der Bestätigung werden die Perioden auf EINGEREICHT gesetzt und neue SAMMELT-Perioden angelegt.
         Die temporären PDFs auf OneDrive werden automatisch gelöscht.
       </p>
       <label className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 cursor-pointer dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">

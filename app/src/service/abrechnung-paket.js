@@ -109,17 +109,25 @@ async function ladeEinreichungsPdf(postid, format = 'a4') {
 
 /**
  * Lädt + konvertiert eine Liste von Dokumenten sequentiell (echter Fortschritt).
+ * Das Ergebnis hängt nur von postid und Format ab. Über `cache` (eine Map, die
+ * der Aufrufer über alle Kostenträger-Gruppen einer Session weiterreicht) wird
+ * ein Dokument, das z. B. für PKV UND Beihilfe eingereicht wird, nur einmal
+ * konvertiert. Die Puffer werden danach nur gelesen (qpdf), Teilen ist sicher.
  * @param {Array<{postid:string, art:string}>} docs
- * @param {(index:number, total:number, postid:string) => void} onDocProgress
+ * @param {(index:number, total:number, postid:string, fromCache:boolean) => void} onDocProgress
+ * @param {Map<string, Buffer>} [cache]
  * @returns {Promise<Buffer[]>} Puffer in derselben Reihenfolge wie docs
  */
-export async function convertDocuments(docs, onDocProgress = () => {}) {
+export async function convertDocuments(docs, onDocProgress = () => {}, cache = new Map()) {
   const buffers = [];
   for (let i = 0; i < docs.length; i++) {
     const d = docs[i];
-    onDocProgress(i, docs.length, d.postid);
-    const buf = await ladeEinreichungsPdf(d.postid, d.art === 'rezept' ? 'a6' : 'a4');
-    buffers.push(buf);
+    const format = d.art === 'rezept' ? 'a6' : 'a4';
+    const key = `${d.postid}|${format}`;
+    const fromCache = cache.has(key);
+    onDocProgress(i, docs.length, d.postid, fromCache);
+    if (!fromCache) cache.set(key, await ladeEinreichungsPdf(d.postid, format));
+    buffers.push(cache.get(key));
   }
   return buffers;
 }

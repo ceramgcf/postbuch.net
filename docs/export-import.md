@@ -146,7 +146,9 @@ steht ein Bericht: importiert / übersprungen / fehlerhaft.
 >
 > ⚠️ Der Archiv-Upload ist auf **2 GB pro ZIP** begrenzt, entpackt auf
 > **4 GB**. Größere Bestände exportierst und importierst du in mehreren
-> Paketen, z. B. jahresweise. Ein Archiv darf höchstens 20.000 Einträge
+> Paketen, z. B. jahresweise. Für den Upload braucht der Server freien
+> Speicherplatz in Höhe der ZIP-Größe plus 1 GiB Reserve; fehlt er, lehnt
+> postbuch.net den Upload vorab ab und nennt benötigten und freien Platz. Ein Archiv darf höchstens 20.000 Einträge
 > enthalten; verschlüsselte ZIPs werden abgelehnt. Sehr große Exportpakete
 > nutzen ggf. das Zip64-Format – ältere postbuch.net-Instanzen vor dieser
 > Version können ein Zip64-ZIP nicht importieren; beim Aufteilen in kleinere

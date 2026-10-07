@@ -46,15 +46,17 @@ import * as suspensionStore from './suspension-store.js';
 import * as failedHandler from './failed-handler.js';
 import * as duplicateNotifier from './duplicate-notifier.js';
 import * as documentInserter from './document-inserter.js';
+import { aktualisiereZahlstatus, zuCent } from './rechnung-zahlung.js';
 import { gleichePersonAb } from '../lib/personen-abgleich.js';
 import { sendPushToAllUsers } from '../lib/webpush.js';
 import { uiLog } from '../log.js';
 import { appLog } from '../app-log.js';
 import { trashName } from './document-replace.js';
-import { ensureAblageOrdner } from './storage-setup.js';
+import { ensureAblageOrdner, behandeltePersonSql } from './storage-setup.js';
 import * as pipelineFileJournal from './pipeline-file-journal.js';
 import { oeffneSichereErsetzung } from './reprocess-protection.js';
 import { setzeBescheidwirkungZurueck } from './periodenabschluss.js';
+import { sperrePeriodenGeteilt } from './perioden-sperre.js';
 
 // ── In-Flight-Registry ────────────────────────────────────────────────────────
 // Verhindert Doppelverarbeitung derselben OneDrive-Datei wenn Webhook und
@@ -304,11 +306,13 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     // absichtlich wieder.
     if (onedriveFileId && !input.modifyPostID && !isResume) {
       const bereitsEingebucht = await pool.query(
-        'SELECT postid, betreff, lebensbereich, dokumentart, familienmitglied FROM postbuch.postbuch WHERE storage_id = $1 AND storage_backend = $2 LIMIT 1',
+        `SELECT p.postid, p.betreff, p.lebensbereich, p.dokumentart, p.familienmitglied, p.briefdatum,
+                p.richtung::text AS richtung, ${behandeltePersonSql('p')} AS behandelte_person
+           FROM postbuch.postbuch p WHERE p.storage_id = $1 AND p.storage_backend = $2 LIMIT 1`,
         [onedriveFileId, storage.name],
       );
       if (bereitsEingebucht.rows.length > 0) {
-        const { postid, betreff, lebensbereich, dokumentart, familienmitglied } = bereitsEingebucht.rows[0];
+        const { postid, betreff, ...ablageRow } = bereitsEingebucht.rows[0];
         try {
           // Derselbe Sweep, der den Fehleintrag erst erzeugt hat, kann die
           // physische Datei zusätzlich nach _failed verschoben haben, während
@@ -318,7 +322,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
           // aus der DB-Klassifikation berechnete Sollablage prüfen und bei
           // Abweichung dorthin zurückverschieben, bevor der Fehleintrag verschwindet.
           const meta = await storage.getMeta(onedriveFileId);
-          const sollFolderId = await ensureAblageOrdner(settings, { lebensbereich, dokumentart, familienmitglied }, storage.name);
+          const sollFolderId = await ensureAblageOrdner(settings, ablageRow, storage.name);
           if (meta.parentId !== sollFolderId) {
             const zurueckverschoben = await storage.move(onedriveFileId, sollFolderId, meta.name);
             if (zurueckverschoben.webUrl) {
@@ -759,6 +763,8 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     let existingHistorisch = false;
     let preservedBezahltAm = null; // { value: date|null } — nur gesetzt wenn bezahlt_am_manuell=true
     let preservedBestrittenBetrag = null;
+    let preservedEstg35aIrrelevant = false;
+    let preservedZahlungen = [];
     let preservedArzWorkflow = null;
     let preservedPostbuchWorkflow = null;
     let preservedWiedervorlagen = [];
@@ -770,8 +776,9 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     const shouldReplace = replacementMode !== null;
 
     // Personenbezüge auf erfasste Kurznamen abbilden (vor der Sortierung, weil
-    // familienmitglied bei Personenablage den Zielordner bestimmt): familienmitglied gegen alle
-    // Menschen, behandeltePerson gegen Menschen mit PKV/Beihilfe. Eine Angabe,
+    // familienmitglied bei Personenablage den Zielordner bestimmt): beide gegen
+    // alle erfassten Menschen und Tiere – behandelt werden kann jeder, auch ohne
+    // Versicherung; die Abrechnungsperiode hängt erst daran. Eine Angabe,
     // die sich nicht eindeutig zuordnen lässt, wird verworfen — und weil dann
     // niemand die Zuordnung gesehen hat, geht das Dokument in die Prüfung.
     let personVerworfen = false;
@@ -793,10 +800,9 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       `SELECT kurzname, anzeigename, pkv, beihilfe FROM postbuch.mensch`)).rows;
     const familienmitglied = pruefePerson(
       'familienmitglied', extractedData.postbuch?.familienmitglied, menschen);
-    const patienten = menschen.filter((m) => m.pkv || m.beihilfe);
     for (const block of [extractedData.arztrechnung, extractedData.arztbericht]) {
       if (block && typeof block === 'object' && 'behandeltePerson' in block) {
-        block.behandeltePerson = pruefePerson('behandeltePerson', block.behandeltePerson, patienten);
+        block.behandeltePerson = pruefePerson('behandeltePerson', block.behandeltePerson, menschen);
       }
     }
 
@@ -808,10 +814,24 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     if (typeof extractedData.lebensbereich !== 'string' || typeof extractedData.dokumentart !== 'string') {
       throw new Error('Klassifikation enthält keine vollständige L×D-Einordnung.');
     }
+    // Richtung (auch Ablageebene): 'eingang' oder 'ausgang'. Default 'eingang'. Wenn 'ausgang' aber
+    // kein gültiges Familienmitglied → auf 'eingang' zurückfallen.
+    const rawRichtung = extractedData.postbuch?.richtung;
+    let richtung = rawRichtung === 'ausgang' ? 'ausgang' : 'eingang';
+    if (richtung === 'ausgang' && !familienmitglied) richtung = 'eingang';
+    // Behandelte Person (Ablage nach behandelter Person): Arztrechnung und
+    // Arztbericht kennen sie schon hier. Beim Erstattungsbescheid steht sie erst
+    // nach dem EB-Fachjob fest; der zieht die Datei danach nach.
+    const ablageGruppe = await effektiveGruppe(extractedData.lebensbereich, extractedData.dokumentart);
+    const behandelteBlock = ablageGruppe === 'arztrechnung' ? extractedData.arztrechnung
+      : ablageGruppe === 'arztbericht' ? extractedData.arztbericht : null;
     const destFolderId = await ensureAblageOrdner(settings, {
       lebensbereich: extractedData.lebensbereich,
       dokumentart: extractedData.dokumentart,
       familienmitglied,
+      behandelte_person: typeof behandelteBlock?.behandeltePerson === 'string' ? behandelteBlock.behandeltePerson : null,
+      briefdatum: extractedData.postbuch?.briefdatum || null,
+      richtung,
     }, storage.name);
 
     // .pdf am Ende entfernen falls LLM es mitliefert (war in n8n bereits ein Bug)
@@ -897,11 +917,6 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       || null;
 
 
-    // Richtung: 'eingang' oder 'ausgang'. Default 'eingang'. Wenn 'ausgang' aber
-    // kein gültiges Familienmitglied → auf 'eingang' zurückfallen.
-    const rawRichtung = extractedData.postbuch?.richtung;
-    let richtung = rawRichtung === 'ausgang' ? 'ausgang' : 'eingang';
-    if (richtung === 'ausgang' && !familienmitglied) richtung = 'eingang';
 
     const rawKontakt = extractedData.postbuch?.kontakt;
     const kontakt = (typeof rawKontakt === 'string' && rawKontakt.trim()) ? rawKontakt.trim() : null;
@@ -968,6 +983,19 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         verbleib_ablage_id: existingDoc.verbleib_ablage_id ?? null,
       };
 
+      // Periodenzuordnung erst unter der geteilten Periodensperre lesen: Ein
+      // gleichzeitig abschließender Bescheid könnte die Rechnung sonst gerade
+      // in eine Restperiode verschieben, und die Ersetzung schriebe danach die
+      // veraltete Periode zurück. Die Sperre hält zugleich den Trigger der
+      // neuen Zeile verklemmungsfrei (service/perioden-sperre.js).
+      const arzPerson = (await dbWriter.query(
+        `SELECT behandelte_person FROM postbuch.arztrechnung WHERE postid = $1`,
+        [resolvedMatchID]
+      )).rows[0]?.behandelte_person;
+      await sperrePeriodenGeteilt(dbWriter, ['PKV', 'Beihilfe'].map((kostentraeger) => ({
+        person: arzPerson, kostentraeger,
+      })));
+
       const arzWorkflowResult = await dbWriter.query(
         `SELECT abrechnungsperiode_pkv, abrechnungsperiode_beihilfe,
                 pkv_satz_override, beihilfe_satz_override
@@ -1010,24 +1038,61 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         [resolvedMatchID]
       )).rows[0];
       if (bezahltRow?.bezahlt_am_manuell) preservedBezahltAm = { value: bezahltRow.bezahlt_am };
+      // Vom Nutzer geführte Zahlungen hängen per CASCADE am Dokument und
+      // müssen die Ersetzung zeilengetreu überstehen. KI-erkannte Zahlungen
+      // (bezahlt_am_manuell = false) entscheidet die Neuanalyse neu.
+      if (bezahltRow?.bezahlt_am_manuell) {
+        preservedZahlungen = (await dbWriter.query(
+          `SELECT datum, betrag FROM postbuch.rechnung_zahlung
+            WHERE postid = $1 ORDER BY datum, zahlung_id FOR UPDATE`,
+          [resolvedMatchID]
+        )).rows;
+      }
       if (bezahltRow?.bestritten_betrag != null) preservedBestrittenBetrag = Number(bezahltRow.bestritten_betrag);
+      // Der § 35a-Ausschluss ist eine reine Nutzerentscheidung und übersteht
+      // die Neuanalyse, solange das Dokument eine Handwerkerrechnung bleibt.
+      preservedEstg35aIrrelevant = (await dbWriter.query(
+        `SELECT 1 FROM handwerkerrechnung WHERE postid = $1 AND estg35a_irrelevant`,
+        [resolvedMatchID]
+      )).rowCount > 0;
 
       const hatArzWorkflow = preservedArzWorkflow
         && Object.values(preservedArzWorkflow).some(v => v != null);
       if (hatArzWorkflow && zielRechnungstabelle !== 'arztrechnung') {
         throw new Error('Wiederverarbeitung gesperrt: Abrechnungsperioden oder Satz-Overrides können beim Wechsel aus dem Arztrechnungs-Typ nicht erhalten werden.');
       }
+      // Eine Ersetzungskante (Korrekturrechnung) übersteht die Ersetzung der
+      // Dokumentzeile von selbst (FK prüft erst beim Commit). Sie setzt aber
+      // voraus, dass das Dokument eine Rechnung derselben Art bleibt.
+      const ersetzungRow = (await dbWriter.query(
+        `SELECT (SELECT CASE WHEN EXISTS (SELECT 1 FROM arztrechnung WHERE postid = $1) THEN 'arztrechnung'
+                             WHEN EXISTS (SELECT 1 FROM handwerkerrechnung WHERE postid = $1) THEN 'handwerkerrechnung'
+                             WHEN EXISTS (SELECT 1 FROM generische_rechnung WHERE postid = $1) THEN 'generische_rechnung'
+                        END) AS tabelle
+          WHERE EXISTS (SELECT 1 FROM postbuch.dokument_beziehung
+                         WHERE art = 'ersetzt' AND (von_postid = $1 OR zu_postid = $1))`,
+        [resolvedMatchID]
+      )).rows[0];
+      if (ersetzungRow && zielRechnungstabelle !== ersetzungRow.tabelle) {
+        throw new Error('Wiederverarbeitung gesperrt: Die Rechnung ist mit einer Korrekturrechnung verknüpft und muss eine Rechnung derselben Art bleiben. Bitte zuerst die Ersetzung aufheben.');
+      }
       if ((preservedBezahltAm || preservedBestrittenBetrag !== null) && !zielRechnungstabelle) {
         throw new Error('Wiederverarbeitung gesperrt: Manueller Zahlungs- oder Streitstatus kann beim Wechsel in einen Nicht-Rechnungstyp nicht erhalten werden.');
       }
+      const neuerGesamtbetrag = Number(
+        zielRechnungstabelle === 'arztrechnung'
+          ? extractedData.arztrechnung?.gesamtbetrag
+          : zielRechnungstabelle === 'handwerkerrechnung'
+            ? extractedData.handwerkerrechnung?.gesamtbetrag
+            : extractedData.generischeRechnung?.gesamtbetrag
+      );
+      if (preservedZahlungen.length > 0) {
+        const gezahltCent = preservedZahlungen.reduce((sum, z) => sum + zuCent(z.betrag), 0);
+        if (!Number.isFinite(neuerGesamtbetrag) || zuCent(neuerGesamtbetrag) < gezahltCent) {
+          throw new Error('Wiederverarbeitung gesperrt: Die erfassten Zahlungen sind höher als der neu erkannte Rechnungsbetrag.');
+        }
+      }
       if (preservedBestrittenBetrag !== null) {
-        const neuerGesamtbetrag = Number(
-          zielRechnungstabelle === 'arztrechnung'
-            ? extractedData.arztrechnung?.gesamtbetrag
-            : zielRechnungstabelle === 'handwerkerrechnung'
-              ? extractedData.handwerkerrechnung?.gesamtbetrag
-              : extractedData.generischeRechnung?.gesamtbetrag
-        );
         if (!Number.isFinite(neuerGesamtbetrag) || neuerGesamtbetrag < preservedBestrittenBetrag) {
           throw new Error('Wiederverarbeitung gesperrt: Der bestrittene Betrag ist höher als der neu erkannte Rechnungsbetrag.');
         }
@@ -1198,6 +1263,12 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       { deferErstattungsbescheid: true },
     );
     ebPending = !!detailResult?.erstattungsbescheidAusstehend;
+    // Auftrag des EB-Fachjobs: wird im Journal mitgespeichert, damit auch eine
+    // Wiederholung nach Fehlschlag die Korrektur und Modellwahl des Nutzers kennt.
+    const ebAuftrag = {
+      korrekturAnweisung: input.korrekturAnweisung || '',
+      modelTier: input.modelTier && input.modelTier !== 'auto' ? input.modelTier : null,
+    };
 
     // Manuell gesetztes bezahlt_am wiederherstellen — KI darf diesen Wert nie überschreiben
     if (preservedBezahltAm) {
@@ -1236,6 +1307,30 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       }
       if (!streitRestored) {
         throw new Error('Bestrittener Betrag konnte nicht wiederhergestellt werden');
+      }
+    }
+
+    if (preservedEstg35aIrrelevant) {
+      await dbWriter.query(
+        `UPDATE handwerkerrechnung SET estg35a_irrelevant = true WHERE postid = $1`,
+        [finalPostID]
+      );
+    }
+
+    // Vom Nutzer geführte Zahlungen wiederherstellen und den Zahlstatus aus
+    // ihnen neu ableiten — der Rechnungsbetrag kann sich geändert haben.
+    // Eine von der KI beim Insert angelegte Zahlung weicht dem Nutzerstand.
+    if (preservedBezahltAm) {
+      await dbWriter.query('DELETE FROM postbuch.rechnung_zahlung WHERE postid = $1', [finalPostID]);
+      for (const z of preservedZahlungen) {
+        await dbWriter.query(
+          'INSERT INTO postbuch.rechnung_zahlung (postid, datum, betrag) VALUES ($1, $2::date, $3::numeric)',
+          [finalPostID, z.datum, z.betrag]
+        );
+      }
+      if (preservedZahlungen.length > 0) {
+        await aktualisiereZahlstatus(dbWriter, finalPostID);
+        appLog('INFO', 'doc-processor', `${preservedZahlungen.length} Zahlung(en) wiederhergestellt`, { entity: 'postbuch', entityId: finalPostID });
       }
     }
 
@@ -1371,7 +1466,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
           );
         }
 
-        if (ebPending) await pipelineFileJournal.noteEbPending(jobId, dbWriter);
+        if (ebPending) await pipelineFileJournal.noteEbPending(jobId, dbWriter, ebAuftrag);
         else {
           const journalDone = await dbWriter.query(
             `UPDATE postbuch._pipeline_file_journal
@@ -1407,14 +1502,15 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         }
 
       } else {
-        if (ebPending) await pipelineFileJournal.noteEbPending(jobId);
+        if (ebPending) await pipelineFileJournal.noteEbPending(jobId, undefined, ebAuftrag);
         dbStateComplete = true;
       }
 
     if (ebPending) {
       documentInserter.starteErstattungsbescheidVerarbeitung(
         finalPostID,
-        input.korrekturAnweisung || '',
+        ebAuftrag.korrekturAnweisung,
+        { modelTier: ebAuftrag.modelTier },
       ).then(() => pipelineFileJournal.acknowledgeEbComplete(jobId)).catch((e) => {
         appLog('ERROR', 'pipeline-recovery',
           `Persistenter EB-Fachjob für ${finalPostID} bleibt zur Wiederholung vorgemerkt: ${e.message}`,

@@ -9,9 +9,14 @@
  * - nur nachweislich leere Ordner werden gelöscht, jeder nicht leere wird mit # markiert.
  */
 import db from '../db.js';
-import { loadDynamicSettings, getActiveBackendName, getFolders } from '../config.js';
+import { loadDynamicSettings, getActiveBackendName, getFolders, getAblageEbenen } from '../config.js';
+import { istStrukturSchluessel, gehoertZurStruktur } from './storage-setup.js';
 import { getAdapter } from '../lib/storage/index.js';
 import { appLog } from '../app-log.js';
+import { fuerJedesBegrenzt } from '../lib/parallel.js';
+
+// Gleichzeitige Prüf-/Löschvorgänge je Ordnerebene beim Aufräumen.
+const AUFRAEUMEN_PARALLEL = 3;
 
 export const LEGACY_DOCUMENT_FOLDER_KEYS = Object.freeze([
   'Arztrechnung', 'Laborrechnung', 'Rezept', 'Hilfsmittelrechnung',
@@ -170,9 +175,10 @@ export async function cleanupLegacyDocumentFolders({ backendName, dryRun = false
 }
 
 /**
- * Räumt nach einem Wechsel der Ablagestruktur die Ordner der jeweils anderen
- * Struktur auf: nach dem Wechsel auf Personenablage die LxD-Ordner an der
- * Wurzel (`<L>`, `<L>/<D>`), nach dem Rückwechsel die Personenordner (`@…`).
+ * Räumt nach einem Wechsel der Ablagestruktur die Ordner früherer Strukturen
+ * auf: alle Strukturschlüssel (Lebensbereich, Dokumentart, Person, Jahr,
+ * Richtung in beliebiger Folge), die nicht zur Kette der aktiven Struktur
+ * gehören. System- und Legacy-Schlüssel bleiben unberührt.
  *
  * Sicherheitsregeln wie oben: nur Ordner aus dem eigenen Cache, von unten nach
  * oben, nur nachweislich leere Ordner werden gelöscht. Nicht leere bleiben
@@ -180,16 +186,15 @@ export async function cleanupLegacyDocumentFolders({ backendName, dryRun = false
  * nicht von postbuch.net stammen. IDs, die auch ein Schlüssel der aktiven
  * Struktur nutzt, bleiben physisch erhalten.
  *
- * @param {{backendName?: string, taxonomie: {lebensbereiche: Array<{code:string}>}}} options
+ * @param {{backendName?: string, taxonomie: {lebensbereiche: Array<{code:string}>, dokumentarten: Array<{code:string}>}}} options
  */
 export async function raeumeFremdeStrukturAuf({ backendName, taxonomie }) {
   const settings = await loadDynamicSettings();
-  const personenablage = settings?.ablage_struktur === 'person_lxd';
-  const lCodes = taxonomie.lebensbereiche.map((l) => l.code);
-  const istLxdSchluessel = (key) => lCodes.some((c) => key === c || key.startsWith(`${c}/`));
+  const istStruktur = istStrukturSchluessel(taxonomie);
+  const aktiv = gehoertZurStruktur(getAblageEbenen(settings), taxonomie);
   return raeumeOrdnerAuf({
     backendName,
-    istZiel: personenablage ? istLxdSchluessel : (key) => key.startsWith('@'),
+    istZiel: (key) => istStruktur(key) && !aktiv(key),
   });
 }
 
@@ -209,25 +214,37 @@ export async function raeumeOrdnerAuf({ backendName, istZiel }) {
 
   const ziele = Object.entries(folders).filter(([key, id]) => id && istZiel(key));
   const geschuetzt = new Set(Object.entries(folders).filter(([key, id]) => id && !istZiel(key)).map(([, id]) => id));
-  const tiefe = (key) => key.split('/').length;
-  ziele.sort(([a], [b]) => tiefe(b) - tiefe(a));
+  // Von unten nach oben: Eine Ebene wird erst angefasst, wenn alle tieferen
+  // fertig sind. Innerhalb einer Ebene sind die Ordner voneinander unabhängig
+  // und werden begrenzt parallel geprüft und gelöscht. Schlüssel derselben
+  // Ebene mit derselben ID bilden einen Vorgang, sonst liefe die zweite
+  // Löschung ins Leere.
+  const ebenen = new Map();
+  for (const [key, id] of ziele) {
+    const tiefe = key.split('/').length;
+    if (!ebenen.has(tiefe)) ebenen.set(tiefe, new Map());
+    const ebene = ebenen.get(tiefe);
+    if (!ebene.has(id)) ebene.set(id, []);
+    ebene.get(id).push(key);
+  }
 
   const summary = { backend, deleted: 0, kept: 0, errors: 0, items: [] };
   const entfernen = [];
-  for (const [key, id] of ziele) {
-    if (geschuetzt.has(id)) { entfernen.push(key); continue; }
+  const raeumeEinen = async ([id, keys]) => {
+    const key = keys.join(', ');
+    if (geschuetzt.has(id)) { entfernen.push(...keys); return; }
     try {
       let children;
       try {
         children = await storage.listChildren(id);
       } catch (err) {
-        if (err?.status === 404 || err?.statusCode === 404) { entfernen.push(key); continue; }
+        if (err?.status === 404 || err?.statusCode === 404) { entfernen.push(...keys); return; }
         throw err;
       }
       if (children.length === 0) {
         await storage.remove(id);
         summary.deleted++;
-        entfernen.push(key);
+        entfernen.push(...keys);
       } else {
         summary.kept++;
         summary.items.push({ key, id, children: children.length, action: 'kept-nonempty' });
@@ -238,6 +255,9 @@ export async function raeumeOrdnerAuf({ backendName, istZiel }) {
       summary.items.push({ key, id, action: 'error', error: err.message });
       appLog('ERROR', 'ablage-struktur', `Ordner ${key} (${id}) blieb unangetastet: ${err.message}`);
     }
+  };
+  for (const tiefe of [...ebenen.keys()].sort((a, b) => b - a)) {
+    await fuerJedesBegrenzt([...ebenen.get(tiefe)], AUFRAEUMEN_PARALLEL, raeumeEinen);
   }
   await entferneVerarbeiteteLegacyKeys(backend, entfernen);
   appLog(summary.errors ? 'WARN' : 'INFO', 'ablage-struktur',

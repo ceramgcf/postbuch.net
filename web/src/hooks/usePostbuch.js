@@ -73,6 +73,64 @@ export function useMarkPaid() {
   });
 }
 
+export function useSetZahlungen() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ postid, zahlungen }) => api.postbuch.setZahlungen(postid, zahlungen),
+    onSuccess: (_data, { postid }) => {
+      qc.invalidateQueries({ queryKey: ['postbuch'] });
+      qc.invalidateQueries({ queryKey: ['postbuch', 'detail', postid] });
+      qc.invalidateQueries({ queryKey: ['analyse'] });
+      qc.invalidateQueries({ queryKey: ['stats'] });
+    },
+  });
+}
+
+// ── Ersetzung durch Korrekturrechnung ───────────────────────────────────────
+
+/** Vorschläge für die Bezugsrechnung; richtung 'vorgaenger' | 'nachfolger'. */
+export function useErsetzungKandidaten(postid, richtung, enabled) {
+  return useQuery({
+    queryKey: ['postbuch', 'ersetzung-kandidaten', postid, richtung],
+    queryFn: () => api.postbuch.ersetzungKandidaten(postid, richtung),
+    enabled: !!postid && !!richtung && enabled,
+    staleTime: 30_000,
+  });
+}
+
+/** Kurzdaten einer Rechnung samt Zahlungen und Ersetzungskanten (Bestätigungsdialog). */
+export function useErsetzungInfo(postid) {
+  return useQuery({
+    queryKey: ['postbuch', 'ersetzung', postid],
+    queryFn: () => api.postbuch.ersetzung(postid),
+    enabled: !!postid,
+    retry: false,
+  });
+}
+
+function invalidiereNachErsetzung(qc) {
+  qc.invalidateQueries({ queryKey: ['postbuch'] });
+  qc.invalidateQueries({ queryKey: ['analyse'] });
+  qc.invalidateQueries({ queryKey: ['stats'] });
+}
+
+export function useErsetzeRechnung() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ postid, body }) => api.postbuch.ersetze(postid, body),
+    onSuccess: () => invalidiereNachErsetzung(qc),
+  });
+}
+
+/** postid ist die ersetzte Rechnung. */
+export function useHebeErsetzungAuf() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ postid }) => api.postbuch.hebeErsetzungAuf(postid),
+    onSuccess: () => invalidiereNachErsetzung(qc),
+  });
+}
+
 export function useReprocess() {
   const qc = useQueryClient();
   return useMutation({
@@ -120,10 +178,16 @@ export function useUpdateNote() {
   });
 }
 
-export function useDashboardStats() {
+/**
+ * @param {string[]|null} personen  Personenauswahl des Dashboards, null = alle
+ * @param {boolean} enabled  false, solange die Auswahl noch nicht feststeht
+ */
+export function useDashboardStats(personen = null, enabled = true) {
   return useQuery({
-    queryKey: ['stats', 'dashboard'],
-    queryFn: () => api.stats.dashboard(),
+    queryKey: ['stats', 'dashboard', personen ?? 'alle'],
+    queryFn: () => api.stats.dashboard(personen),
+    placeholderData: keepPreviousData,
+    enabled,
     refetchInterval: 10_000,
     refetchIntervalInBackground: false,
   });
@@ -164,10 +228,28 @@ export function usePeriodenRechnungen(person, kostentraeger, periode) {
   });
 }
 
-export function useHandwerker() {
+export function usePeriodenPins(person, kostentraeger, periode) {
   return useQuery({
-    queryKey: ['analyse', 'handwerker'],
-    queryFn: () => api.analyse.handwerker(),
+    queryKey: ['analyse', 'perioden', person, kostentraeger, periode, 'pins'],
+    queryFn: () => api.analyse.periodenPins(person, kostentraeger, periode),
+    enabled: !!(person && kostentraeger && periode != null),
+  });
+}
+
+export function useGesundheitskosten() {
+  return useQuery({
+    queryKey: ['analyse', 'gesundheitskosten'],
+    queryFn: () => api.analyse.gesundheitskosten(),
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useHandwerker(relevanz = 'relevant') {
+  return useQuery({
+    queryKey: ['analyse', 'handwerker', relevanz],
+    queryFn: () => api.analyse.handwerker(relevanz),
+    placeholderData: keepPreviousData,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
   });
@@ -246,6 +328,31 @@ export function useUpdateArztrechnung() {
       qc.invalidateQueries({ queryKey: ['stats'] });
     },
   });
+}
+
+// Einzelpositionen einer Arztrechnung: anlegen, ändern, löschen. Die
+// Differenzposition berechnet der Server mit, daher immer das Detail neu laden.
+function useArztPositionMutation(mutationFn) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn,
+    onSuccess: (_data, { postid }) => {
+      qc.invalidateQueries({ queryKey: ['postbuch', 'detail', postid] });
+      qc.invalidateQueries({ queryKey: ['analyse'] });
+    },
+  });
+}
+
+export function useAddArztPosition() {
+  return useArztPositionMutation(({ postid, ...data }) => api.postbuch.addArztPosition(postid, data));
+}
+
+export function useUpdateArztPosition() {
+  return useArztPositionMutation(({ postid, subid, ...data }) => api.postbuch.updateArztPosition(postid, subid, data));
+}
+
+export function useDeleteArztPosition() {
+  return useArztPositionMutation(({ postid, subid }) => api.postbuch.deleteArztPosition(postid, subid));
 }
 
 // Invalidiert die von einer Erstattungs-Zuordnungsänderung betroffenen Caches:

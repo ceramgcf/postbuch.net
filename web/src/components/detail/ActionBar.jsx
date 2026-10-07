@@ -135,8 +135,12 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
     );
   };
 
-  const handleMarkPaid = () => {
+  const handleMarkPaid = async () => {
     const dateStr = new Date().toISOString().split('T')[0];
+    // Bei Teilzahlungen legt „Bezahlt“ eine Zahlung über den Rest an; das
+    // Rückgängigmachen stellt deshalb die vorherigen Zahlungen wieder her.
+    const vorher = await api.postbuch.zahlungen(postid).catch(() => null);
+    const vorherigeZahlungen = (vorher?.zahlungen || []).map(({ datum, betrag }) => ({ datum, betrag }));
     paidMutation.mutate(
       { postid, date: dateStr },
       {
@@ -144,7 +148,8 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
           pushAction(
             'Als bezahlt markiert',
             async () => {
-              await api.postbuch.markPaid(postid, null);
+              if (vorherigeZahlungen.length) await api.postbuch.setZahlungen(postid, vorherigeZahlungen);
+              else await api.postbuch.markPaid(postid, null);
               qc.invalidateQueries({ queryKey: ['postbuch'] });
             },
             async () => {

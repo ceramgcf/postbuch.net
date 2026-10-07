@@ -31,15 +31,15 @@ PKV-Periode 3 zu tun.
 
 Jede Periode hat genau einen von vier Zuständen:
 
-| Status       | Bedeutung                                                   |
-| ------------ | ----------------------------------------------------------- |
-| `COLLECTING` | offener Sammelkorb – hier landen neue Rechnungen            |
-| `SUBMITTED`  | eingereicht, Bescheid steht aus                             |
-| `COMPLETED`  | ein Erstattungsbescheid ist eingetroffen und zugeordnet     |
-| `OMITTED`    | bewusst nicht eingereicht (z. B. Betrag unter Selbstbehalt) |
+| Status          | Bedeutung                                                   |
+| --------------- | ----------------------------------------------------------- |
+| `SAMMELT`       | offener Sammelkorb – hier landen neue Rechnungen            |
+| `EINGEREICHT`   | eingereicht, Bescheid steht aus                             |
+| `ABGESCHLOSSEN` | ein Erstattungsbescheid ist eingetroffen und zugeordnet     |
+| `AUSGELASSEN`   | bewusst nicht eingereicht (z. B. Betrag unter Selbstbehalt) |
 
 Sobald du für einen Menschen PKV oder Beihilfe einschaltest, legt postbuch.net
-automatisch Periode 1 im Status `COLLECTING` an. Der bei Periodenanlage gültige
+automatisch Periode 1 im Status `SAMMELT` an. Der bei Periodenanlage gültige
 Satz wird **in der Periode gespeichert** – ändert sich später der Beihilfesatz
 (etwa bei Renteneintritt), rechnen abgeschlossene Perioden weiter mit dem alten
 Satz.
@@ -55,18 +55,26 @@ und Verwendungszweck aus.
 ![Fachblock Arztrechnung](screenshots/fachblock-arztrechnung.png)
 
 Außerdem werden alle **Einzelpositionen** mit GOÄ-/GOZ-Ziffer, Faktor,
-Begründung und Betrag erfasst und ausgewiesen.
+Begründung und Betrag erfasst und ausgewiesen. Sie lassen sich anschließend von
+Hand korrigieren, ergänzen oder löschen; ergibt ihre Summe nicht den
+Rechnungsbetrag, gleicht eine Zeile **automatisch ermittelter Differenzbetrag**
+den Unterschied aus ([Einzelpositionen der Rechnung](dokumentansicht.md#einzelpositionen-der-rechnung)).
 
 ![Fachblock Einzelpositionen Arztrechnung](screenshots/dokument-detail-rechnungsblock-arzt-ep.jpg)
 
 ### 2. Rechnung einer Periode zuordnen
 
 Eine **Periode wird dabei ganz automatisch zugewiesen** – und zwar die höchste
-`COLLECTING`-Periode, die zur behandelten Person und zum jeweiligen Kostenträger
+`SAMMELT`-Periode, die zur behandelten Person und zum jeweiligen Kostenträger
 gehört.
 
 Auf der Detailseite der Rechnung stehen die Felder **AP PKV** und **AP
-Beihilfe** (bei Tieren nur PKV). Daneben liegt der **Satz**: Voreingestellt ist
+Beihilfe** (bei Tieren nur PKV). Neben der Periodennummer zeigt ein farbiges
+Kennzeichen den Status dieser Periode. Dasselbe Kennzeichen steht auch oben in
+der Kopfzeile des Rechnungsblocks, etwa „PKV #3 SAMMELT" oder „Beihilfe #2
+EINGEREICHT". Ist die behandelte Person beim Kostenträger versichert, die
+Rechnung aber noch keiner Periode zugeordnet, erscheint dort rot gestrichelt
+„nicht zugeordnet". Daneben liegt der **Satz**: Voreingestellt ist
 der Satz des Menschen, für diese eine Rechnung lässt er sich überschreiben
 (`PKV-Satz` / `Beihilfe-Satz`) – nötig etwa bei Leistungen mit abweichendem
 Erstattungssatz.
@@ -74,15 +82,18 @@ Erstattungssatz.
 > [!CAUTION]
 >
 > Wurde keine behandelte Person erkannt, wird auch keine Periode zugewiesen.
-> Als behandelte Person übernimmt postbuch.net nur einen Menschen mit PKV oder
-> Beihilfe, dessen Kurz- oder Anzeigename bis auf Groß-/Kleinschreibung,
-> Akzente und Leerzeichen eindeutig passt. Einen anderen Namen der KI verwirft
-> es und setzt das Dokument auf „Review nötig". Du
-> musst dann zunächst die behandelte Person (`Patient`) per Hand im Block
-> "Arztrechnung" auswählen. Auch dann wird noch keine automatische
-> Zuordnung zu einer Abrechnungsperiode vorgenommen. Deshalb wählst du danach
-> die offene Sammelperiode. Nur Perioden im Status `COLLECTING` sind wählbar;
-> solange die Periode offen ist, kannst du die Zuordnung auch wieder lösen.
+> Als behandelte Person übernimmt postbuch.net jeden erfassten Menschen und
+> jedes erfasste Tier – auch ohne Versicherung –, dessen Kurz- oder
+> Anzeigename bis auf Groß-/Kleinschreibung, Akzente und Leerzeichen eindeutig
+> passt. Einen anderen Namen der KI verwirft es und setzt das Dokument auf
+> „Review nötig". Du musst dann zunächst die behandelte Person (`Patient`) per
+> Hand in der Auswahlliste im Block "Arztrechnung" wählen. Auch dann wird noch
+> keine automatische Zuordnung zu einer Abrechnungsperiode vorgenommen.
+> Deshalb wählst du danach die offene Sammelperiode. Nur Perioden im Status
+> `SAMMELT` sind wählbar; solange die Periode offen ist, kannst du die
+> Zuordnung auch wieder lösen. Eine Periode gibt es nur für Menschen und Tiere,
+> die beim jeweiligen Kostenträger versichert sind; Rechnungen
+> Nichtversicherter bekommen keine.
 
 ![Archiv-Symbol](icons/archive.svg) **Archivieren löst diese Zuordnung nicht.**
 Eine Rechnung, die einer Periode zugeordnet ist, bleibt darin – auch als
@@ -92,14 +103,15 @@ steht weiter in der aufgeklappten Rechnungsliste (dort mit einem Kästchen
 Das ist Absicht: Eine noch nicht abgerechnete Rechnung soll nicht dadurch aus
 der Einreichung fallen, dass jemand sie weggeräumt hat. Wer sie wirklich aus der
 Periode nehmen will, **setzt das Feld AP auf leer** – solange die Periode
-`COLLECTING` ist, geht das jederzeit.
+`SAMMELT` ist, geht das jederzeit.
 
 ### 3. Bezahlen
 
 Solange `bezahlt am` leer ist, steht die Rechnung unter
 ![Analyse-Symbol](icons/circle-alert.svg) **Analyse → Unbezahlt**. Dafür steht
 der normale Zahlungsblock der Detailseite bereit: GiroCode zum Scannen,
-Kopiersymbole für IBAN & Co. und ein Knopf zum Bestreiten strittiger Beträge –
+Kopiersymbole für IBAN & Co. und im Menü **Rechnung** der Eintrag zum Bestreiten
+strittiger Beträge –
 Details siehe [Zahlung und GiroCode](dokumentansicht.md#zahlung-und-girocode)
 und [Eine Rechnung bestreiten](dokumentansicht.md#eine-rechnung-bestreiten).
 Eine bestrittene Rechnung wird zusätzlich beim Einreichen einer
@@ -142,8 +154,8 @@ im Browser öffnen und prüfen, **bevor** du bestätigst – das ist auch der Mo
 um einen gesetzten Seitenbereich noch einmal gegenzuprüfen.
 
 - ![Bestätigen-Symbol](icons/check.svg) **Bestätigen** setzt die Perioden auf
-  `SUBMITTED`, legt für jede betroffene Person × Kostenträger automatisch die
-  nächste `COLLECTING`-Periode an (Nummer + 1, mit dem heute gültigen Satz) und
+  `EINGEREICHT`, legt für jede betroffene Person × Kostenträger automatisch die
+  nächste `SAMMELT`-Periode an (Nummer + 1, mit dem heute gültigen Satz) und
   räumt die Zwischen-PDFs weg.
 - ![Verwerfen-Symbol](icons/x.svg) **Verwerfen** löscht die Zwischen-PDFs und
   lässt die Perioden unangetastet.
@@ -177,7 +189,7 @@ der Anzahl, den du per Häkchen bestätigen musst, bevor „Abrechnung starten"
 wählbar wird.
 
 Die betroffenen Rechnungen bleiben zunächst in ihrer Periode und werden erst bei
-**Bestätigen** automatisch in die neu angelegte `COLLECTING`-Periode verschoben
+**Bestätigen** automatisch in die neu angelegte `SAMMELT`-Periode verschoben
 – in der Hoffnung, dass sie bis zu deren Abschluss nicht mehr bestritten sind.
 Ist eine Rechnung dann immer noch bestritten, wiederholt sich derselbe Ablauf
 beim nächsten Einreichen.
@@ -220,7 +232,7 @@ Anders als der Prüfblock ist das **Anheften** nicht auf Beihilfe-Kürzungen
 beschränkt: Jedes Dokument – ein Kostenvoranschlag, ein Krankenschein, ein
 Arztbericht – lässt sich über den Knopf ![Anheften-Symbol](icons/pin.svg) **„An
 PKV-/Beihilfeperiode anheften"** im Bereich Akten der Dokument-Detailseite einer
-Person und einer offenen `COLLECTING`-Periode zuordnen, PKV **und/oder**
+Person und einer offenen `SAMMELT`-Periode zuordnen, PKV **und/oder**
 Beihilfe. Der Knopf erscheint nur, wenn überhaupt jemand bei PKV oder Beihilfe
 versichert ist; hat eine Person keine Beihilfe, steht Beihilfe für sie im Dialog
 erst gar nicht zur Auswahl. Ein **Grund** ist dabei Pflichtfeld – ohne Angabe,
@@ -254,12 +266,20 @@ lösen. Nach dem Bestätigen der Abrechnungssession wechselt sie – wie die
 PKV-Prüfvormerkung – automatisch auf „eingereicht" und lässt sich nicht mehr
 zurücknehmen.
 
+Auf der Periodenseite (![Abrechnung-Symbol](icons/calendar-range.svg) **Analyse
+→ Abrechnungsperioden**) trägt jede Periode mit Anheftungen das Badge
+„_n_ angepinnt". Aufgeklappt zeigt sie einen blau hinterlegten Kasten
+![Anheften-Symbol](icons/pin.svg) **Angepinnte Dokumente** mit Postnummer,
+Betreff, Briefdatum und Grund jedes Dokuments; ein Klick öffnet das Dokument.
+Noch nicht eingereichte Anheftungen lassen sich dort direkt lösen, eingereichte
+tragen das Badge „Eingereicht".
+
 #### Korrekten Abschluss der Periode nicht vergessen
 
 ![Abschlussansicht Abrechnungsassistent](screenshots/einreichungsassistent-abschluss.png)
 
 Erst nachdem du die Abrechnungssession **bestätigt** hast, wird die
-Abrechnungsperiode auf `SUBMITTED` gesetzt. Das ist der Moment, in dem die
+Abrechnungsperiode auf `EINGEREICHT` gesetzt. Das ist der Moment, in dem die
 Rechnungen offiziell beim Kostenträger eingereicht sind. Da postbuch.net das
 nicht für dich erledigen kann, musst du im allerletzten Schritt per Häkchen
 bestätigen, dass du die Abrechnung tatsächlich **hochgeladen** hast – erst dann
@@ -280,7 +300,7 @@ Dokumente:
    Layout des Kostenträgers zusätzlich, liest sie zuverlässiger – siehe
    [Kostenträger-Profile](ki-provider.md#kostenträger-profile).
 2. **Zuordnen.** Jede Position wird gegen die **eingereichten** Rechnungen –
-   also solche, die in einer `SUBMITTED`-Periode stehen – gematcht: gleiche
+   also solche, die in einer `EINGEREICHT`-Periode stehen – gematcht: gleiche
    Person, Rechnungsbetrag auf den Cent genau, noch nicht vergeben. Gibt es
    mehrere Kandidaten, entscheidet die Nähe des Rechnungsdatums zum Bezugsdatum.
    Liefert das kein eindeutiges Ergebnis – Bezugsdatum fehlt, ein Kandidat hat
@@ -295,7 +315,7 @@ Dokumente:
 4. **Perioden bewerten.** Für jede eingereichte Periode, aus der Rechnungen im
    Bescheid auftauchen, wird anhand der Zuordnungen entschieden:
    - **vollständig abgerechnet** – alle Rechnungen der Periode stehen im
-     Bescheid: die Periode geht auf `COMPLETED` und merkt sich die PostID des
+     Bescheid: die Periode geht auf `ABGESCHLOSSEN` und merkt sich die PostID des
      Bescheids.
    - **teilweise abgerechnet** – die abgerechneten Rechnungen bleiben in der
      jetzt abgeschlossenen Periode, die übrigen wandern automatisch in eine neue
@@ -326,7 +346,7 @@ abrechnet – etwa weil Belege noch geprüft werden. Damit die übrigen Rechnung
 nicht in einer abgeschlossenen Periode verschwinden, legt postbuch.net dafür
 automatisch eine **Restperiode** an:
 
-- Sie bekommt die nächste freie Periodennummer und startet im Status `SUBMITTED`
+- Sie bekommt die nächste freie Periodennummer und startet im Status `EINGEREICHT`
   – die Rechnungen gelten weiterhin als eingereicht.
 - Sie übernimmt den gespeicherten Satz der Ursprungsperiode, dazu angeheftete
   Dokumente und PKV-Prüfvormerkungen der mitgenommenen Rechnungen.
@@ -348,15 +368,15 @@ passiert nichts weiter, d. h. die Restperiode wartet weiter auf den nächsten
 Bescheid. Du kannst sie aber auch:
 
 - **erneut einreichen**: mit ![Zurück-Symbol](icons/rotate-ccw.svg)
-  **Zurückstufen** auf `COLLECTING` setzen und über den
+  **Zurückstufen** auf `SAMMELT` setzen und über den
   [Abrechnungs-Assistenten](#4-periode-einreichen--der-abrechnungs-assistent)
   neu einreichen – etwa weil du davon ausgehst, dass ein Beleg übersehen wurde
   –,
-- **zusammenlegen**: nach dem Zurückstufen mit einer anderen`COLLECTING`-Periode
+- **zusammenlegen**: nach dem Zurückstufen mit einer anderen `SAMMELT`-Periode
   ![Zusammenführen-Symbol](icons/combine.svg) **zusammenführen**,
 - **aufgeben**: nach dem Zurückstufen
   ![Überspringen-Symbol](icons/skip-forward.svg) **verzichten**, dann steht sie
-  auf `OMITTED`.
+  auf `AUSGELASSEN`.
 
 Sobald eine Restperiode in eine andere Periode zusammengeführt oder gelöscht
 wird, entfällt die Herkunftsangabe – die zusammengelegten Rechnungen stammen
@@ -374,7 +394,7 @@ Rechnung zu. Das geht nicht automatisch, sondern nur manuell.
 > Korrekturanweisung), eine Zuordnung **von Hand geändert** oder der Bescheid
 > **gelöscht**, bewertet postbuch.net die betroffenen Perioden neu: zuvor
 > angelegte Restperioden werden wieder aufgelöst und ihre Rechnungen
-> zurückgebucht, abgeschlossene Perioden gehen zurück auf `SUBMITTED`. Eine
+> zurückgebucht, abgeschlossene Perioden gehen zurück auf `EINGEREICHT`. Eine
 > Restperiode, an der du inzwischen weitergearbeitet hast – zurückgestuft,
 > selbst abgerechnet oder erneut geteilt –, bleibt dabei unangetastet; das
 > vermerkt das Anwendungsprotokoll.
@@ -393,6 +413,30 @@ beträgt, fehlen dir real 70 €. Die Liste zeigt direkt diesen umgerechneten
 Betrag; die Aufschlüsselung „70,00 € (100,00 € × 70 %)" steht an der
 zugrundeliegenden Rechnung selbst (siehe
 [Kürzungen bearbeiten](dokumentansicht.md#kürzungen-bearbeiten)).
+
+Die Liste ist nach Bescheiden gruppiert; die Summe oben rechts gilt für die
+gerade angezeigte Auswahl. Alle Filter liegen hinter dem Knopf
+![Filter-Symbol](icons/sliders-horizontal.svg) **Filter**, daneben stehen die
+aktiven Filter und der Excel-Knopf. Ein Klick auf einen aktiven Filter öffnet
+die Auswahl, das ✕ an einem Filter setzt ihn zurück:
+
+- **Status** – **Offen (ungesehen)** (Standard), **Gesehen** oder **Alle**,
+  siehe [Kürzungen als gesehen markieren](#kürzungen-als-gesehen-markieren).
+- **Person** – behandelte Personen in Mehrfachauswahl, dazu **Ohne Person**
+  für Kürzungen ohne zugeordneten Patienten. Erscheint ab zwei Auswahlwerten.
+- **Kostenträger** – PKV, Beihilfe oder beide.
+- **Bescheidjahr** – Jahr des Bescheiddatums in Mehrfachauswahl.
+
+Kommst du vom Dashboard mit aktivem
+[Personenfilter](oberflaeche.md#dashboard) oder über eine Prüfvormerkung der
+Periodenseite hierher, sind die passenden Personen bzw. **PKV-Prüfung
+Periode #…** bereits als Filter gesetzt.
+
+Der Knopf ![Excel-Symbol](icons/file-spreadsheet.svg) **Excel** lädt genau die
+angezeigte Auswahl als Excel-Datei herunter: ein Blatt mit allen Kürzungen
+einzeln (Bescheid, Kostenträger, Arztrechnung, Patient, Leistung, gekürzter
+Betrag, umgerechneter Kürzungsbetrag, Begründung, Status) und ein Blatt
+**Summen** je Person und Kostenträger.
 
 Kürzungen, die die KI nicht gefunden oder falsch zugeordnet hat, werden am
 Bescheid selbst nachgetragen und korrigiert – siehe
@@ -419,7 +463,7 @@ Viele private Zusatzversicherungen erstatten über einen
 genau diesen Fall lässt sich eine Beihilfe-Kürzung mit
 ![Lesezeichen-Symbol](icons/bookmark-plus.svg) **Für PKV-Prüfung vormerken**
 kennzeichnen (nur bei Kostenträger Beihilfe verfügbar). Die Vormerkung hängt an
-der nächsten `COLLECTING`-PKV-Periode derselben Person und läuft automatisch mit
+der nächsten `SAMMELT`-PKV-Periode derselben Person und läuft automatisch mit
 ins Abrechnungspaket, sobald diese Periode eingereicht wird – siehe
 [Prüfblock für die PKV](#4-periode-einreichen--der-abrechnungs-assistent).
 Solange sie offen ist, zeigt die Kürzung das Badge **PKV-Prüfung vorgemerkt**;
@@ -438,8 +482,9 @@ die Vormerkung noch nicht eingereicht ist, und landet beim Einreichen im
 Vorblatt des Prüfblocks (siehe oben).
 
 Auf der Periodenseite (![Abrechnung-Symbol](icons/calendar-range.svg) **Analyse
-→ Abrechnungsperioden**) zeigt jede PKV-Periode mit Vormerkungen zusätzlich
-einen gelb hinterlegten Kasten **Prüffälle**: eine kompakte Liste der
+→ Abrechnungsperioden**) trägt jede PKV-Periode mit Vormerkungen das Badge
+„_n_ zur Prüfung" und zeigt aufgeklappt einen gelb hinterlegten Kasten
+**Prüffälle**: eine kompakte Liste der
 vorgemerkten und bereits eingereichten Kürzungen dieser Periode, mit direktem
 Link zur Kürzungsübersicht und – solange noch vorgemerkt – demselben
 ![Lesezeichen-Symbol](icons/bookmark-x.svg)-Knopf zum Entfernen.
@@ -456,10 +501,10 @@ dass etwas schiefging, gibt es manuelle Eingriffe:
 
 | Aktion                                                                  | Wirkung                                                               |
 | ----------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| ![Abschließen-Symbol](icons/check-circle-2.svg) **Abschließen**        | springt direkt in den [Abrechnungs-Assistenten](#4-periode-einreichen--der-abrechnungs-assistent), um eine COLLECTING-Periode einzureichen |
-| ![Zurück-Symbol](icons/rotate-ccw.svg) **Zurückstufen**                 | `SUBMITTED` → `COLLECTING`, falls du doch nicht eingereicht oder die Einreichung zurückgezogen hast |
-| ![Überspringen-Symbol](icons/skip-forward.svg) **Verzichten (OMITTED)** | Periode wird nicht eingereicht; eine neue Sammelperiode entsteht      |
-| ![Wiederholen-Symbol](icons/rotate-ccw.svg) **Verzicht aufheben**       | `OMITTED` → `COLLECTING`                                              |
+| ![Abschließen-Symbol](icons/check-circle-2.svg) **Abschließen**        | springt direkt in den [Abrechnungs-Assistenten](#4-periode-einreichen--der-abrechnungs-assistent), um eine SAMMELT-Periode einzureichen |
+| ![Zurück-Symbol](icons/rotate-ccw.svg) **Zurückstufen**                 | `EINGEREICHT` → `SAMMELT`, falls du doch nicht eingereicht oder die Einreichung zurückgezogen hast |
+| ![Überspringen-Symbol](icons/skip-forward.svg) **Verzichten (AUSGELASSEN)** | Periode wird nicht eingereicht; eine neue Sammelperiode entsteht      |
+| ![Wiederholen-Symbol](icons/rotate-ccw.svg) **Verzicht aufheben**       | `AUSGELASSEN` → `SAMMELT`                                              |
 | ![Löschen-Symbol](icons/trash-2.svg) **Höchste Sammelperiode löschen**  | Rechnungen wandern in die nächstniedrigere offene Sammelperiode       |
 | ![Zusammenführen-Symbol](icons/combine.svg) **Zusammenführen**          | eine Sammelperiode in eine andere schieben                            |
 | ![Löschen-Symbol](icons/trash-2.svg) **Zuordnung nullen**               | Periode löschen und die Periodenzuordnung ihrer Rechnungen leeren     |
@@ -476,7 +521,7 @@ automatisch weggeräumt.
 
 Hängt an einer PKV-Periode eine offene [PKV-Prüfvormerkung](#kürzungen-ansehen),
 wirkt sich das auf diese Aktionen aus: **Verzichten** sowie ein direkter
-Statuswechsel auf `SUBMITTED` außerhalb des Abrechnungs-Assistenten – etwa
+Statuswechsel auf `EINGEREICHT` außerhalb des Abrechnungs-Assistenten – etwa
 **Wiederholen** nach einem **Zurückstufen** – lehnt postbuch.net ab, solange
 die Vormerkung offen ist; erst verschieben oder entfernen. Die reguläre
 Einreichung über den

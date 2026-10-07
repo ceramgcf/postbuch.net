@@ -32,6 +32,19 @@ export function supportsAdaptiveThinking(model) {
   return ADAPTIVE_THINKING_RE.test(String(model || ''));
 }
 
+// Modelle, auf denen sich Thinking nicht abschalten lässt: thinking:{type:'disabled'}
+// beantwortet die API dort mit 400 (Fable 5/5.1, Mythos, Opus ab 5.5). Einzige
+// Stellschraube ist `effort`. Bei Opus 5 gilt das noch nicht ('claude-opus-5' und
+// datierte Suffixe wie '-20260401' bleiben abschaltbar).
+const THINKING_PFLICHT_RE = /^claude-(fable-5|mythos-5|mythos-preview)(-\d+)?$|^claude-opus-5-([5-9]|\d{2})$/;
+
+export function thinkingAbschaltbar(model) {
+  return !THINKING_PFLICHT_RE.test(String(model || ''));
+}
+
+/** Effort, mit dem ein nicht abschaltbares Thinking so knapp wie möglich läuft. */
+export const MINIMAL_EFFORT = 'low';
+
 // Effort-Default für den In-App-Pfad. Bewusst 'low': der bisherige Default
 // (kein effort-Feld gesetzt = 'high') war die Hauptursache der 50-270s-
 // Antwortzeiten. 'medium' bleibt als manuelle Eskalationsstufe verfügbar,
@@ -49,15 +62,27 @@ export const PROFILIERUNG_EFFORT = 'high';
  * @param {string}  params.model
  * @param {boolean} [params.viaMcp] - true = Anfrage kam über den MCP-Connector
  * @param {'interaktiv'|'profilierung'} [params.zweck]
- * @returns {{ mode: 'none'|'explicit-off'|'adaptive', effort: ?string }}
+ * @returns {{ mode: 'none'|'explicit-off'|'minimal'|'adaptive', effort: ?string }}
  *   mode 'none':         Modell kennt Thinking nicht (oder nicht adaptiv) — Wire-Felder weglassen.
  *   mode 'explicit-off': Modell denkt per Default — explizit thinking:{type:'disabled'} senden.
+ *   mode 'minimal':      Ausschalten gewünscht, aber vom Modell nicht erlaubt — adaptiv mit
+ *                        MINIMAL_EFFORT, unsichtbar (kein display-Feld).
  *   mode 'adaptive':     thinking:{type:'adaptive'} + effort setzen, sichtbar (display:'summarized').
  */
 export function resolveThinkingPolicy({ model, viaMcp = false, zweck = 'interaktiv' }) {
   if (!supportsAdaptiveThinking(model)) return { mode: 'none', effort: null };
-  if (viaMcp) return { mode: 'explicit-off', effort: null };
+  if (viaMcp) return thinkingAus(model);
   return { mode: 'adaptive', effort: zweck === 'profilierung' ? PROFILIERUNG_EFFORT : IN_APP_EFFORT };
+}
+
+/**
+ * Policy für „Thinking aus": explizit abschalten, wo das Modell es erlaubt,
+ * sonst auf minimalen Effort drosseln (mode 'minimal').
+ */
+export function thinkingAus(model) {
+  return thinkingAbschaltbar(model)
+    ? { mode: 'explicit-off', effort: null }
+    : { mode: 'minimal', effort: MINIMAL_EFFORT };
 }
 
 // ── Reasoning-Effort-Capability-Learning (OpenAI-kompatibel) ─────────────────

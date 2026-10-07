@@ -90,6 +90,12 @@ export function FilterBar({ filters, onChange, onClose, showHistorisch }) {
   const hasPerson = !!filters.person && !ohnePerson;
   const personAsAdressat = hasPerson ? filters.person_as_adressat !== 'false' : true;
   const personAsPatient = hasPerson ? filters.person_as_patient === 'true' : false;
+  // Mehrere Personen kommen kommagetrennt vom Dashboard-Personenfilter; die
+  // Auswahlliste zeigt sie als eigene Option, ein Wechsel ersetzt sie.
+  const mehrerePersonen = !!filters.person?.includes(',');
+  const mehrerePersonenLabel = mehrerePersonen
+    ? filters.person.split(',').map((p) => (p === PERSON_OHNE ? '(ohne)' : p)).join(', ')
+    : '';
 
   const clear = () => {
     onChange({ sort: 'briefdatum', order: 'desc', limit: 50, offset: 0 });
@@ -244,6 +250,7 @@ export function FilterBar({ filters, onChange, onClose, showHistorisch }) {
                 className={cn(filters.person && 'border-primary/60 bg-primary/5 text-primary font-medium')}
               >
                 <option value="">Alle Personen</option>
+                {mehrerePersonen && <option value={filters.person}>{mehrerePersonenLabel}</option>}
                 {personOptions.map((p) => (
                   <option key={p} value={p}>{p}</option>
                 ))}

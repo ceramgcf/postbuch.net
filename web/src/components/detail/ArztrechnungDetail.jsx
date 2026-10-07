@@ -1,98 +1,35 @@
-import { useState, Fragment } from 'react';
+import { useState } from 'react';
 import { Link, useLocation } from 'react-router';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '@/api/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { formatDate, formatCurrency, formatIban, cn } from '@/lib/utils';
 import { Pencil, Check, X, Trash2, Plus } from 'lucide-react';
-import { useMarkPaid, useCollectingPerioden, useSetArztrechnungAP, useSetArztrechnungSatz, useUpdateArztrechnung, useSetErstattungZuordnung } from '@/hooks/usePostbuch';
+import { useCollectingPerioden, useSetArztrechnungAP, useSetArztrechnungSatz, useUpdateArztrechnung, useSetErstattungZuordnung } from '@/hooks/usePostbuch';
 import { useUndoHistory } from '@/hooks/useUndoHistory';
 import { CopyableField } from './CopyableField';
 import { GiroCode } from './GiroCode';
+import { ZahlungField, offenerRestbetrag } from './ZahlungField';
 import { useAuth } from '@/hooks/useAuth';
 import { SymLinkButton } from './SymLinkButton';
 import { ErstattungAttachDialog } from './ErstattungAttachDialog';
-import { DisputeAction, DisputeStatus } from './DisputeField';
-import { InvalidateRechnungAction } from './InvalidateRechnungAction';
-import { positionToken, rechnungToken } from '@/lib/erstattung';
+import { DisputeStatus } from './DisputeField';
+import { RechnungMenu, ErsetzungHinweis } from './RechnungMenu';
+import { rechnungToken } from '@/lib/erstattung';
 import { getDokumentartMeta } from '@/components/postbuch/ArtBadge';
 import { KuerzungStatusActions } from './KuerzungStatusActions';
-
-function BezahldatumField({ postid, bezahlt_am }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
-  const { mutate: markPaid, mutateAsync: markPaidAsync, isPending } = useMarkPaid();
-  const { pushAction } = useUndoHistory();
-  const { canWrite } = useAuth();
-
-  function startEdit() {
-    setDraft(bezahlt_am ? bezahlt_am.split('T')[0] : '');
-    setEditing(true);
-  }
-  function save() {
-    const oldDate = bezahlt_am ? bezahlt_am.split('T')[0] : null;
-    const newDate = draft || null;
-    markPaid({ postid, date: newDate }, {
-      onSuccess: () => {
-        setEditing(false);
-        pushAction('Bezahldatum geändert', () => markPaidAsync({ postid, date: oldDate }), () => markPaidAsync({ postid, date: newDate }));
-      },
-    });
-  }
-  function remove() {
-    const oldDate = bezahlt_am ? bezahlt_am.split('T')[0] : null;
-    markPaid({ postid, date: null }, {
-      onSuccess: () => {
-        setEditing(false);
-        pushAction('Als offen markiert', () => markPaidAsync({ postid, date: oldDate }), () => markPaidAsync({ postid, date: null }));
-      },
-    });
-  }
-
-  return (
-    <div>
-      <div className="flex items-center gap-1.5 mb-1">
-        <dt className="text-muted-foreground">Bezahlt am</dt>
-        {!editing && canWrite && (
-          <button onClick={startEdit} className="text-muted-foreground/30 hover:text-muted-foreground transition-colors" title="Bezahldatum bearbeiten">
-            <Pencil className="h-3 w-3" />
-          </button>
-        )}
-      </div>
-      {editing ? (
-        <div className="space-y-1.5">
-          <Input type="date" value={draft} onChange={e => setDraft(e.target.value)} className="h-7 text-sm w-[160px]" />
-          <div className="flex items-center gap-1.5">
-            <Button size="sm" onClick={save} disabled={isPending} className="h-6 px-2.5 text-xs gap-1">
-              <Check className="h-3 w-3" />{isPending ? 'Speichern…' : 'Speichern'}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={isPending} className="h-6 px-2 text-xs gap-1 text-muted-foreground">
-              <X className="h-3 w-3" />Abbrechen
-            </Button>
-            <Button variant="ghost" size="sm" onClick={remove} disabled={isPending} className="h-6 px-2 text-xs gap-1 text-destructive/60 hover:text-destructive ml-auto" title="Als offen markieren">
-              <Trash2 className="h-3 w-3" />Entfernen
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <dd className="font-medium">
-          {bezahlt_am
-            ? <span className="text-green-600">{formatDate(bezahlt_am)}</span>
-            : <span className="text-amber-600">Offen</span>
-          }
-        </dd>
-      )}
-    </div>
-  );
-}
+import { ArztPositionenCard } from './ArztPositionenCard';
+import { PERIODEN_STATUS_STYLE, periodenStatusLabel } from '@/lib/periodenStatus';
 
 /**
  * Inline-Editor für ein Feld der Arztrechnung.
  * type: 'text' | 'date' | 'number'
  * format: optionale Anzeige-Formatierungsfunktion
+ * options: [{ value, label }] – statt Freitext eine Auswahlliste
  */
 function EditableField({
   label, value, postid, field,
@@ -102,10 +39,11 @@ function EditableField({
   emphasized = false,
   placeholder,
   inputClassName,
+  options,
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
-  const { mutate, mutateAsync, isPending } = useUpdateArztrechnung();
+  const { mutate, mutateAsync, isPending, error, reset } = useUpdateArztrechnung();
   const { pushAction } = useUndoHistory();
   const { canWrite } = useAuth();
 
@@ -117,6 +55,7 @@ function EditableField({
     } else {
       setDraft(value != null ? String(value) : '');
     }
+    reset();
     setEditing(true);
   }
 
@@ -173,7 +112,17 @@ function EditableField({
       </div>
       {editing ? (
         <div className="space-y-1.5">
-          <Input
+          {options ? (
+            <select
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              className="h-7 w-full max-w-[260px] rounded-md border border-input bg-background px-2 text-sm"
+              autoFocus
+            >
+              <option value="">– keine Angabe –</option>
+              {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          ) : <Input
             type={type === 'number' ? 'text' : type}
             inputMode={type === 'number' ? 'decimal' : undefined}
             value={draft}
@@ -181,8 +130,9 @@ function EditableField({
             placeholder={placeholder}
             className={`h-7 text-sm ${inputClassName || (type === 'date' ? 'w-[160px]' : 'w-full max-w-[260px]')}`}
             autoFocus
-          />
-          <div className="flex items-center gap-1.5">
+          />}
+          {error && <p className="text-xs text-destructive">{error.message}</p>}
+          <div className="flex flex-wrap items-center gap-1.5">
             <Button size="sm" onClick={save} disabled={isPending} className="h-6 px-2.5 text-xs gap-1">
               <Check className="h-3 w-3" />{isPending ? 'Speichern…' : 'Speichern'}
             </Button>
@@ -204,11 +154,42 @@ function EditableField({
 }
 
 /**
+ * Status der Abrechnungsperiode, in der die Rechnung bei einem Kostenträger
+ * steht. Ohne Periodenzuordnung erscheint „nicht zugeordnet", damit eine
+ * vergessene Einreichung sofort auffällt.
+ */
+function PeriodenStatusBadge({ kostentraeger, periode, status, mitKostentraeger = false }) {
+  const zugeordnet = periode != null;
+  const text = zugeordnet
+    ? (status ? periodenStatusLabel(status) : 'unbekannt')
+    : 'nicht zugeordnet';
+  const titel = zugeordnet
+    ? `${kostentraeger}: Abrechnungsperiode ${periode}${status ? ` – ${periodenStatusLabel(status)}` : ''}`
+    : `${kostentraeger}: keiner Abrechnungsperiode zugeordnet`;
+  return (
+    <Badge
+      variant="outline"
+      title={titel}
+      className={cn(
+        'text-[10px] px-1.5 py-0 font-medium',
+        zugeordnet && status
+          ? PERIODEN_STATUS_STYLE[status]
+          : 'text-red-700 bg-red-50 border-red-200 border-dashed',
+      )}
+    >
+      {mitKostentraeger && `${kostentraeger} `}
+      {mitKostentraeger && zugeordnet && `#${periode} `}
+      {text}
+    </Badge>
+  );
+}
+
+/**
  * Zeigt eine AP-Zelle (PKV oder Beihilfe) mit optionalem Lösen- (🗑️) oder Zuordnen-Button (+).
  * Lösen: nur sichtbar wenn die zugeordnete Periode noch COLLECTING ist.
  * Zuordnen: nur sichtbar wenn keine Periode zugeordnet ist und eine COLLECTING-Periode existiert.
  */
-function APField({ label, kostentraeger, periode, person, collectingPerioden, setAPMutation, onConfirmDetach, postid }) {
+function APField({ label, kostentraeger, periode, status, versichert, person, collectingPerioden, setAPMutation, onConfirmDetach, postid }) {
   const periodeNum = periode != null ? Number(periode) : null;
   const { pushAction } = useUndoHistory();
   const { canWrite } = useAuth();
@@ -244,6 +225,9 @@ function APField({ label, kostentraeger, periode, person, collectingPerioden, se
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="font-medium flex items-center gap-1.5">
         <span>{periodeNum ?? '–'}</span>
+        {(periodeNum !== null || versichert) && (
+          <PeriodenStatusBadge kostentraeger={kostentraeger} periode={periodeNum} status={status} />
+        )}
         {isCurrentCollecting && canWrite && (
           <button
             title={`Von ${label} lösen`}
@@ -334,7 +318,7 @@ function SatzOverrideField({ label, field, overrideValue, personSatz, postid }) 
             Leer lassen = Standardsatz aus Personenkonfiguration
             {personSatz != null ? ` (${personSatz} %)` : ' (nicht konfiguriert)'}
           </p>
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <Button size="sm" onClick={save} disabled={isPending} className="h-6 px-2.5 text-xs gap-1">
               <Check className="h-3 w-3" />{isPending ? 'Speichern…' : 'Speichern'}
             </Button>
@@ -447,7 +431,7 @@ function EinreichungSeitenField({ postid, von, bis }) {
             <p className="text-[11px] text-destructive">Beide Felder leer (= ganzes Dokument) oder beide gültig, "bis" ≥ "von"</p>
           )}
           <p className="text-[11px] text-muted-foreground">Leer lassen = ganzes Dokument wird eingereicht</p>
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <Button size="sm" onClick={save} disabled={isPending || !gueltig} className="h-6 px-2.5 text-xs gap-1">
               <Check className="h-3 w-3" />{isPending ? 'Speichern…' : 'Speichern'}
             </Button>
@@ -485,6 +469,11 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
   const [attachOpen, setAttachOpen] = useState(false);
   // confirmErstattungDetach: { eb_postid, eb_subid } oder null
   const [confirmErstattungDetach, setConfirmErstattungDetach] = useState(null);
+  const { data: personenData } = useQuery({
+    queryKey: ['personen'],
+    queryFn: () => api.personen.list(),
+    staleTime: 5 * 60 * 1000,
+  });
 
   if (!data) return null;
 
@@ -494,6 +483,21 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
   const istTier = istTierProp;
   const typLabel = getDokumentartMeta(String(data.typ || '').toLowerCase())?.label || data.typ || 'Arztrechnung';
   const titel = istTier ? (data.typ === 'arztrechnung' ? 'Tierarztrechnung' : `Tier-${typLabel}`) : typLabel;
+
+  // Behandelt werden kann jeder erfasste Mensch und jedes Tier, auch ohne
+  // Versicherung; Archivierte nur, wenn sie schon eingetragen sind.
+  const behandeltOptionen = (personenData?.data || [])
+    .filter((p) => !p.archiviert || p.kurzname === data.behandelte_person)
+    .map((p) => ({ value: p.kurzname, label: p.ist_tier ? `${p.kurzname} (Tier)` : p.kurzname }));
+  if (data.behandelte_person && !behandeltOptionen.some((o) => o.value === data.behandelte_person)) {
+    behandeltOptionen.unshift({ value: data.behandelte_person, label: data.behandelte_person });
+  }
+
+  // Abrechnungsstatus je Kostenträger: relevant, wenn die behandelte Person
+  // (oder das Tier) dort versichert ist oder die Rechnung bereits einer
+  // Periode zugeordnet wurde. Tiere haben keine Beihilfe.
+  const pkvRelevant = data.personen_pkv === true || data.abrechnungsperiode_pkv != null;
+  const beihilfeRelevant = !istTier && (data.personen_beihilfe === true || data.abrechnungsperiode_beihilfe != null);
 
   // Einzelpositionen, die von einer Kürzung betroffen sind
   const affectedSubids = new Set(
@@ -512,16 +516,22 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
 
   return (
     <div className="space-y-4">
+      <ErsetzungHinweis postid={data.postid} ersetzung={data.ersetzung} />
       <Card>
         <CardHeader className="pb-3 flex-row items-center justify-between gap-3 flex-wrap space-y-0">
-          <CardTitle className="text-base flex items-center gap-2">
+          <CardTitle className="text-base flex items-center gap-2 flex-wrap">
             {titel}
             <span className="font-mono text-xs text-muted-foreground font-normal">{data.postid}</span>
             <SymLinkButton token={rechnungToken(data.postid)} title="Rechnungs-SymLink kopieren" />
+            {pkvRelevant && (
+              <PeriodenStatusBadge kostentraeger="PKV" periode={data.abrechnungsperiode_pkv} status={data.abrechnungsperiode_pkv_status} mitKostentraeger />
+            )}
+            {beihilfeRelevant && (
+              <PeriodenStatusBadge kostentraeger="Beihilfe" periode={data.abrechnungsperiode_beihilfe} status={data.abrechnungsperiode_beihilfe_status} mitKostentraeger />
+            )}
           </CardTitle>
           <div className="flex items-center gap-2 flex-wrap">
-            <DisputeAction postid={data.postid} gesamtbetrag={data.gesamtbetrag} bestritten_betrag={data.bestritten_betrag} />
-            <InvalidateRechnungAction postid={data.postid} />
+            <RechnungMenu data={data} />
           </div>
         </CardHeader>
         <CardContent>
@@ -539,6 +549,7 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
               field="behandelte_person"
               value={data.behandelte_person}
               type="text"
+              options={behandeltOptionen}
             />
             <EditableField
               label="Re-Nr."
@@ -573,8 +584,8 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
               format={formatCurrency}
               emphasized
             />
-            <BezahldatumField postid={data.postid} bezahlt_am={data.bezahlt_am} />
-            <DisputeStatus gesamtbetrag={data.gesamtbetrag} bestritten_betrag={data.bestritten_betrag} />
+            <ZahlungField postid={data.postid} bezahlt_am={data.bezahlt_am} zahlung={data.zahlung} ersetzung={data.ersetzung} />
+            <DisputeStatus gesamtbetrag={data.gesamtbetrag} bestritten_betrag={data.bestritten_betrag} offen={offenerRestbetrag(data)} />
             <EditableField
               label="IBAN"
               postid={data.postid}
@@ -610,6 +621,8 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
               label="AP PKV"
               kostentraeger="PKV"
               periode={data.abrechnungsperiode_pkv}
+              status={data.abrechnungsperiode_pkv_status}
+              versichert={pkvRelevant}
               person={data.behandelte_person}
               postid={data.postid}
               collectingPerioden={collectingPerioden}
@@ -620,6 +633,8 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
               label="AP Beihilfe"
               kostentraeger="Beihilfe"
               periode={data.abrechnungsperiode_beihilfe}
+              status={data.abrechnungsperiode_beihilfe_status}
+              versichert={beihilfeRelevant}
               person={data.behandelte_person}
               postid={data.postid}
               collectingPerioden={collectingPerioden}
@@ -649,7 +664,7 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
       </Card>
 
       {/* Zahlung – nur bei offenen Rechnungen */}
-      {!data.bezahlt_am && Number(data.gesamtbetrag || 0) > Number(data.bestritten_betrag || 0) && (data.iban || data.kontoinhaber || data.name_arzt) && (
+      {offenerRestbetrag(data) > 0 && (data.iban || data.kontoinhaber || data.name_arzt) && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Zahlung</CardTitle>
@@ -671,9 +686,7 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
                 />
                 <CopyableField
                   label="Betrag"
-                  value={data.gesamtbetrag
-                    ? (parseFloat(data.gesamtbetrag) - parseFloat(data.bestritten_betrag || 0)).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                    : null}
+                  value={offenerRestbetrag(data).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   highlight
                 />
                 {data.verwendungszweck && (
@@ -688,7 +701,7 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
               <GiroCode
                 iban={data.iban}
                 name={data.kontoinhaber || data.name_arzt}
-                amount={parseFloat(data.gesamtbetrag) - parseFloat(data.bestritten_betrag || 0)}
+                amount={offenerRestbetrag(data)}
                 reference={data.verwendungszweck}
                 size={150}
               />
@@ -698,57 +711,12 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
       )}
 
       {/* Einzelpositionen */}
-      {data.einzelpositionen?.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Einzelpositionen</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>#</TableHead>
-                  <TableHead>Datum</TableHead>
-                  <TableHead>{istTier ? 'GOT / PZN' : 'Ziffer'}</TableHead>
-                  <TableHead>Leistung</TableHead>
-                  <TableHead>Faktor</TableHead>
-                  <TableHead className="text-right">Betrag</TableHead>
-                  <TableHead className="w-8"><span className="sr-only">SymLink</span></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {data.einzelpositionen.map((pos) => (
-                  <Fragment key={pos.subid}>
-                    <TableRow className={cn(
-                      pos.begruendung && 'border-0',
-                      affectedSubids.has(pos.subid) ? 'text-red-600' : undefined,
-                    )}>
-                      <TableCell className={affectedSubids.has(pos.subid) ? 'text-red-400' : 'text-muted-foreground'}>{pos.subid}</TableCell>
-                      <TableCell className="whitespace-nowrap">{formatDate(pos.behandlungs_datum)}</TableCell>
-                      <TableCell className="font-mono text-xs">{pos.goa_goz_gebueh_pzn || '–'}</TableCell>
-                      <TableCell>{pos.leistung || '–'}</TableCell>
-                      <TableCell>{pos.faktor ? `${pos.faktor}×` : '–'}</TableCell>
-                      <TableCell className="text-right font-mono">{formatCurrency(pos.betrag)}</TableCell>
-                      <TableCell className="text-right">
-                        <SymLinkButton token={positionToken(data.postid, pos.subid)} title="Positions-SymLink kopieren" />
-                      </TableCell>
-                    </TableRow>
-                    {pos.begruendung && (
-                      <TableRow className="hover:bg-transparent">
-                        <TableCell />
-                        <TableCell colSpan={6} className="pt-0 text-xs text-muted-foreground align-top">
-                          <span className="font-medium text-foreground/70">{istTier ? 'Begründung: ' : 'Begründung (Faktor > 2,3): '}</span>
-                          {pos.begruendung}
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </Fragment>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      )}
+      <ArztPositionenCard
+        postid={data.postid}
+        positionen={data.einzelpositionen || []}
+        istTier={istTier}
+        affectedSubids={affectedSubids}
+      />
 
       {/* Verknüpfte Erstattungen */}
       {(data.erstattungen?.length > 0 || canWrite) && (

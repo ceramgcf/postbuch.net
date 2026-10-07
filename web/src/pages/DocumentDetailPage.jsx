@@ -37,6 +37,7 @@ const routeLabels = {
   '/analyse/kuerzungen': 'Kürzungen',
   '/analyse/perioden': 'Abrechnungsperioden',
   '/analyse/handwerker': 'Handwerker',
+  '/analyse/gesundheitskosten': 'Gesundheitskosten',
   '/assistent': 'Zurück zum Chat',
 };
 
@@ -238,6 +239,9 @@ export default function DocumentDetailPage() {
   const hasRechnung = !!arztrechnung || !!handwerkerrechnung || !!generischeRechnung;
   const bezahltAm = arztrechnung?.bezahlt_am || handwerkerrechnung?.bezahlt_am || generischeRechnung?.bezahlt_am;
   const isBezahlt = !!bezahltAm;
+  // Eine durch eine Korrekturrechnung ersetzte Rechnung ist erledigt; Zahlungen
+  // werden auf der Nachfolgerin geführt.
+  const istErsetzt = !!(arztrechnung || handwerkerrechnung || generischeRechnung)?.ersetzung?.ersetzt_durch;
 
   // ── Portrait-PDF-Modus (nur Mobile, nur Hochformat) ──────────────────────────
   // Wenn der Nutzer sein Smartphone hochkant dreht: nur den PDF-Viewer anzeigen.
@@ -434,7 +438,7 @@ export default function DocumentDetailPage() {
         postid={postid}
         currentStatus={postbuch.status}
         art={postbuch.art}
-        hasRechnung={hasRechnung}
+        hasRechnung={hasRechnung && !istErsetzt}
         isBezahlt={isBezahlt}
         isHistorisch={!!postbuch.historisch}
         hatPdf={!!postbuch.hatPdf}
@@ -715,7 +719,7 @@ export default function DocumentDetailPage() {
                   </label>
                 ))}
                 {pinKostentraegerOptionen.length === 0 && (
-                  <span className="text-xs text-muted-foreground">Keine offene COLLECTING-Periode für diese Person.</span>
+                  <span className="text-xs text-muted-foreground">Keine offene SAMMELT-Periode für diese Person.</span>
                 )}
               </div>
             </div>

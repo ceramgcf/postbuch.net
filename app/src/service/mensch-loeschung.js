@@ -30,6 +30,8 @@ import {
   ermittleArzLoeschschutzMehrere,
   pruefeMehrereBescheidLoeschschutzUnterLock,
   pruefeMehrereDokumentPinLoeschschutzUnterLock,
+  pruefeErsetzungLoeschschutz,
+  ERSETZUNG_DELETE_PROTECTED_CODE,
   DELETE_PROTECTED_CODE,
   BESCHEID_DELETE_PROTECTED_CODE,
   DOKUMENT_PIN_DELETE_PROTECTED_CODE,
@@ -275,22 +277,23 @@ async function pruefeUndBereinigeSessionZiele(q, kurzname) {
 
 /**
  * Entwertet alle Textbezüge auf den Kurznamen. Dokumente bleiben in der DB
- * unangetastet. Liefert die PostIDs, die dabei ihr Familienmitglied verloren
- * haben – bei Personenablage gehören deren Dateien danach nach „Gemeinsam“.
+ * unangetastet. Liefert die PostIDs, die dabei ihr Familienmitglied oder ihre
+ * behandelte Person verloren haben – bei Personenablage kann sich deren
+ * Personenordner dadurch ändern.
  */
 async function loeseBezuege(q, kurzname, nurPostids = null) {
   const filter = nurPostids ? ' AND postid = ANY($2)' : '';
   const params = nurPostids ? [kurzname, nurPostids] : [kurzname];
   // Periodennummern mitnullen: die zugehörigen Perioden-Zeilen verschwinden
   // gleich mit, ein Verweis darauf wäre danach ins Leere gerichtet.
-  await q(`UPDATE postbuch.arztrechnung
+  const ar = await q(`UPDATE postbuch.arztrechnung
               SET behandelte_person = NULL, abrechnungsperiode_pkv = NULL, abrechnungsperiode_beihilfe = NULL
-            WHERE behandelte_person = $1${filter}`, params);
-  await q(`UPDATE postbuch.arztbericht SET behandelte_person = NULL
-            WHERE behandelte_person = $1${filter}`, params);
+            WHERE behandelte_person = $1${filter} RETURNING postid`, params);
+  const ab = await q(`UPDATE postbuch.arztbericht SET behandelte_person = NULL
+            WHERE behandelte_person = $1${filter} RETURNING postid`, params);
   const r = await q(`UPDATE postbuch.postbuch SET familienmitglied = NULL
             WHERE familienmitglied = $1${filter} RETURNING postid`, params);
-  return r.rows.map((z) => z.postid);
+  return [...new Set([...ar.rows, ...ab.rows, ...r.rows].map((z) => z.postid))];
 }
 
 /**
@@ -348,10 +351,12 @@ export async function loescheMensch({ id, modus, bestaetigung, akteur = 'admin' 
         await pruefeMehrereArzLoeschschutzUnterLock(komplettIds, client);
         await pruefeMehrereBescheidLoeschschutzUnterLock(komplettIds, client);
         await pruefeMehrereDokumentPinLoeschschutzUnterLock(komplettIds, client);
+        await pruefeErsetzungLoeschschutz(komplettIds, client);
       } catch (err) {
         if (err.code === DELETE_PROTECTED_CODE
           || err.code === BESCHEID_DELETE_PROTECTED_CODE
-          || err.code === DOKUMENT_PIN_DELETE_PROTECTED_CODE) {
+          || err.code === DOKUMENT_PIN_DELETE_PROTECTED_CODE
+          || err.code === ERSETZUNG_DELETE_PROTECTED_CODE) {
           throw new LoeschFehler(409, err.message, {
             code: err.code,
             postid: err.postid,
@@ -371,7 +376,7 @@ export async function loescheMensch({ id, modus, bestaetigung, akteur = 'admin' 
       if (mischIds.length) {
         await q(`DELETE FROM postbuch.erstattungsbescheid_einzelposition
                   WHERE postid = ANY($2) AND behandelte_person = $1`, [mensch.kurzname, mischIds]);
-        ohnePerson = await loeseBezuege(q, mensch.kurzname, mischIds);
+        ohnePerson = [...new Set([...mischIds, ...await loeseBezuege(q, mensch.kurzname, mischIds)])];
       }
       const komplettIds = betroffene.komplett.map((d) => d.postid);
       if (komplettIds.length) {
@@ -382,9 +387,9 @@ export async function loescheMensch({ id, modus, bestaetigung, akteur = 'admin' 
         geloeschteDocs = betroffene.komplett;
       }
     } else if (modus === 'bezuege') {
-      await q(`UPDATE postbuch.erstattungsbescheid_einzelposition SET behandelte_person = NULL
-                WHERE behandelte_person = $1`, [mensch.kurzname]);
-      ohnePerson = await loeseBezuege(q, mensch.kurzname);
+      const eb = await q(`UPDATE postbuch.erstattungsbescheid_einzelposition SET behandelte_person = NULL
+                WHERE behandelte_person = $1 RETURNING postid`, [mensch.kurzname]);
+      ohnePerson = [...new Set([...eb.rows.map((z) => z.postid), ...await loeseBezuege(q, mensch.kurzname)])];
     }
 
     await pruefeUndBereinigeSessionZiele(q, mensch.kurzname);

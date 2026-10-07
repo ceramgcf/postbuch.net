@@ -16,6 +16,7 @@
 
 import pool from '../db.js';
 import { uiLog } from '../log.js';
+import { sperrePerioden } from './perioden-sperre.js';
 
 const FACHCODES = new Set([
   'KEINE_OFFENE_PKV_PERIODE',
@@ -89,6 +90,18 @@ export async function vormerkenFuerAktuellePkvPeriode(ebPostid, ebSubid, kuerzun
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    // Periodensperre vor jeder Zeilensperre (service/perioden-sperre.js):
+    // eine gleichzeitige Einreichung oder ein PKV-Bescheidabschluss bucht
+    // Vormerkungen derselben Person um.
+    const vorab = await client.query(
+      `SELECT ep.behandelte_person AS person
+         FROM erstattungsbescheid_kuerzung k
+         JOIN erstattungsbescheid_einzelposition ep ON ep.postid = k.postid AND ep.subid = k.eb_subid
+        WHERE k.postid = $1 AND k.eb_subid = $2 AND k.kuerzung_id = $3`,
+      [ebPostid, ebSubid, kuerzungId]
+    );
+    await sperrePerioden(client, vorab.rows.map(({ person }) => ({ person, kostentraeger: 'PKV' })));
 
     const kRes = await client.query(
       `SELECT ep.behandelte_person AS person

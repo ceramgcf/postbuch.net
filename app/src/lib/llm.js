@@ -531,9 +531,13 @@ async function callModel(ref, prompt, opts, ctx, meta = null) {
  * Extrahiert und parst das erste vollständige JSON-Objekt aus dem LLM-Response-Text.
  * Toleriert:
  *   - Markdown-Codeblöcke (```json ... ```)
+ *   - Vor- oder nachgestellten Fließtext (z. B. eine Rechenerläuterung vor dem JSON)
  *   - Single-Quote statt Double-Quote (z.B. Claude Haiku bei fehlgeleitetem Prompt)
+ *
+ * @param {string} text
+ * @param {{ erwartet?: 'objekt'|'array' }} [opts] - 'array' sucht `[ … ]` statt `{ … }`
  */
-export function parseJsonFromText(text) {
+export function parseJsonFromText(text, { erwartet = 'objekt' } = {}) {
   // Markdown-Codeblöcke entfernen
   const cleaned = text
     .replace(/^```json\s*/m, '')
@@ -541,10 +545,11 @@ export function parseJsonFromText(text) {
     .replace(/```\s*$/m, '')
     .trim();
 
-  const start = cleaned.indexOf('{');
-  const end   = cleaned.lastIndexOf('}');
-  if (start === -1 || end === -1) {
-    throw new Error(`Kein JSON-Objekt in LLM-Antwort gefunden. Antwort: ${text.slice(0, 300)}`);
+  const [auf, zu] = erwartet === 'array' ? ['[', ']'] : ['{', '}'];
+  const start = cleaned.indexOf(auf);
+  const end   = cleaned.lastIndexOf(zu);
+  if (start === -1 || end === -1 || end < start) {
+    throw new Error(`Kein JSON-${erwartet === 'array' ? 'Array' : 'Objekt'} in LLM-Antwort gefunden. Antwort: ${text.slice(0, 300)}`);
   }
 
   const candidate = cleaned.slice(start, end + 1);

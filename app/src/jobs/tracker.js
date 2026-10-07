@@ -230,6 +230,18 @@ export function requestCancel(jobId) {
 }
 
 /**
+ * Beendet einen laufenden Job serverseitig als abgebrochen – auch einen, den
+ * Nutzer nicht abbrechen dürfen (cancellable: false). Für Abläufe, die ihren
+ * eigenen Job durch einen neuen ersetzen.
+ * @param {object|null} result  Optionales Ergebnis
+ */
+export function completeAsCancelled(jobId, result = null) {
+  const job = jobs.get(jobId);
+  if (job) job._cancelRequested = true;
+  complete(jobId, result);
+}
+
+/**
  * Mark a job as completed (done or cancelled, depending on cancel flag).
  * @param {object|null} result  Optional result payload to store (e.g. { postid, betreff }).
  */

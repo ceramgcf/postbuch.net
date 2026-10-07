@@ -19,8 +19,12 @@ betriebenen, OpenAI-kompatiblen Server kommen. Die Oberfläche ist eine
 Web-App, die im Browser oder als PWA-App läuft.
 
 <p align="center">
-  <img src="docs/screenshots/Hauptansicht.jpg"
-    alt="Hauptansicht von postbuch.net" width="100%" style="max-width: 1218px;">
+  <picture>
+    <source srcset=".github/assets/postbuch-net-promo.avif" type="image/avif">
+    <img src="docs/screenshots/Hauptansicht.jpg"
+      alt="postbuch.net in einer Minute: Upload, KI-Erfassung, Ablage, Suche und Chat"
+      width="100%" style="max-width: 1218px;">
+  </picture>
 </p>
 
 Scans, Uploads oder ein überwachter Cloud-Ordner laufen in einer gemeinsamen

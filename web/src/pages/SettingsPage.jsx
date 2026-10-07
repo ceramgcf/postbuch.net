@@ -6,6 +6,7 @@ import { api } from '@/api/client';
 import { pushApi } from '@/api/push';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Select } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
@@ -24,7 +25,7 @@ import {
   LifeBuoy, Fingerprint, Search, Cpu, Coins, MessageSquare,
   FileText, RotateCw, AlertOctagon, Copy, CalendarClock, Euro,
   Folder, Plus, Printer, Bluetooth, BluetoothConnected, BluetoothOff, BluetoothSearching,
-  Plug, KeyRound, Server, HardDrive, ArrowLeftRight, Lock,
+  Plug, KeyRound, Server, HardDrive, ArrowLeftRight, Lock, FolderTree,
 } from 'lucide-react';
 import { usePrinter } from '@/contexts/PrinterContext';
 import BackupWarnung from '@/components/BackupWarnung';
@@ -1494,14 +1495,107 @@ function InaktiveVerbindungWarnung({ backend }) {
   );
 }
 
-// Ablagestruktur: Lebensbereich zuerst (Standard) oder Person zuerst.
+// Ablagestruktur: zwei Vorlagen oder bis zu vier frei gewählte Ebenen.
 // Umschalten und Umzug sind untrennbar – das Backend startet mit dem Wechsel
 // den Gesamtumzug. Ein erneuter Klick auf die aktive Struktur setzt einen
-// abgebrochenen Umzug fort.
-const ABLAGE_STRUKTUREN = {
-  lxd: { titel: 'Nach Lebensbereich', pfad: 'Lebensbereich / Dokumentart' },
-  person_lxd: { titel: 'Nach Person', pfad: 'Person / Lebensbereich / Dokumentart' },
+// abgebrochenen Umzug fort. Eine neue Wahl während eines Umzugs bricht ihn ab
+// und ersetzt ihn durch den Umzug in die neue Struktur.
+const ABLAGE_EBENEN = {
+  person: 'Person',
+  lebensbereich: 'Lebensbereich',
+  dokumentart: 'Dokumentart',
+  jahr: 'Jahr',
+  richtung: 'Richtung',
 };
+const ABLAGE_EBENEN_MAX = 4;
+// Bezeichnung der Ordner einer Ebene in der Übersicht der Ordnerstruktur.
+const ABLAGE_EBENEN_ORDNER = {
+  person: 'Personenordner',
+  dokumentart: 'Dokumentartordner',
+  jahr: 'Jahresordner',
+  richtung: 'Richtungsordner',
+};
+const ABLAGE_STRUKTUREN = {
+  lxd: { titel: 'Nach Lebensbereich', ebenen: ['lebensbereich', 'dokumentart'] },
+  person_lxd: { titel: 'Nach Person', ebenen: ['person', 'lebensbereich', 'dokumentart'] },
+  benutzerdefiniert: { titel: 'Benutzerdefiniert' },
+};
+const ablagePfad = (ebenen) => ebenen.map((e) => ABLAGE_EBENEN[e]).join(' / ');
+const gleicheEbenen = (a, b) => a.length === b.length && a.every((e, i) => e === b[i]);
+const ABLAGE_PERSON_QUELLEN = {
+  adressat: { titel: 'Adressat', text: 'An wen das Schreiben gerichtet ist.' },
+  behandelt: { titel: 'Behandelte Person bzw. Tier', text: 'Bei Arztrechnungen, Arztberichten und Erstattungsbescheiden.' },
+};
+
+/** Wer bei Ablage nach Person den Personenordner bestimmt. */
+function PersonQuelleAuswahl({ wert, onChange, disabled }) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-xs font-medium text-muted-foreground">Personenordner richten sich nach</p>
+      <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Personenordner richten sich nach">
+        {Object.entries(ABLAGE_PERSON_QUELLEN).map(([id, q]) => (
+          <button
+            key={id} type="button" role="radio" aria-checked={wert === id}
+            disabled={disabled}
+            onClick={() => onChange(id)}
+            className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60 ${wert === id ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'}`}
+          >
+            <span className="text-sm font-medium">{q.titel}</span>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">{q.text}</p>
+          </button>
+        ))}
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Nennt ein Dokument keine eindeutige behandelte Person, etwa ein Erstattungsbescheid für mehrere Personen, zählt der Adressat.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Bis zu vier Ebenen, sukzessive: Ebene n+1 ist erst wählbar, wenn Ebene n
+ * besetzt ist, und bietet nur Ebenen an, die weiter oben noch frei sind.
+ */
+function AblageEbenenAuswahl({ ebenen, onChange, disabled }) {
+  function setze(index, wert) {
+    // Eine geleerte oder geänderte Ebene verwirft alles darunter, sofern es
+    // sonst doppelt belegt wäre bzw. ohne Vorebene in der Luft hinge.
+    const neu = ebenen.slice(0, index);
+    if (wert) {
+      neu.push(wert);
+      for (const e of ebenen.slice(index + 1)) if (!neu.includes(e)) neu.push(e);
+    }
+    onChange(neu);
+  }
+  return (
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      {Array.from({ length: ABLAGE_EBENEN_MAX }, (_, i) => {
+        const gesperrt = disabled || i > ebenen.length;
+        const vorher = ebenen.slice(0, i);
+        return (
+          <div key={i} className="space-y-1">
+            <label htmlFor={`ablage-ebene-${i}`} className={`text-xs font-medium ${gesperrt ? 'text-muted-foreground/60' : 'text-muted-foreground'}`}>
+              {i + 1}. Ebene{i === 0 ? '' : ' (optional)'}
+            </label>
+            <Select
+              id={`ablage-ebene-${i}`}
+              value={ebenen[i] || ''}
+              disabled={gesperrt}
+              onChange={(e) => setze(i, e.target.value)}
+            >
+              {i === 0
+                ? <option value="" disabled>Bitte wählen</option>
+                : <option value="">(nicht besetzt)</option>}
+              {Object.entries(ABLAGE_EBENEN)
+                .filter(([id]) => !vorher.includes(id))
+                .map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+            </Select>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function AblageStrukturCard({ backendLabel, onDone }) {
   const qc = useQueryClient();
@@ -1511,29 +1605,37 @@ function AblageStrukturCard({ backendLabel, onDone }) {
     retry: false,
   });
   const aktuell = data?.struktur || 'lxd';
+  const aktuelleEbenen = data?.ebenen || ABLAGE_STRUKTUREN.lxd.ebenen;
+  const aktuellePersonQuelle = data?.personQuelle || 'adressat';
+  // ziel: { struktur, ebenen, personQuelle } für den Bestätigungsdialog
   const [ziel, setZiel] = useState(null);
+  // Entwurf der eigenen Ebenen; null = Auswahl zugeklappt
+  const [entwurf, setEntwurf] = useState(null);
   const [jobId, setJobId] = useState(null);
   const [fehler, setFehler] = useState('');
   const [kollisionen, setKollisionen] = useState(null);
   const [fehlerListe, setFehlerListe] = useState(null);
   const [ergebnis, setErgebnis] = useState(null);
 
-  // Nach einem Reload während des Umzugs den Fortschritt wieder aufnehmen.
+  // Laufenden Umzug finden: nach einem Reload oder wenn er aus einem anderen
+  // Fenster heraus ersetzt wurde.
+  const findeLaufendenUmzug = useCallback(() => api.jobs.list()
+    .then((res) => (res?.active || []).find((j) => j.type === 'storage-relocate')?.id || null)
+    .catch(() => null), []);
+
   useEffect(() => {
     if (!data?.umzugAktiv) return undefined;
     let abgebrochen = false;
-    api.jobs.list().then((res) => {
-      const lauf = (res?.active || []).find((j) => j.type === 'storage-relocate');
-      if (!abgebrochen && lauf) setJobId(lauf.id);
-    }).catch(() => {});
+    findeLaufendenUmzug().then((id) => { if (!abgebrochen && id) setJobId(id); });
     return () => { abgebrochen = true; };
-  }, [data?.umzugAktiv]);
+  }, [data?.umzugAktiv, findeLaufendenUmzug]);
 
   const starten = useMutation({
-    mutationFn: (struktur) => api.settings.setAblageStruktur(struktur),
+    mutationFn: ({ struktur, ebenen, personQuelle }) => api.settings.setAblageStruktur(struktur, ebenen, personQuelle),
     onMutate: () => { setFehler(''); setKollisionen(null); setFehlerListe(null); setErgebnis(null); },
     onSuccess: (res) => {
       setZiel(null);
+      setEntwurf(null);
       setJobId(res.jobId);
       qc.invalidateQueries({ queryKey: ['ablage-struktur'] });
     },
@@ -1547,6 +1649,11 @@ function AblageStrukturCard({ backendLabel, onDone }) {
   function onUmzugDone(job) {
     setJobId(null);
     qc.invalidateQueries({ queryKey: ['ablage-struktur'] });
+    if (job.status === 'cancelled' && job.payload?.ersetzt) {
+      // Durch eine neuere Strukturwahl ersetzt: deren Umzug weiterverfolgen.
+      findeLaufendenUmzug().then((id) => { if (id) setJobId(id); });
+      return;
+    }
     if (job.status === 'done') {
       setErgebnis(job.payload?.aufraeumen || {});
       onDone?.();
@@ -1556,36 +1663,88 @@ function AblageStrukturCard({ backendLabel, onDone }) {
     }
   }
 
-  const laeuft = !!jobId || starten.isPending || !!data?.umzugAktiv;
+  function waehle(id) {
+    if (id !== 'benutzerdefiniert') {
+      // Die gerade umziehende Struktur noch einmal zu wählen, brächte nichts.
+      if (laeuft && id === aktuell) return;
+      setEntwurf(null);
+      setZiel({ struktur: id, ebenen: ABLAGE_STRUKTUREN[id].ebenen, personQuelle: aktuellePersonQuelle });
+      return;
+    }
+    if (entwurf) return;
+    // Ohne gespeicherte eigene Folge leer starten: „Bitte wählen“, Ebenen 2–4 gesperrt.
+    setEntwurf(aktuell === 'benutzerdefiniert' ? aktuelleEbenen : (data?.benutzerEbenen || []));
+  }
+
+  const laeuft = !!jobId || !!data?.umzugAktiv;
+  const entwurfAktiv = entwurf && gleicheEbenen(entwurf, aktuelleEbenen);
+  const zielIstAktuell = ziel && gleicheEbenen(ziel.ebenen, aktuelleEbenen) && ziel.personQuelle === aktuellePersonQuelle;
+  const zielPfad = ziel ? ablagePfad(ziel.ebenen) : '';
 
   return (
     <Card>
       <CardHeader className="pb-3">
         <div className="flex items-center gap-2">
-          <Users className="h-5 w-5 text-primary" />
+          <FolderTree className="h-5 w-5 text-primary" />
           <CardTitle className="text-base">Ablagestruktur</CardTitle>
         </div>
         <CardDescription className="text-xs pt-1">
-          Legt fest, wie postbuch.net die Dokumentordner in {backendLabel} gliedert. Dokumente ohne zugeordnete Person liegen bei der Ablage nach Person im Ordner „Gemeinsam“.
+          Legt fest, wie postbuch.net die Dokumentordner in {backendLabel} gliedert. Dokumente ohne zugeordnete Person liegen bei der Ablage nach Person im Ordner „Gemeinsam“, Dokumente ohne Briefdatum bei der Ablage nach Jahr im Ordner „Ohne Datum“.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="grid gap-2 sm:grid-cols-2">
-          {Object.entries(ABLAGE_STRUKTUREN).map(([id, s]) => (
-            <button
-              key={id} type="button"
-              disabled={laeuft || isPending}
-              onClick={() => setZiel(id)}
-              className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60 ${aktuell === id ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'}`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium">{s.titel}</span>
-                {aktuell === id && <Badge variant="default" className="text-[10px]">aktiv</Badge>}
-              </div>
-              <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">{s.pfad}</p>
-            </button>
-          ))}
+        <div className="grid gap-2 sm:grid-cols-3">
+          {Object.entries(ABLAGE_STRUKTUREN).map(([id, s]) => {
+            const pfad = id === 'benutzerdefiniert'
+              ? (aktuell === id ? ablagePfad(aktuelleEbenen) : 'bis zu 4 Ebenen frei wählen')
+              : ablagePfad(s.ebenen);
+            const markiert = aktuell === id || (id === 'benutzerdefiniert' && !!entwurf);
+            return (
+              <button
+                key={id} type="button"
+                disabled={starten.isPending || isPending}
+                onClick={() => waehle(id)}
+                aria-expanded={id === 'benutzerdefiniert' ? !!entwurf : undefined}
+                className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60 ${markiert ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'}`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium">{s.titel}</span>
+                  {aktuell === id && <Badge variant="default" className="text-[10px]">aktiv</Badge>}
+                </div>
+                <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">{pfad}</p>
+              </button>
+            );
+          })}
         </div>
+        {entwurf && (
+          <div className="rounded-lg border px-3 py-3 space-y-3">
+            <AblageEbenenAuswahl ebenen={entwurf} onChange={setEntwurf} disabled={starten.isPending} />
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <p className="font-mono text-[11px] text-muted-foreground">
+                {entwurf.length ? `${ablagePfad(entwurf)} / Dokument` : 'Mindestens die erste Ebene wählen.'}
+              </p>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setEntwurf(null)} disabled={starten.isPending}>Abbrechen</Button>
+                <Button
+                  size="sm"
+                  disabled={starten.isPending || entwurf.length === 0 || (laeuft && entwurfAktiv)}
+                  onClick={() => setZiel({ struktur: 'benutzerdefiniert', ebenen: entwurf, personQuelle: aktuellePersonQuelle })}
+                >
+                  {entwurfAktiv ? 'Speichern und Dateien umziehen' : 'Übernehmen'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+        {aktuelleEbenen.includes('person') && (
+          <PersonQuelleAuswahl
+            wert={aktuellePersonQuelle}
+            disabled={starten.isPending || isPending}
+            onChange={(personQuelle) => {
+              if (personQuelle !== aktuellePersonQuelle) setZiel({ struktur: aktuell, ebenen: aktuelleEbenen, personQuelle });
+            }}
+          />
+        )}
         <JobFortschritt jobId={jobId} titel="Dokumente in neue Ablagestruktur verschieben" onDone={onUmzugDone} />
         {fehler && <div className="flex items-start gap-2 text-sm text-destructive bg-destructive/10 rounded-lg px-3 py-2"><AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" /><span>{fehler}</span></div>}
         {kollisionen?.length > 0 && (
@@ -1603,19 +1762,31 @@ function AblageStrukturCard({ backendLabel, onDone }) {
       </CardContent>
 
       <Dialog open={!!ziel} onOpenChange={(offen) => { if (!offen && !starten.isPending) setZiel(null); }}>
-        <DialogTitle>{ziel === aktuell ? 'Umzug fortsetzen?' : `Ablage ${ziel ? ABLAGE_STRUKTUREN[ziel].titel.toLowerCase() : ''} gliedern?`}</DialogTitle>
+        <DialogTitle>{zielIstAktuell ? 'Speichern und Dateien umziehen?' : 'Ablagestruktur umstellen?'}</DialogTitle>
         <DialogDescription>
-          {ziel === aktuell
+          {zielIstAktuell
             ? 'Die Struktur ist bereits aktiv. postbuch.net prüft alle Dokumente und verschiebt jene, die noch nicht am richtigen Ort liegen.'
-            : `Alle Dokumente werden nach „${ziel ? ABLAGE_STRUKTUREN[ziel].pfad : ''}“ verschoben. Neue Dokumente landen sofort in der neuen Struktur. Leere Ordner der bisherigen Struktur werden danach entfernt.`}
+            : `Alle Dokumente werden nach „${zielPfad}“ verschoben. Neue Dokumente landen sofort in der neuen Struktur. Leere Ordner der bisherigen Struktur werden danach entfernt.`}
         </DialogDescription>
+        {ziel?.ebenen.includes('person') && (
+          <PersonQuelleAuswahl
+            wert={ziel.personQuelle}
+            disabled={starten.isPending}
+            onChange={(personQuelle) => setZiel({ ...ziel, personQuelle })}
+          />
+        )}
+        {laeuft && !zielIstAktuell && (
+          <p className="text-sm font-medium">
+            Der laufende Umzug wird nach dem aktuellen Dokument abgebrochen und durch den Umzug in die neue Struktur ersetzt.
+          </p>
+        )}
         <p className="text-sm text-muted-foreground">
           Jede Datei wird einzeln verschoben. Das kann bei großen Beständen einige Zeit dauern und erzeugt bei Sync-Programmen auf angeschlossenen Rechnern entsprechend viel Abgleich. Ein unterbrochener Umzug lässt sich jederzeit fortsetzen.
         </p>
         <DialogFooter>
           <Button variant="outline" onClick={() => setZiel(null)} disabled={starten.isPending}>Abbrechen</Button>
           <Button onClick={() => starten.mutate(ziel)} disabled={starten.isPending}>
-            {starten.isPending ? <><Spinner className="h-3.5 w-3.5 mr-1.5" />Startet…</> : ziel === aktuell ? 'Fortsetzen' : 'Umstellen'}
+            {starten.isPending ? <><Spinner className="h-3.5 w-3.5 mr-1.5" />Startet…</> : zielIstAktuell ? 'Fortsetzen' : 'Umstellen'}
           </Button>
         </DialogFooter>
       </Dialog>
@@ -1766,8 +1937,19 @@ function AblageTab({ settings, isLoading: settingsLoading, onRefresh }) {
   const aktiveLebensbereiche = (taxonomie?.lebensbereich || []).filter((x) => x.aktiv);
   const systemOrdnerAnzahl = SYSTEM_FOLDER_KEYS.filter((key) => folders[key]).length;
   const lebensbereichOrdnerAnzahl = aktiveLebensbereiche.filter((x) => folders[x.code]).length;
-  const personenablage = settings?.ablage_struktur?.value === 'person_lxd';
-  const personenOrdnerAnzahl = Object.keys(folders).filter((k) => /^@[^/]+$/.test(k)).length;
+  // Erste Ordnerebene der aktiven Ablagestruktur und ihre bereits angelegten Ordner.
+  const ersteEbene = settings?.ablage_struktur?.value === 'person_lxd' ? 'person'
+    : settings?.ablage_struktur?.value === 'benutzerdefiniert' && Array.isArray(settings?.ablage_ebenen?.value)
+      ? settings.ablage_ebenen.value[0] : 'lebensbereich';
+  const dokumentartCodes = new Set((taxonomie?.dokumentart || []).map((x) => x.code));
+  const ersteEbeneTest = {
+    person: (k) => k.startsWith('@'),
+    jahr: (k) => k.startsWith('jahr:'),
+    richtung: (k) => k.startsWith('richtung:'),
+    dokumentart: (k) => dokumentartCodes.has(k),
+  }[ersteEbene];
+  const ersteEbeneAnzahl = ersteEbeneTest
+    ? Object.keys(folders).filter((k) => !k.includes('/') && ersteEbeneTest(k)).length : 0;
   const wurzelEingerichtet = !!folders.inbox;
 
   const [pollEnabled,  setPollEnabled]  = useState(null);
@@ -1838,8 +2020,8 @@ function AblageTab({ settings, isLoading: settingsLoading, onRefresh }) {
           <CardContent className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             <div className="rounded-md border px-3 py-2"><p className="text-xs text-muted-foreground">Wurzel</p><p className="text-sm font-medium">{wurzelEingerichtet ? 'gesetzt' : 'offen'}</p></div>
             <div className="rounded-md border px-3 py-2"><p className="text-xs text-muted-foreground">Systemordner</p><p className="text-sm font-medium">{systemOrdnerAnzahl}/{SYSTEM_FOLDER_KEYS.length}</p></div>
-            {personenablage
-              ? <div className="rounded-md border px-3 py-2"><p className="text-xs text-muted-foreground">Personenordner</p><p className="text-sm font-medium">{personenOrdnerAnzahl}</p></div>
+            {ersteEbeneTest
+              ? <div className="rounded-md border px-3 py-2"><p className="text-xs text-muted-foreground">{ABLAGE_EBENEN_ORDNER[ersteEbene]}</p><p className="text-sm font-medium">{ersteEbeneAnzahl}</p></div>
               : <div className="rounded-md border px-3 py-2"><p className="text-xs text-muted-foreground">Lebensbereiche</p><p className="text-sm font-medium">{lebensbereichOrdnerAnzahl}/{aktiveLebensbereiche.length}</p></div>}
           </CardContent>
         </Card>

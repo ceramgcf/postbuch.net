@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { usePerioden, usePeriodenRechnungen, useKuerzungen, useEntfernePkvPruefung } from '@/hooks/usePostbuch';
+import { usePerioden, usePeriodenRechnungen, usePeriodenPins, useKuerzungen, useEntfernePkvPruefung, useUnpinDokument } from '@/hooks/usePostbuch';
 import { useUndoHistory } from '@/hooks/useUndoHistory';
 import { useAbrechnungLauncher } from '@/hooks/useAbrechnungLauncher';
 import { useAuth } from '@/hooks/useAuth';
@@ -17,17 +17,13 @@ import { formatCurrency, formatDate } from '@/lib/utils';
 import {
   CalendarRange, ChevronDown, ChevronRight, Loader2,
   RotateCcw, Trash2, SkipForward, CheckCircle2, AlertTriangle, Combine, FileText,
-  Users, PawPrint, Archive, ClipboardCheck, BookmarkX, Split,
+  Users, PawPrint, Archive, ClipboardCheck, BookmarkX, Split, Pin, PinOff,
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
 import AbrechnungWizardCard from '@/components/AbrechnungWizardCard';
+import { PERIODEN_STATUS_STYLE, periodenStatusLabel } from '@/lib/periodenStatus';
 
-const STATUS_STYLES = {
-  COLLECTING: 'text-blue-700 bg-blue-50 border-blue-200',
-  SUBMITTED: 'text-amber-700 bg-amber-50 border-amber-200',
-  COMPLETED: 'text-green-700 bg-green-50 border-green-200',
-  OMITTED: 'text-slate-600 bg-slate-100 border-slate-300',
-};
+const STATUS_STYLES = PERIODEN_STATUS_STYLE;
 
 /**
  * Baut je Periode die vollständige Ableitungskette auf, in der sie steht.
@@ -214,7 +210,7 @@ function PeriodeActions({ p, person, kostentraeger, collectingCount, highestColl
     await api.abrechnungsperiode.setStatus(person, kostentraeger, p.periode, 'COLLECTING', 'SUBMITTED');
     invalidate();
     pushAction(
-      `Periode ${person}/${kostentraeger}/#${p.periode} auf COLLECTING zurückgestuft`,
+      `Periode ${person}/${kostentraeger}/#${p.periode} auf SAMMELT zurückgestuft`,
       async () => {
         await api.abrechnungsperiode.setStatus(person, kostentraeger, p.periode, 'SUBMITTED', 'COLLECTING');
         invalidate();
@@ -236,7 +232,7 @@ function PeriodeActions({ p, person, kostentraeger, collectingCount, highestColl
     await api.abrechnungsperiode.undoOmit(person, kostentraeger, p.periode, null);
     invalidate();
     pushAction(
-      `Periode ${person}/${kostentraeger}/#${p.periode} von OMITTED auf COLLECTING zurückgesetzt`,
+      `Periode ${person}/${kostentraeger}/#${p.periode} von AUSGELASSEN auf SAMMELT zurückgesetzt`,
       async () => {
         await api.abrechnungsperiode.setStatus(person, kostentraeger, p.periode, 'OMITTED', 'COLLECTING');
         invalidate();
@@ -272,7 +268,7 @@ function PeriodeActions({ p, person, kostentraeger, collectingCount, highestColl
 
   if (p.status === 'SUBMITTED') {
     return (
-      <button className={btnCls} onClick={handleRevert} title="Zurückstufen auf COLLECTING">
+      <button className={btnCls} onClick={handleRevert} title="Zurückstufen auf SAMMELT">
         <RotateCcw className="h-3.5 w-3.5" />
       </button>
     );
@@ -291,7 +287,7 @@ function PeriodeActions({ p, person, kostentraeger, collectingCount, highestColl
         <button
           className={btnCls}
           onClick={handleOmitClick}
-          title="Auf Abrechnung verzichten (OMITTED)"
+          title="Auf Abrechnung verzichten (AUSGELASSEN)"
         >
           <SkipForward className="h-3.5 w-3.5" />
         </button>
@@ -314,7 +310,7 @@ function PeriodeActions({ p, person, kostentraeger, collectingCount, highestColl
         <button
           className={btnCls}
           onClick={handleUndoOmit}
-          title="Auf COLLECTING zurücksetzen (Verzicht aufheben)"
+          title="Auf SAMMELT zurücksetzen (Verzicht aufheben)"
         >
           <RotateCcw className="h-3.5 w-3.5" />
         </button>
@@ -322,7 +318,7 @@ function PeriodeActions({ p, person, kostentraeger, collectingCount, highestColl
           <button
             className={btnCls}
             onClick={handleMergeOmittedClick}
-            title={`In COLLECTING #${highestCollectingPeriode} mergen`}
+            title={`In SAMMELT-Periode #${highestCollectingPeriode} mergen`}
           >
             <Combine className="h-3.5 w-3.5" />
           </button>
@@ -399,6 +395,67 @@ function PruefFaelleSection({ person, periode }) {
   );
 }
 
+// ─── PinsSection ────────────────────────────────────────────────────────────
+// An diese Periode angepinnte Dokumente (informelle Zusatzanlagen, PKV und
+// Beihilfe). Offene Anpinnungen lassen sich hier direkt wieder lösen.
+function PinsSection({ person, kostentraeger, periode, backPath }) {
+  const { data } = usePeriodenPins(person, kostentraeger, periode);
+  const { canWrite } = useAuth();
+  const { mutate: loesen, isPending, variables } = useUnpinDokument();
+
+  const rows = data?.data || [];
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="mt-2 rounded-md border border-sky-200 bg-sky-50 p-2.5 text-xs text-sky-900">
+      <div className="mb-1.5 flex items-center gap-1.5 font-medium">
+        <Pin className="h-3.5 w-3.5" />
+        Angepinnte Dokumente ({rows.length})
+      </div>
+      <div className="space-y-1.5">
+        {rows.map((d) => {
+          const removing = isPending && variables?.postid === d.postid;
+          return (
+            <div key={d.postid} className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <Link
+                  to={`/postbuch/${d.postid}`}
+                  state={{ from: backPath }}
+                  className="flex items-center gap-1 hover:underline"
+                >
+                  <span className="font-mono">{d.postid}</span>
+                  <span className="truncate">
+                    {d.betreff || d.art || ''}
+                    {d.briefdatum ? ` (${formatDate(d.briefdatum)})` : ''}
+                  </span>
+                </Link>
+                <p className="text-sky-900/70">Grund: {d.grund}</p>
+              </div>
+              {d.status === 'VORGEMERKT' ? (
+                canWrite && (
+                  <button
+                    type="button"
+                    disabled={removing}
+                    onClick={() => loesen({ postid: d.postid, person, kostentraeger })}
+                    title="Anpinnung lösen"
+                    className="text-sky-600/60 hover:text-sky-800 transition-colors disabled:opacity-40 flex-shrink-0"
+                  >
+                    <PinOff className="h-3.5 w-3.5" />
+                  </button>
+                )
+              ) : (
+                <Badge variant="outline" className="text-emerald-700 border-emerald-200 bg-emerald-100 text-[10px] px-1.5 py-0 flex-shrink-0">
+                  Eingereicht
+                </Badge>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── PeriodeRow ───────────────────────────────────────────────────────────────
 function PeriodeRow({ p, person, kostentraeger, backPath, onOpen, onClose, isHighestCollecting, collectingCount, highestCollectingPeriode, ableitung, onRequestRemove, onConfirmOmit, onConfirmMergeOmitted }) {
   const [open, setOpen] = useState(false);
@@ -427,7 +484,7 @@ function PeriodeRow({ p, person, kostentraeger, backPath, onOpen, onClose, isHig
             <div className="flex items-center gap-2">
               <span className="font-mono font-bold">#{p.periode}</span>
               <Badge className={`${STATUS_STYLES[p.status] || ''} text-[10px] px-1.5 py-0`} variant="outline">
-                {p.status}
+                {periodenStatusLabel(p.status)}
               </Badge>
               {Number.isInteger(p.ursprungsperiode) && (
                 <Badge
@@ -436,6 +493,24 @@ function PeriodeRow({ p, person, kostentraeger, backPath, onOpen, onClose, isHig
                   title={ableitungsTitel}
                 >
                   aus #{p.ursprungsperiode}
+                </Badge>
+              )}
+              {p.anzahl_angepinnt > 0 && (
+                <Badge
+                  className="text-[10px] px-1.5 py-0 text-sky-700 bg-sky-50 border-sky-200"
+                  variant="outline"
+                  title="An diese Periode angepinnte Dokumente"
+                >
+                  {p.anzahl_angepinnt} angepinnt
+                </Badge>
+              )}
+              {p.anzahl_pruefung > 0 && (
+                <Badge
+                  className="text-[10px] px-1.5 py-0 text-amber-700 bg-amber-50 border-amber-200"
+                  variant="outline"
+                  title="Kürzungen, die mit dieser Periode zur Prüfung eingereicht werden"
+                >
+                  {p.anzahl_pruefung} zur Prüfung
                 </Badge>
               )}
               {restperioden.length > 0 && (
@@ -505,6 +580,7 @@ function PeriodeRow({ p, person, kostentraeger, backPath, onOpen, onClose, isHig
           {kostentraeger === 'PKV' && (
             <PruefFaelleSection person={person} periode={p.periode} />
           )}
+          <PinsSection person={person} kostentraeger={kostentraeger} periode={p.periode} backPath={backPath} />
         </div>
       )}
     </div>
@@ -651,7 +727,7 @@ function RemoveCollectingDialog({ open, request, onClose }) {
       const result = await api.abrechnungsperiode.deleteHighest(person, kostentraeger, periode);
       invalidate();
       pushAction(
-        `Höchste COLLECTING #${periode} gelöscht (${person}/${kostentraeger})`,
+        `Höchste SAMMELT-Periode #${periode} gelöscht (${person}/${kostentraeger})`,
         async () => {
           await api.abrechnungsperiode.restore(person, kostentraeger, periode, result.movedPostIds || [], undefined, result.movedKuerzungen || []);
           invalidate();
@@ -683,7 +759,7 @@ function RemoveCollectingDialog({ open, request, onClose }) {
     const result = await api.abrechnungsperiode.omit(person, kostentraeger, periode);
     invalidate();
     pushAction(
-      `Periode ${person}/${kostentraeger}/#${periode} auf OMITTED gesetzt`,
+      `Periode ${person}/${kostentraeger}/#${periode} auf AUSGELASSEN gesetzt`,
       async () => {
         await api.abrechnungsperiode.undoOmit(person, kostentraeger, periode, result?.createdPeriode ?? null);
         invalidate();
@@ -731,8 +807,8 @@ function RemoveCollectingDialog({ open, request, onClose }) {
   };
 
   const redirectTarget = isHighest
-    ? `nächst-niedrigeren COLLECTING-Periode`
-    : `höchsten COLLECTING-Periode (#${highestCollectingPeriode})`;
+    ? `nächst-niedrigeren SAMMELT-Periode`
+    : `höchsten SAMMELT-Periode (#${highestCollectingPeriode})`;
 
   const radioCls = (selected) => `flex items-start gap-2 p-2.5 rounded-md border cursor-pointer transition-colors ${
     selected ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/40'
@@ -756,7 +832,7 @@ function RemoveCollectingDialog({ open, request, onClose }) {
             className="mt-0.5"
           />
           <div className="text-sm">
-            <div className="font-medium">Rechnungen in die höchste COLLECTING umbuchen</div>
+            <div className="font-medium">Rechnungen in die höchste SAMMELT-Periode umbuchen</div>
             <div className="text-xs text-muted-foreground mt-0.5">
               Die Rechnungen werden der {redirectTarget} zugeordnet, Periode #{periode} wird gelöscht.
             </div>
@@ -773,7 +849,7 @@ function RemoveCollectingDialog({ open, request, onClose }) {
             className="mt-0.5"
           />
           <div className="text-sm">
-            <div className="font-medium">Doch nicht löschen – auf OMITTED setzen</div>
+            <div className="font-medium">Doch nicht löschen – auf AUSGELASSEN setzen</div>
             <div className="text-xs text-muted-foreground mt-0.5">
               Periode #{periode} bleibt bestehen, wird als „nicht abgerechnet" markiert. Rechnungen bleiben zugeordnet.
             </div>
@@ -846,7 +922,7 @@ function ConfirmOmitDialog({ open, request, onClose }) {
       const result = await api.abrechnungsperiode.omit(person, kostentraeger, periode);
       invalidate();
       pushAction(
-        `Periode ${person}/${kostentraeger}/#${periode} auf OMITTED gesetzt`,
+        `Periode ${person}/${kostentraeger}/#${periode} auf AUSGELASSEN gesetzt`,
         async () => {
           await api.abrechnungsperiode.undoOmit(person, kostentraeger, periode, result?.createdPeriode ?? null);
           invalidate();
@@ -866,22 +942,22 @@ function ConfirmOmitDialog({ open, request, onClose }) {
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogTitle>Periode #{periode} auf „OMITTED" setzen?</DialogTitle>
+      <DialogTitle>Periode #{periode} auf „AUSGELASSEN" setzen?</DialogTitle>
       <DialogDescription>
         Person: <strong>{person}</strong>, Kostenträger: <strong>{kostentraeger}</strong>
       </DialogDescription>
 
       <div className="mt-3 rounded-md border bg-muted/30 p-3 text-sm space-y-2">
-        <div className="font-medium">Was bedeutet OMITTED?</div>
+        <div className="font-medium">Was bedeutet AUSGELASSEN?</div>
         <p className="text-muted-foreground">
-          „OMITTED" heißt: <strong>auf Abrechnung verzichten</strong>. Die Periode wird
+          „AUSGELASSEN" heißt: <strong>auf Abrechnung verzichten</strong>. Die Periode wird
           nicht abgerechnet (kein PDF, kein Versand an PKV/Beihilfe). Die Rechnungen
           bleiben der Periode zugeordnet, gelten aber als nicht-abrechnungsrelevant.
         </p>
         <p className="text-muted-foreground">
-          Es wird automatisch eine neue COLLECTING-Periode mit der nächsthöheren
+          Es wird automatisch eine neue SAMMELT-Periode mit der nächsthöheren
           Nummer angelegt (sofern noch keine existiert). Die Aktion ist umkehrbar
-          („Rückgängig" oder das Pfeil-Icon an der OMITTED-Periode).
+          („Rückgängig" oder das Pfeil-Icon an der AUSGELASSEN-Periode).
         </p>
       </div>
 
@@ -889,7 +965,7 @@ function ConfirmOmitDialog({ open, request, onClose }) {
         <Button variant="outline" onClick={onClose} disabled={busy}>Abbrechen</Button>
         <Button onClick={handleConfirm} disabled={busy}>
           {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-          Auf OMITTED setzen
+          Auf AUSGELASSEN setzen
         </Button>
       </DialogFooter>
     </Dialog>
@@ -913,7 +989,7 @@ function ConfirmMergeOmittedDialog({ open, request, onClose }) {
       const result = await api.abrechnungsperiode.merge(person, kostentraeger, periode, targetPeriode);
       invalidate();
       pushAction(
-        `OMITTED-Periode #${periode} in COLLECTING #${targetPeriode} gemergt (${person}/${kostentraeger})`,
+        `AUSGELASSEN-Periode #${periode} in SAMMELT-Periode #${targetPeriode} gemergt (${person}/${kostentraeger})`,
         async () => {
           await api.abrechnungsperiode.restore(person, kostentraeger, periode, result.movedPostIds || [], 'OMITTED', result.movedKuerzungen || []);
           invalidate();
@@ -933,7 +1009,7 @@ function ConfirmMergeOmittedDialog({ open, request, onClose }) {
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogTitle>OMITTED-Periode #{periode} mergen?</DialogTitle>
+      <DialogTitle>AUSGELASSEN-Periode #{periode} mergen?</DialogTitle>
       <DialogDescription>
         Person: <strong>{person}</strong>, Kostenträger: <strong>{kostentraeger}</strong>
       </DialogDescription>
@@ -941,7 +1017,7 @@ function ConfirmMergeOmittedDialog({ open, request, onClose }) {
       <div className="mt-3 rounded-md border bg-muted/30 p-3 text-sm">
         <p className="text-muted-foreground">
           Alle Rechnungen aus Periode <strong>#{periode}</strong> werden in die
-          höchste COLLECTING-Periode <strong>#{targetPeriode}</strong> umgebucht.
+          höchste SAMMELT-Periode <strong>#{targetPeriode}</strong> umgebucht.
           Periode #{periode} wird anschließend gelöscht.
         </p>
         <p className="text-muted-foreground mt-2">

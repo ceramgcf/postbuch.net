@@ -18,7 +18,7 @@
 import os from 'node:os';
 import { permanentError } from './llm/registry.js';
 import { devFeatureUnlocked } from './dev-gate.js';
-import { resolveThinkingPolicy } from './llm/thinking-policy.js';
+import { resolveThinkingPolicy, thinkingAus } from './llm/thinking-policy.js';
 
 // ── Subprozess-Concurrency-Guard ──────────────────────────────────────────
 //
@@ -84,6 +84,23 @@ function buildSanitizedEnv(oauthToken) {
     CLAUDE_CODE_OAUTH_TOKEN: oauthToken,
     CLAUDE_CONFIG_DIR: '/tmp/.claude-pb',
   };
+}
+
+/**
+ * Übersetzt eine Thinking-Policy (lib/llm/thinking-policy.js) in SDK-Optionen.
+ * `effort` ist im SDK ein Top-Level-Options-Feld (anders als die Messages API,
+ * die es unter output_config schachtelt) — siehe sdk.d.ts EffortLevel/ThinkingConfig.
+ * Pendant zu buildThinkingBodyFields() in lib/llm/providers/anthropic.js.
+ */
+function sdkThinkingOptions(policy) {
+  if (!policy || policy.mode === 'none') return {};
+  if (policy.mode === 'explicit-off') return { thinking: { type: 'disabled' } };
+  if (policy.mode === 'minimal') return { thinking: { type: 'adaptive' }, effort: policy.effort };
+  // display:'summarized' ist Pflicht — ohne dieses Feld bleibt Thinking auf dem
+  // serverseitigen Default display:'omitted': das Modell denkt weiterhin (Kosten/
+  // Latenz wie erwartet), aber es kommen nie thinking_delta-Events an, onThinking
+  // bleibt für immer stumm.
+  return { thinking: { type: 'adaptive', display: 'summarized' }, effort: policy.effort };
 }
 
 /**
@@ -176,7 +193,9 @@ export async function callClaudeSubscription(model, prompt, { pdf, pdfs, system,
         // trieb das Output-Tokens und Laufzeit massiv hoch, ohne dass der Aufrufer
         // es angefordert hätte. Gilt unabhängig von viaMcp/In-App — dieser Pfad ist
         // die enge Dokumenten-Extraktion, nicht das sichtbare Chat-Thinking.
-        thinking: { type: 'disabled' },
+        // Modelle ohne Abschaltmöglichkeit (z. B. Opus 5.5) lehnen 'disabled' mit
+        // 400 ab; dort läuft Thinking stattdessen mit minimalem effort.
+        ...sdkThinkingOptions(thinkingAus(model)),
         // Availability-Ebene wie in streamClaudeSubscriptionAgent(): OHNE tools:[]
         // schickt Claude Code die vollständigen Schemata seiner eingebauten Tools
         // mit — gemessen ~11.700 Input-Tokens pro Call, obwohl dieser Single-Turn-
@@ -316,20 +335,8 @@ export async function streamClaudeSubscriptionAgent(
   );
 
   // Thinking-Policy (siehe lib/llm/thinking-policy.js): In-App adaptiv mit
-  // niedrigem effort, über MCP explizit aus. `effort` ist im SDK ein
-  // Top-Level-Options-Feld (anders als die Messages API, die es unter
-  // output_config schachtelt) — siehe sdk.d.ts EffortLevel/ThinkingConfig.
-  const thinkingPolicy = resolveThinkingPolicy({ model, viaMcp });
-  const thinkingOptions = thinkingPolicy.mode === 'none'
-    ? {}
-    : thinkingPolicy.mode === 'explicit-off'
-      ? { thinking: { type: 'disabled' } }
-      // display:'summarized' ist Pflicht — ohne dieses Feld bleibt Thinking auf dem
-      // serverseitigen Default display:'omitted': das Modell denkt weiterhin (Kosten/
-      // Latenz wie erwartet), aber es kommen nie thinking_delta-Events an, onThinking
-      // bleibt für immer stumm. Pendant zu buildThinkingBodyFields() in
-      // lib/llm/providers/anthropic.js, das dasselbe für die Messages API bereits setzt.
-      : { thinking: { type: 'adaptive', display: 'summarized' }, effort: thinkingPolicy.effort };
+  // niedrigem effort, über MCP aus (bzw. minimal, wo das Modell kein Aus kennt).
+  const thinkingOptions = sdkThinkingOptions(resolveThinkingPolicy({ model, viaMcp }));
 
   const q = query({
     prompt: singleMessage(),

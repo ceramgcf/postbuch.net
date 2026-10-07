@@ -215,6 +215,23 @@ router.get('/sessions/:id', async (req, res) => {
   }
 });
 
+// Dateinamen der Downloads: identisch mit den Namen in der Ablage
+// (abrechnung-session.js) und mit dem download-Attribut im Wizard
+// (AbrechnungWizardCard.jsx) – egal, über welchen Schritt geladen wird.
+function groupFileName(group) {
+  return group.fileName || `${group.fileNamePart || 'Abrechnung'}.pdf`;
+}
+
+function chunkFileName(group, chunkIndex) {
+  return groupFileName(group).replace(/\.pdf$/i, `_Teil${chunkIndex + 1}.pdf`);
+}
+
+// RFC 5987, damit Umlaute in Personennamen in allen Browsern ankommen.
+function contentDisposition(type, fileName) {
+  const ascii = fileName.replace(/[^\x20-\x7E]/g, '_').replace(/"/g, '');
+  return `${type}; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(fileName)}`;
+}
+
 // GET /api/abrechnungsperiode/sessions/:id/pdf/:groupIndex
 // Proxied das gemergte PDF aus der Ablage — inline im Browser darstellbar.
 // Gehärtete Sessions lösen das Artefakt backend-bewusst über
@@ -241,11 +258,9 @@ router.get('/sessions/:id/pdf/:groupIndex', async (req, res) => {
       if (!artefakt) return res.status(404).json({ error: 'Kein PDF für diese Gruppe vorhanden' });
       pdfBuffer = await getAdapter(artefakt.storage_backend).download(artefakt.storage_id);
     }
-    const fileName = `${group.fileNamePart || 'Abrechnung'}.pdf`;
-
     res.set({
       'Content-Type': 'application/pdf',
-      'Content-Disposition': `inline; filename="${encodeURIComponent(fileName)}"`,
+      'Content-Disposition': contentDisposition('inline', groupFileName(group)),
       'Content-Length': pdfBuffer.length,
     });
     res.send(pdfBuffer);
@@ -285,12 +300,9 @@ router.get('/sessions/:id/pdf/:groupIndex/chunk/:chunkIndex', async (req, res) =
       if (!artefakt) return res.status(404).json({ error: 'Kein PDF für diesen Chunk vorhanden' });
       pdfBuffer = await getAdapter(artefakt.storage_backend).download(artefakt.storage_id);
     }
-    const totalChunks = group.chunks.length;
-    const fileName = `${group.fileNamePart || 'Abrechnung'}_Teil${cIdx + 1}von${totalChunks}.pdf`;
-
     res.set({
       'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${encodeURIComponent(fileName)}"`,
+      'Content-Disposition': contentDisposition('attachment', chunkFileName(group, cIdx)),
       'Content-Length': pdfBuffer.length,
     });
     res.send(pdfBuffer);

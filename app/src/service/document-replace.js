@@ -17,7 +17,7 @@ import { getAdapter, getActiveAdapterFor, legacyOnedriveWerte } from '../lib/sto
 import { appLog } from '../app-log.js';
 import { uiLog } from '../log.js';
 import { loadDynamicSettings, getActiveBackendName } from '../config.js';
-import { ensureAblageOrdner } from './storage-setup.js';
+import { ensureAblageOrdner, behandeltePersonSql } from './storage-setup.js';
 import { istBestaetigterDateiFehlt } from './storage-missing.js';
 
 function sha256Hex(buffer) {
@@ -61,10 +61,11 @@ export function trashName(label, postid, filename) {
  */
 export async function replacePdf(postid, newPdfBuffer) {
   const r = await db.query(
-    `SELECT storage_id, storage_backend, storage_filename, sha256, storage_modified, link,
-            lebensbereich, dokumentart, familienmitglied
-       FROM postbuch.postbuch
-      WHERE postid = $1`,
+    `SELECT p.storage_id, p.storage_backend, p.storage_filename, p.sha256, p.storage_modified, p.link,
+            p.lebensbereich, p.dokumentart, p.familienmitglied, p.briefdatum, p.richtung::text AS richtung,
+            ${behandeltePersonSql('p')} AS behandelte_person
+       FROM postbuch.postbuch p
+      WHERE p.postid = $1`,
     [postid]
   );
   if (r.rows.length === 0) {

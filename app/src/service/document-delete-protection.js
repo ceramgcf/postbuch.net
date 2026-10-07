@@ -58,6 +58,46 @@ export class DokumentPinDeleteProtectedError extends Error {
   }
 }
 
+export const ERSETZUNG_DELETE_PROTECTED_CODE = 'DOKUMENT_HAT_ERSETZUNG';
+export const ERSETZUNG_DELETE_PROTECTED_HINT = 'Die Ersetzung zuerst in der Rechnungsansicht aufheben.';
+
+export class ErsetzungDeleteProtectedError extends Error {
+  constructor(postid, partner) {
+    super(`Dokument ${postid} kann nicht gelöscht werden: Es ist als Korrektur- bzw. Ursprungsrechnung mit ${partner} verknüpft. Bitte die Ersetzung zuerst aufheben.`);
+    this.name = 'ErsetzungDeleteProtectedError';
+    this.code = ERSETZUNG_DELETE_PROTECTED_CODE;
+    this.status = 409;
+    this.statusCode = 409;
+    this.postid = postid;
+    this.hinweis = ERSETZUNG_DELETE_PROTECTED_HINT;
+  }
+}
+
+/**
+ * Ersetzungskanten (postbuch.dokument_beziehung) prüfen erst beim Commit; ein
+ * Löschen scheiterte sonst mit einem rohen FK-Fehler. Kanten zwischen zwei
+ * gemeinsam gelöschten Dokumenten werden mitgelöscht.
+ */
+export async function pruefeErsetzungLoeschschutz(postids, db) {
+  const ids = [...new Set(postids || [])].sort();
+  if (!ids.length) return;
+  const { rows } = await db.query(
+    `SELECT id, von_postid, zu_postid FROM postbuch.dokument_beziehung
+      WHERE von_postid = ANY($1::varchar[]) OR zu_postid = ANY($1::varchar[])
+      ORDER BY id FOR UPDATE`,
+    [ids],
+  );
+  const extern = rows.find((r) => !ids.includes(r.von_postid) || !ids.includes(r.zu_postid));
+  if (extern) {
+    const eigen = ids.includes(extern.von_postid) ? extern.von_postid : extern.zu_postid;
+    const partner = eigen === extern.von_postid ? extern.zu_postid : extern.von_postid;
+    throw new ErsetzungDeleteProtectedError(eigen, partner);
+  }
+  if (rows.length) {
+    await db.query('DELETE FROM postbuch.dokument_beziehung WHERE id = ANY($1::bigint[])', [rows.map((r) => r.id)]);
+  }
+}
+
 export async function pruefeMehrereDokumentPinLoeschschutzUnterLock(postids, db) {
   const ids = [...new Set(postids || [])].sort();
   if (!ids.length) return;
@@ -230,6 +270,7 @@ export async function oeffneSichereDokumentloeschung(postid) {
     if (pinResult.rowCount > 0) {
       throw new DokumentPinDeleteProtectedError(postid, pinResult.rowCount);
     }
+    await pruefeErsetzungLoeschschutz([postid], client);
 
     // FOR UPDATE kollidiert mit dem KEY SHARE, den eine neue FK-Zuordnung
     // benötigt. Damit kann zwischen Prüfung und DELETE kein neuer EB-Bezug
@@ -248,6 +289,8 @@ export function istLoeschschutzFehler(err) {
   return err instanceof DocumentDeleteProtectedError
     || err instanceof BescheidDeleteProtectedError
     || err instanceof DokumentPinDeleteProtectedError
+    || err instanceof ErsetzungDeleteProtectedError
+    || err?.code === ERSETZUNG_DELETE_PROTECTED_CODE
     || err?.code === DELETE_PROTECTED_CODE
     || err?.code === BESCHEID_DELETE_PROTECTED_CODE
     || err?.code === DOKUMENT_PIN_DELETE_PROTECTED_CODE

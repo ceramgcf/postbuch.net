@@ -73,7 +73,9 @@ import { appLog } from '../app-log.js';
 import { loadDynamicSettings, getFolders, folderKeyById, getAblageStruktur } from '../config.js';
 import { getAdapter, BACKENDS, legacyOnedriveWerte } from '../lib/storage/index.js';
 import { clientSafeError } from '../lib/net-guard.js';
-import { ensureAblageOrdner, ermittlePerson, ablageSchluessel } from './storage-setup.js';
+import {
+  ensureAblageOrdner, ermittleAblagePerson, ablageSchluessel, ablageZielKennung, behandeltePersonSql,
+} from './storage-setup.js';
 import { istUmzugAktiv } from './storage-relocate.js';
 import { oeffneSichereDokumentloeschung } from './document-delete-protection.js';
 
@@ -394,9 +396,11 @@ export async function trockenlauf({ src, dst }) {
 async function fuehreTrockenlaufAus({ runId, jobId, src, dst, settings, istWeg }) {
   try {
     const rows = (await pool.query(
-      `SELECT postid, art::text AS art, lebensbereich, dokumentart, familienmitglied, storage_id, storage_filename, link, sha256
-         FROM postbuch.postbuch
-        WHERE storage_backend = $1
+      `SELECT p.postid, p.art::text AS art, p.lebensbereich, p.dokumentart, p.familienmitglied, p.briefdatum,
+              p.richtung::text AS richtung, ${behandeltePersonSql('p')} AS behandelte_person,
+              p.storage_id, p.storage_filename, p.link, p.sha256
+         FROM postbuch.postbuch p
+        WHERE p.storage_backend = $1
         ORDER BY postid`,
       [src]
     )).rows;
@@ -461,11 +465,12 @@ async function fuehreTrockenlaufAus({ runId, jobId, src, dst, settings, istWeg }
  * legt ihn aus den autoritativen DB-Achsen an.
  */
 async function ermittleZielordner(settings, src, dst, srcAdapter, row) {
-  // Personenablage: Ziel allein aus den DB-Achsen. Die Quellstruktur kann noch
-  // LxD sein und darf nicht ins Ziel übernommen werden.
-  if (getAblageStruktur(settings) === 'person_lxd') {
+  // Andere Strukturen als LxD: Ziel allein aus den DB-Achsen. Die
+  // Quellstruktur kann noch eine andere sein und darf nicht ins Ziel
+  // übernommen werden.
+  if (getAblageStruktur(settings) !== 'lxd') {
     if (!row.lebensbereich || !row.dokumentart) return null;
-    const person = await ermittlePerson(row.familienmitglied);
+    const person = await ermittleAblagePerson(settings, row);
     return getFolders(settings, dst)[ablageSchluessel(settings, { ...row, menschId: person?.id })] || null;
   }
   let key = null;
@@ -742,8 +747,10 @@ async function migriereEine({ runId, postid, src, dst, srcAdapter, dstAdapter, s
 
     // Aktueller DB-Zustand ist autoritativ, nicht der beim Trockenlauf erfasste.
     const row = (await pool.query(
-      `SELECT storage_id, storage_backend, sha256, art::text AS art, lebensbereich, dokumentart, familienmitglied
-         FROM postbuch.postbuch WHERE postid = $1`, [postid]
+      `SELECT p.storage_id, p.storage_backend, p.sha256, p.art::text AS art, p.lebensbereich, p.dokumentart,
+              p.familienmitglied, p.briefdatum, p.richtung::text AS richtung,
+              ${behandeltePersonSql('p')} AS behandelte_person
+         FROM postbuch.postbuch p WHERE p.postid = $1`, [postid]
     )).rows[0];
 
     if (!row || !row.storage_id) {
@@ -815,10 +822,7 @@ async function migriereEine({ runId, postid, src, dst, srcAdapter, dstAdapter, s
       // Gespeichert wird das Promise, nicht erst das Ergebnis: Parallele Worker
       // derselben Zelle warten so auf dieselbe Auflösung, statt den Ordner
       // gleichzeitig anzulegen (Nextcloud antwortet darauf mit 423 Locked).
-      // Die Person gehört nur bei Personenablage zur Zelle.
-      const personTeil = getAblageStruktur(settings) === 'person_lxd' ? `${row.familienmitglied ?? ''}|` : '';
-      const zelle = row.lebensbereich && row.dokumentart
-        ? `${personTeil}${row.lebensbereich}/${row.dokumentart}` : null;
+      const zelle = row.lebensbereich && row.dokumentart ? ablageZielKennung(row) : null;
       let zielOrdner = it.dst_folder_id;
       if (zelle) {
         if (!frischAufgeloest.has(zelle)) {
@@ -1176,7 +1180,8 @@ export async function nachzueglerAufnehmen(runId) {
   const srcAdapter = getAdapter(run.src_backend);
 
   const rows = (await pool.query(
-    `SELECT p.postid, p.lebensbereich, p.dokumentart, p.familienmitglied, p.storage_id, p.storage_filename, p.link, p.sha256
+    `SELECT p.postid, p.lebensbereich, p.dokumentart, p.familienmitglied, p.briefdatum, p.richtung::text AS richtung,
+            ${behandeltePersonSql('p')} AS behandelte_person, p.storage_id, p.storage_filename, p.link, p.sha256
        FROM postbuch.postbuch p
       WHERE p.storage_backend = $1
         AND NOT EXISTS (

@@ -21,6 +21,7 @@ import UnbezahltPage from '@/pages/UnbezahltPage';
 import KuerzungenPage from '@/pages/KuerzungenPage';
 import PeriodenPage from '@/pages/PeriodenPage';
 import HandwerkerPage from '@/pages/HandwerkerPage';
+import GesundheitskostenPage from '@/pages/GesundheitskostenPage';
 import LogsPage from '@/pages/LogsPage';
 import SaldenPage from '@/pages/SaldenPage';
 import SaldoDetailPage from '@/pages/SaldoDetailPage';
@@ -199,6 +200,7 @@ export default function App() {
           <Route path="analyse/kuerzungen" element={<KuerzungenPage />} />
           <Route path="analyse/perioden" element={<PeriodenPage />} />
           <Route path="analyse/handwerker" element={<HandwerkerPage />} />
+          <Route path="analyse/gesundheitskosten" element={<GesundheitskostenPage />} />
           <Route path="analyse/salden" element={<SaldenPage />} />
           <Route path="analyse/salden/:id" element={<SaldoDetailPage />} />
           <Route path="analyse/wiedervorlagen" element={<WiedervorlagenPage />} />

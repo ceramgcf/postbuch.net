@@ -7,8 +7,8 @@ import { scanQrCodes } from '../lib/qr.js';
 import { replacePdf, restorePdf } from '../service/document-replace.js';
 import { retrieveDocument } from '../service/document-retriever.js';
 import { appLog } from '../app-log.js';
-import { loadDynamicSettings, getAblageStruktur } from '../config.js';
-import { verschiebeAnSollort } from '../service/ablage-sollort.js';
+import { loadDynamicSettings, getAblageEbenen } from '../config.js';
+import { verschiebeAnSollort, zieheNachBehandelterPerson } from '../service/ablage-sollort.js';
 import * as suspensionStore from '../service/suspension-store.js';
 import { verify as verifyToken } from '../lib/decision-token.js';
 import {
@@ -20,21 +20,32 @@ import {
 import { pinDokument, unpinDokument, listePins } from '../service/dokument-pin.js';
 import { verschiebeInPapierkorb } from '../service/document-delete.js';
 import { setzeBescheidwirkungZurueck } from '../service/periodenabschluss.js';
+import { sperrePerioden } from '../service/perioden-sperre.js';
 import { istGueltigerStatus } from '../lib/post-status.js';
 import { effektiveGruppe } from '../lib/taxonomie.js';
 import { UNBEZAHLT_SQL_CONDITION } from '../lib/rechnungs-filter.js';
+import {
+  ZahlungFehler, inTransaktion, setzeBezahltAm, ersetzeZahlungen,
+  aktualisiereZahlstatus, ermittleZahlungslage, berechneLage, ladeZahlungen,
+  gleicheZahlungenAn, pruefeNichtErsetzt,
+} from '../service/rechnung-zahlung.js';
+import {
+  ersetzeRechnung, hebeErsetzungAuf, ermittleKandidaten, ladeErsetzung, ladeRechnungKurz,
+} from '../service/rechnung-ersetzung.js';
 import { eigeneDokumenteBedingung, istEingeschraenkt } from '../middleware/lesebereich.js';
+import { parsePersonenAuswahl } from '../lib/personen-auswahl.js';
 import {
   oeffneSichereDokumentloeschung,
   istLoeschschutzFehler,
   loeschschutzAntwort,
 } from '../service/document-delete-protection.js';
 
+/** Bearbeitbare Felder, die eine Ablageebene bestimmen. */
+const ABLAGE_FELD_EBENE = { familienmitglied: 'person', briefdatum: 'jahr', richtung: 'richtung' };
+
 const router = Router();
 
 const POSTID_RE = /^P\d{6}$/;
-// Filterwert „(ohne)“ im Personenfilter; Kurznamen dürfen nicht mit _ beginnen.
-const PERSON_OHNE = '_ohne';
 
 // --- Debounced embedding update for document metadata changes ---
 const EMBEDDING_DEBOUNCE_MS = 30 * 1000; // 30 seconds
@@ -147,34 +158,37 @@ router.get('/', async (req, res) => {
       paramIdx++;
     }
 
-    if (person === PERSON_OHNE) {
-      // Dokumente ohne Personenzuordnung; die Rollen-Häkchen spielen hier keine Rolle.
-      conditions.push(`NULLIF(p.familienmitglied, '') IS NULL`);
-    } else if (person) {
-      // person_as_adressat → matcht p.familienmitglied (egal ob Eingang oder Ausgang —
-      // das Familienmitglied kann jetzt Empfänger ODER Sender sein)
-      const personAsAdressat = person_as_adressat !== 'false';
-      const personAsPatient = person_as_patient === 'true';
-      const personRoleConditions = [];
+    // person: ein Kurzname oder mehrere kommagetrennt, `_ohne` = ohne Personenzuordnung.
+    const personAuswahl = parsePersonenAuswahl(person);
+    if (personAuswahl) {
+      const personConditions = [];
+      // „ohne“ prüft nur die Zuordnung am Dokument; die Rollen-Häkchen spielen dafür keine Rolle.
+      if (personAuswahl.ohne) personConditions.push(`NULLIF(p.familienmitglied, '') IS NULL`);
+      if (personAuswahl.namen.length) {
+        // person_as_adressat → matcht p.familienmitglied (egal ob Eingang oder Ausgang —
+        // das Familienmitglied kann jetzt Empfänger ODER Sender sein)
+        const personAsAdressat = person_as_adressat !== 'false';
+        const personAsPatient = person_as_patient === 'true';
+        const personRoleConditions = [];
 
-      // Exakter Kurzname-Vergleich statt Teilstring: sonst träfe „Jona“ auch
-      // „Jonas“. Der Filterwert stammt ohnehin aus der Kurznamen-Auswahl.
-      if (personAsAdressat) {
-        personRoleConditions.push(`LOWER(p.familienmitglied) = LOWER($${paramIdx})`);
+        // Exakter Kurzname-Vergleich statt Teilstring: sonst träfe „Jona“ auch
+        // „Jonas“. Der Filterwert stammt ohnehin aus der Kurznamen-Auswahl.
+        const namen = `ANY($${paramIdx}::text[])`;
+        if (personAsAdressat) {
+          personRoleConditions.push(`LOWER(p.familienmitglied) = ${namen}`);
+        }
+        if (personAsPatient) {
+          personRoleConditions.push(`LOWER(a.behandelte_person) = ${namen}`);
+          personRoleConditions.push(`EXISTS (SELECT 1 FROM arztbericht abr WHERE abr.postid = p.postid AND LOWER(abr.behandelte_person) = ${namen})`);
+          personRoleConditions.push(`EXISTS (SELECT 1 FROM erstattungsbescheid_einzelposition ep WHERE ep.postid = p.postid AND LOWER(ep.behandelte_person) = ${namen})`);
+        }
+        if (personRoleConditions.length) {
+          personConditions.push(...personRoleConditions);
+          params.push(personAuswahl.namen);
+          paramIdx++;
+        }
       }
-      if (personAsPatient) {
-        personRoleConditions.push(`LOWER(a.behandelte_person) = LOWER($${paramIdx})`);
-        personRoleConditions.push(`EXISTS (SELECT 1 FROM arztbericht abr WHERE abr.postid = p.postid AND LOWER(abr.behandelte_person) = LOWER($${paramIdx}))`);
-        personRoleConditions.push(`EXISTS (SELECT 1 FROM erstattungsbescheid_einzelposition ep WHERE ep.postid = p.postid AND LOWER(ep.behandelte_person) = LOWER($${paramIdx}))`);
-      }
-
-      if (personRoleConditions.length === 0) {
-        conditions.push('1 = 0');
-      } else {
-        conditions.push(`(${personRoleConditions.join(' OR ')})`);
-        params.push(String(person).trim());
-        paramIdx++;
-      }
+      conditions.push(personConditions.length ? `(${personConditions.join(' OR ')})` : '1 = 0');
     }
 
     if (familienmitglied) {
@@ -543,9 +557,18 @@ router.get('/:postid', async (req, res) => {
     // unsichtbar machen.
     const arzResult = await query(`
       SELECT a.*, per.ist_tier AS behandelte_person_ist_tier,
-             per.pkv_satz AS personen_pkv_satz, per.beihilfe_satz AS personen_beihilfe_satz
+             per.pkv_satz AS personen_pkv_satz, per.beihilfe_satz AS personen_beihilfe_satz,
+             per.pkv AS personen_pkv, per.beihilfe AS personen_beihilfe,
+             ap_pkv.status AS abrechnungsperiode_pkv_status,
+             ap_bh.status AS abrechnungsperiode_beihilfe_status
       FROM arztrechnung a
       LEFT JOIN postbuch.mensch per ON per.kurzname = a.behandelte_person
+      LEFT JOIN abrechnungsperiode_buch ap_pkv
+        ON ap_pkv.person = a.behandelte_person AND ap_pkv.kostentraeger = 'PKV'
+       AND ap_pkv.periode = a.abrechnungsperiode_pkv
+      LEFT JOIN abrechnungsperiode_buch ap_bh
+        ON ap_bh.person = a.behandelte_person AND ap_bh.kostentraeger = 'Beihilfe'
+       AND ap_bh.periode = a.abrechnungsperiode_beihilfe
       WHERE a.postid = $1
     `, [postid]);
     if (arzResult.rows.length > 0) {
@@ -671,6 +694,13 @@ router.get('/:postid', async (req, res) => {
       response.generischeRechnung = gResult.rows[0];
     }
 
+    // Zahlungslage am jeweiligen Rechnungsblock (Teilzahlungstabelle, Rest)
+    const rechnungsblock = response.arztrechnung || response.handwerkerrechnung || response.generischeRechnung;
+    if (rechnungsblock) {
+      rechnungsblock.zahlung = berechneLage(rechnungsblock, await ladeZahlungen({ query }, postid));
+      rechnungsblock.ersetzung = await ladeErsetzung({ query }, postid);
+    }
+
     // Arztbericht
     const abResult = await query(`
       SELECT ab.*, m.ist_tier AS behandelte_person_ist_tier
@@ -786,11 +816,16 @@ router.patch('/:postid', async (req, res) => {
     res.json(result.rows[0]);
     uiLog('UPDATE', 'postbuch', postid, `fields: ${Object.keys(req.body).join(', ')}`);
 
-    // Bei Personenablage bestimmt familienmitglied den Ordner.
-    if ('familienmitglied' in req.body) {
+    // Familienmitglied, Briefdatum und Richtung können Ablageebenen sein und
+    // bestimmen dann den Ordner mit.
+    const ablageFelder = Object.entries(ABLAGE_FELD_EBENE).filter(([feld]) => feld in req.body);
+    if (ablageFelder.length) {
       loadDynamicSettings()
-        .then((settings) => getAblageStruktur(settings) === 'person_lxd' && verschiebeAnSollort(postid, settings))
-        .catch((err) => appLog('ERROR', 'ablage', `${postid}: Umzug nach Personenwechsel fehlgeschlagen: ${err.message}`,
+        .then((settings) => {
+          const ebenen = getAblageEbenen(settings);
+          return ablageFelder.some(([, ebene]) => ebenen.includes(ebene)) && verschiebeAnSollort(postid, settings);
+        })
+        .catch((err) => appLog('ERROR', 'ablage', `${postid}: Umzug an neuen Ablageort fehlgeschlagen: ${err.message}`,
           { entity: 'postbuch', entityId: postid }));
     }
 
@@ -847,35 +882,124 @@ router.post('/:postid/bezahlt', async (req, res) => {
     // Allow explicit null to clear the date; only default to today if not provided at all
     const date = 'bezahlt_am' in req.body ? (bezahlt_am ?? null) : new Date().toISOString().split('T')[0];
 
-    // Try arztrechnung first, then handwerkerrechnung, then generische_rechnung.
-    // bezahlt_am_manuell = true marks this as a user-set value that must survive reprocessing.
-    let result = await query(
-      `UPDATE arztrechnung SET bezahlt_am = $1::date, bezahlt_am_manuell = true WHERE postid = $2 RETURNING postid, bezahlt_am`,
-      [date, postid]
-    );
-
-    if (result.rows.length === 0) {
-      result = await query(
-        `UPDATE handwerkerrechnung SET bezahlt_am = $1::date, bezahlt_am_manuell = true WHERE postid = $2 RETURNING postid, bezahlt_am`,
-        [date, postid]
-      );
+    if (date !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(date))) {
+      return res.status(400).json({ error: 'Ungültiges Datum' });
     }
 
-    if (result.rows.length === 0) {
-      result = await query(
-        `UPDATE generische_rechnung SET bezahlt_am = $1::date, bezahlt_am_manuell = true WHERE postid = $2 RETURNING postid, bezahlt_am`,
-        [date, postid]
-      );
-    }
-
-    if (result.rows.length === 0) {
+    // Jede Zahlung wird mit Betrag geführt (service/rechnung-zahlung.js);
+    // bezahlt_am_manuell = true schützt sie vor der Wiederverarbeitung.
+    const lage = await inTransaktion((client) => setzeBezahltAm(client, postid, date));
+    if (!lage) {
       return res.status(404).json({ error: 'Keine Rechnung für diese PostID gefunden' });
     }
-
-    res.json(result.rows[0]);
+    res.json({ postid, bezahlt_am: lage.bezahlt_am, zahlung: lage });
     uiLog('UPDATE', 'bezahlt', postid, `bezahlt_am → ${date ?? 'null'}`);
   } catch (err) {
+    if (err instanceof ZahlungFehler) return res.status(err.status).json({ error: err.message });
     console.error('POST /api/postbuch/:postid/bezahlt error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// GET /api/postbuch/:postid/zahlungen — Zahlungen und offener Rest einer Rechnung
+router.get('/:postid/zahlungen', async (req, res) => {
+  try {
+    const { postid } = req.params;
+    if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
+    const lage = await ermittleZahlungslage({ query }, postid);
+    if (!lage) return res.status(404).json({ error: 'Keine Rechnung für diese PostID gefunden' });
+    res.json(lage);
+  } catch (err) {
+    console.error('GET /api/postbuch/:postid/zahlungen error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// PUT /api/postbuch/:postid/zahlungen — Teilzahlungstabelle als Ganzes ersetzen.
+// Body: { zahlungen: [{ datum: 'YYYY-MM-DD', betrag: '12.34' }] }
+router.put('/:postid/zahlungen', async (req, res) => {
+  try {
+    const { postid } = req.params;
+    if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
+    const lage = await inTransaktion((client) => ersetzeZahlungen(client, postid, req.body?.zahlungen));
+    uiLog('UPDATE', 'rechnung_zahlung', postid,
+      `${lage.zahlungen.length} Zahlung(en), gezahlt ${lage.gezahlt}, offen ${lage.offen ?? '–'}`);
+    res.json(lage);
+  } catch (err) {
+    if (err instanceof ZahlungFehler) return res.status(err.status).json({ error: err.message });
+    console.error('PUT /api/postbuch/:postid/zahlungen error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// ── Ersetzung durch Korrekturrechnung (service/rechnung-ersetzung.js) ─────────
+// Lesend wie schreibend nicht für eingeschränkte Leser freigegeben
+// (middleware/lesebereich.js): Die Vorschläge zeigen fremde Rechnungen.
+
+// GET /api/postbuch/:postid/ersetzung — Kanten und Kurzdaten der Rechnung
+router.get('/:postid/ersetzung', async (req, res) => {
+  try {
+    const { postid } = req.params;
+    if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
+    const rechnung = await ladeRechnungKurz(postid);
+    if (!rechnung) return res.status(404).json({ error: 'Keine Rechnung für diese PostID gefunden' });
+    res.json({ rechnung, ...(await ladeErsetzung({ query }, postid)) });
+  } catch (err) {
+    if (err instanceof ZahlungFehler) return res.status(err.status).json({ error: err.message });
+    console.error('GET /api/postbuch/:postid/ersetzung error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// GET /api/postbuch/:postid/ersetzung/kandidaten?richtung=vorgaenger|nachfolger
+router.get('/:postid/ersetzung/kandidaten', async (req, res) => {
+  try {
+    const { postid } = req.params;
+    if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
+    res.json(await ermittleKandidaten(postid, String(req.query.richtung || '')));
+  } catch (err) {
+    if (err instanceof ZahlungFehler) return res.status(err.status).json({ error: err.message });
+    console.error('GET /api/postbuch/:postid/ersetzung/kandidaten error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// POST /api/postbuch/:postid/ersetzung — Body { vorgaenger: 'P…' } (diese
+// Rechnung ersetzt jene) oder { nachfolger: 'P…' } (jene ersetzt diese).
+router.post('/:postid/ersetzung', async (req, res) => {
+  try {
+    const { postid } = req.params;
+    if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
+    const { vorgaenger, nachfolger } = req.body || {};
+    if (!!vorgaenger === !!nachfolger) {
+      return res.status(400).json({ error: 'Genau eines von vorgaenger oder nachfolger angeben.' });
+    }
+    const paar = vorgaenger ? { neu: postid, alt: String(vorgaenger) } : { neu: String(nachfolger), alt: postid };
+    const ergebnis = await inTransaktion((client) =>
+      ersetzeRechnung(client, { ...paar, akteur: req.session?.username || null }));
+    uiLog('UPDATE', 'rechnung_ersetzung', ergebnis.alt,
+      `ersetzt durch ${ergebnis.neu}, ${ergebnis.umgezogen} Zahlung(en) umgezogen`);
+    res.json(ergebnis);
+  } catch (err) {
+    if (err instanceof ZahlungFehler) return res.status(err.status).json({ error: err.message });
+    console.error('POST /api/postbuch/:postid/ersetzung error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// DELETE /api/postbuch/:postid/ersetzung — Ersetzung der Rechnung :postid
+// aufheben; die umgezogenen Zahlungen kehren zu ihr zurück.
+router.delete('/:postid/ersetzung', async (req, res) => {
+  try {
+    const { postid } = req.params;
+    if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
+    const ergebnis = await inTransaktion((client) => hebeErsetzungAuf(client, postid));
+    uiLog('UPDATE', 'rechnung_ersetzung', postid,
+      `Ersetzung durch ${ergebnis.neu} aufgehoben, ${ergebnis.zurueck} Zahlung(en) zurück`);
+    res.json(ergebnis);
+  } catch (err) {
+    if (err instanceof ZahlungFehler) return res.status(err.status).json({ error: err.message });
+    console.error('DELETE /api/postbuch/:postid/ersetzung error:', err);
     res.status(500).json({ error: 'Interner Serverfehler' });
   }
 });
@@ -911,16 +1035,24 @@ router.put('/:postid/bestritten', async (req, res) => {
       return res.status(400).json({ error: 'Der bestrittene Betrag darf den Rechnungsbetrag nicht überschreiten.' });
     }
 
-    const result = await query(
-      `UPDATE ${tableName} SET bestritten_betrag = $1 WHERE postid = $2
-       RETURNING postid, gesamtbetrag, bestritten_betrag, gesamtbetrag - COALESCE(bestritten_betrag, 0) AS offener_betrag`,
-      [amount, postid],
-    );
-    const row = result.rows[0];
+    // Der Zahlstatus hängt am zu zahlenden Betrag: Fällt der Bestritt weg,
+    // wird eine bisherige Vollzahlung zur Teilzahlung mit offenem Rest.
+    const row = await inTransaktion(async (client) => {
+      await pruefeNichtErsetzt(client, postid);
+      const r = await client.query(
+        `UPDATE ${tableName} SET bestritten_betrag = $1 WHERE postid = $2
+         RETURNING postid, gesamtbetrag, bestritten_betrag`,
+        [amount, postid],
+      );
+      await aktualisiereZahlstatus(client, postid);
+      const zahlung = await ermittleZahlungslage(client, postid);
+      return { ...r.rows[0], offener_betrag: zahlung?.offen ?? null, bezahlt_am: zahlung?.bezahlt_am ?? null, zahlung };
+    });
     uiLog('UPDATE', 'rechnung_bestritten', postid,
       `bestritten_betrag → ${amount === null ? 'aufgehoben' : amount}`);
     res.json({ ...row, ist_bestritten: amount !== null });
   } catch (err) {
+    if (err instanceof ZahlungFehler) return res.status(err.status).json({ error: err.message });
     console.error('PUT /api/postbuch/:postid/bestritten error:', err);
     res.status(500).json({ error: 'Interner Serverfehler' });
   }
@@ -1179,55 +1311,115 @@ router.patch('/:postid/arztrechnung/abrechnungsperiode', async (req, res) => {
     }
 
     const col = kostentraeger === 'PKV' ? 'abrechnungsperiode_pkv' : 'abrechnungsperiode_beihilfe';
+    const antwort = (status, body) => ({ status, body });
 
-    // Aktuelle Arztrechnung laden
-    const arzResult = await query(
-      `SELECT a.behandelte_person, m.ist_tier, ${col} AS current_periode
-       FROM arztrechnung a
-       LEFT JOIN postbuch.mensch m ON m.kurzname = a.behandelte_person
-       WHERE a.postid = $1`,
-      [postid]
-    );
-    if (arzResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Arztrechnung nicht gefunden' });
-    }
-    const { behandelte_person: person, current_periode: currentPeriode } = arzResult.rows[0];
-    if (arzResult.rows[0].ist_tier && kostentraeger === 'Beihilfe') {
-      return res.status(400).json({ error: 'Für Tiere ist keine Beihilfe-Abrechnungsperiode zulässig.' });
-    }
+    // Prüfen und Schreiben in einer Transaktion unter der Periodensperre der
+    // Person: Sonst könnte zwischen Statusprüfung und UPDATE eine Einreichung
+    // oder ein Bescheidabschluss die Periode verlassen (siehe
+    // service/perioden-sperre.js) und die Rechnung in einer bereits
+    // eingereichten Periode landen.
+    const ergebnis = await (async () => {
+      const client = await getClient();
+      try {
+        await client.query('BEGIN');
+        const vorab = await client.query(
+          `SELECT behandelte_person FROM arztrechnung WHERE postid = $1`, [postid]
+        );
+        if (vorab.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return antwort(404, { error: 'Arztrechnung nicht gefunden' });
+        }
+        await sperrePerioden(client, [{ person: vorab.rows[0].behandelte_person, kostentraeger }]);
 
-    if (periode === null) {
-      // Zuordnung lösen — nur wenn aktuelle Periode noch COLLECTING ist
-      if (currentPeriode === null) {
-        return res.status(400).json({ error: 'Keine Abrechnungsperiode zugeordnet' });
-      }
-      const apResult = await query(
-        `SELECT status FROM abrechnungsperiode_buch WHERE person = $1 AND kostentraeger = $2 AND periode = $3`,
-        [person, kostentraeger, currentPeriode]
-      );
-      if (apResult.rows.length === 0 || apResult.rows[0].status !== 'COLLECTING') {
-        return res.status(409).json({ error: 'Abrechnungsperiode ist nicht mehr im Status COLLECTING' });
-      }
-      await query(`UPDATE arztrechnung SET ${col} = NULL WHERE postid = $1`, [postid]);
-      uiLog('UPDATE', 'arztrechnung_ap', postid, `${col} gelöst (war ${currentPeriode})`);
-    } else {
-      // Zuordnen — nur wenn Zielperiode COLLECTING ist
-      const apResult = await query(
-        `SELECT status FROM abrechnungsperiode_buch WHERE person = $1 AND kostentraeger = $2 AND periode = $3`,
-        [person, kostentraeger, periode]
-      );
-      if (apResult.rows.length === 0) {
-        return res.status(404).json({ error: 'Abrechnungsperiode nicht gefunden' });
-      }
-      if (apResult.rows[0].status !== 'COLLECTING') {
-        return res.status(409).json({ error: 'Abrechnungsperiode ist nicht im Status COLLECTING' });
-      }
-      await query(`UPDATE arztrechnung SET ${col} = $1 WHERE postid = $2`, [periode, postid]);
-      uiLog('UPDATE', 'arztrechnung_ap', postid, `${col} → ${periode}`);
-    }
+        // Aktuelle Arztrechnung nach der Sperre gesperrt laden
+        const arzResult = await client.query(
+          `SELECT a.behandelte_person, m.ist_tier, m.pkv, m.beihilfe, ${col} AS current_periode
+           FROM arztrechnung a
+           LEFT JOIN postbuch.mensch m ON m.kurzname = a.behandelte_person
+           WHERE a.postid = $1
+           FOR UPDATE OF a`,
+          [postid]
+        );
+        if (arzResult.rows.length === 0) {
+          await client.query('ROLLBACK');
+          return antwort(404, { error: 'Arztrechnung nicht gefunden' });
+        }
+        const { behandelte_person: person, current_periode: currentPeriode } = arzResult.rows[0];
+        if (person !== vorab.rows[0].behandelte_person) {
+          await client.query('ROLLBACK');
+          return antwort(409, { error: 'Die behandelte Person der Rechnung wurde gerade geändert. Bitte erneut versuchen.' });
+        }
+        if (arzResult.rows[0].ist_tier && kostentraeger === 'Beihilfe') {
+          await client.query('ROLLBACK');
+          return antwort(400, { error: 'Für Tiere ist keine Beihilfe-Abrechnungsperiode zulässig.' });
+        }
+        // Behandelt werden kann jeder erfasste Mensch und jedes Tier; eine
+        // Abrechnungsperiode gibt es nur beim passenden Versicherungsschutz.
+        // Lösen bleibt immer möglich (etwa nach Wechsel der behandelten Person).
+        const versichert = kostentraeger === 'PKV' ? arzResult.rows[0].pkv : arzResult.rows[0].beihilfe;
+        if (periode !== null && !versichert) {
+          await client.query('ROLLBACK');
+          return antwort(400, {
+            error: person
+              ? `${person} ist nicht ${kostentraeger === 'PKV' ? 'PKV-versichert' : 'beihilfeberechtigt'} – keine Abrechnungsperiode möglich.`
+              : 'Ohne behandelte Person ist keine Abrechnungsperiode möglich.',
+          });
+        }
 
-    // Detail-Cache invalidieren
-    res.json({ ok: true });
+        if (periode === null) {
+          // Zuordnung lösen — nur wenn aktuelle Periode noch COLLECTING ist
+          if (currentPeriode === null) {
+            await client.query('ROLLBACK');
+            return antwort(400, { error: 'Keine Abrechnungsperiode zugeordnet' });
+          }
+          const apResult = await client.query(
+            `SELECT status FROM abrechnungsperiode_buch WHERE person = $1 AND kostentraeger = $2 AND periode = $3 FOR SHARE`,
+            [person, kostentraeger, currentPeriode]
+          );
+          if (apResult.rows.length === 0 || apResult.rows[0].status !== 'COLLECTING') {
+            await client.query('ROLLBACK');
+            return antwort(409, { error: 'Abrechnungsperiode ist nicht mehr im Status SAMMELT' });
+          }
+          await client.query(`UPDATE arztrechnung SET ${col} = NULL WHERE postid = $1`, [postid]);
+          await client.query('COMMIT');
+          uiLog('UPDATE', 'arztrechnung_ap', postid, `${col} gelöst (war ${currentPeriode})`);
+        } else {
+          // Eine ersetzte Rechnung fordert nichts mehr und gehört in keine Periode.
+          const ersetzt = await client.query(
+            `SELECT von_postid FROM postbuch.dokument_beziehung WHERE zu_postid = $1 AND art = 'ersetzt'`,
+            [postid]
+          );
+          if (ersetzt.rows[0]) {
+            await client.query('ROLLBACK');
+            return antwort(409, { error: `Diese Rechnung ist durch ${ersetzt.rows[0].von_postid} ersetzt und kann keiner Abrechnungsperiode zugeordnet werden.` });
+          }
+          // Zuordnen — nur wenn Zielperiode COLLECTING ist
+          const apResult = await client.query(
+            `SELECT status FROM abrechnungsperiode_buch WHERE person = $1 AND kostentraeger = $2 AND periode = $3 FOR SHARE`,
+            [person, kostentraeger, periode]
+          );
+          if (apResult.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return antwort(404, { error: 'Abrechnungsperiode nicht gefunden' });
+          }
+          if (apResult.rows[0].status !== 'COLLECTING') {
+            await client.query('ROLLBACK');
+            return antwort(409, { error: 'Abrechnungsperiode ist nicht im Status SAMMELT' });
+          }
+          await client.query(`UPDATE arztrechnung SET ${col} = $1 WHERE postid = $2`, [periode, postid]);
+          await client.query('COMMIT');
+          uiLog('UPDATE', 'arztrechnung_ap', postid, `${col} → ${periode}`);
+        }
+        return antwort(200, { ok: true });
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw err;
+      } finally {
+        client.release();
+      }
+    })();
+
+    res.status(ergebnis.status).json(ergebnis.body);
   } catch (err) {
     console.error('PATCH /api/postbuch/:postid/arztrechnung/abrechnungsperiode error:', err);
     res.status(500).json({ error: 'Interner Serverfehler' });
@@ -1235,7 +1427,8 @@ router.patch('/:postid/arztrechnung/abrechnungsperiode', async (req, res) => {
 });
 
 // PATCH /api/postbuch/:postid/handwerkerrechnung
-// Aktualisiert die Felder einer Handwerkerrechnung (alle außer postid und bezahlt_am).
+// Aktualisiert die Felder einer Handwerkerrechnung (alle außer postid und bezahlt_am)
+// sowie den vom Nutzer gesetzten § 35a-Ausschluss (estg35a_irrelevant).
 // Leere Strings werden als NULL gespeichert.
 router.patch('/:postid/handwerkerrechnung', async (req, res) => {
   try {
@@ -1248,6 +1441,7 @@ router.patch('/:postid/handwerkerrechnung', async (req, res) => {
     const dateFields    = ['rechnungsdatum', 'faelligkeit'];
     const numericFields = ['gesamtbetrag', 'lohnkosten'];
     const integerFields = ['leistungsjahr'];
+    const booleanFields = ['estg35a_irrelevant'];
 
     const updates = [];
     const params  = [];
@@ -1307,15 +1501,35 @@ router.patch('/:postid/handwerkerrechnung', async (req, res) => {
       }
     }
 
+    // Nur der Nutzer setzt den § 35a-Ausschluss; null (Rückgängig) heißt false.
+    for (const f of booleanFields) {
+      if (f in req.body) {
+        const raw = req.body[f];
+        if (raw !== null && typeof raw !== 'boolean') {
+          return res.status(400).json({ error: `Ungültiger Wert für ${f}` });
+        }
+        updates.push(`${f} = $${paramIdx}`);
+        params.push(raw === true);
+        paramIdx++;
+      }
+    }
+
     if (updates.length === 0) {
       return res.status(400).json({ error: 'Keine aktualisierbaren Felder angegeben' });
     }
 
     params.push(postid);
-    const result = await query(
-      `UPDATE postbuch.handwerkerrechnung SET ${updates.join(', ')} WHERE postid = $${paramIdx} RETURNING *`,
-      params
-    );
+    // Ein geänderter Rechnungsbetrag verschiebt den offenen Rest; der
+    // Zahlstatus wird in derselben Transaktion neu abgeleitet.
+    const result = await inTransaktion(async (client) => {
+      const r = await client.query(
+        `UPDATE postbuch.handwerkerrechnung SET ${updates.join(', ')} WHERE postid = $${paramIdx} RETURNING *`,
+        params
+      );
+      if (r.rows.length === 0 || !('gesamtbetrag' in req.body)) return r;
+      await gleicheZahlungenAn(client, postid);
+      return client.query(`SELECT * FROM postbuch.handwerkerrechnung WHERE postid = $1`, [postid]);
+    });
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Handwerkerrechnung nicht gefunden' });
@@ -1323,8 +1537,9 @@ router.patch('/:postid/handwerkerrechnung', async (req, res) => {
 
     res.json(result.rows[0]);
     uiLog('UPDATE', 'handwerkerrechnung', postid,
-      `fields: ${Object.keys(req.body).filter(k => [...textFields, ...dateFields, ...numericFields, ...integerFields].includes(k)).join(', ')}`);
+      `fields: ${Object.keys(req.body).filter(k => [...textFields, ...dateFields, ...numericFields, ...integerFields, ...booleanFields].includes(k)).join(', ')}`);
   } catch (err) {
+    if (err instanceof ZahlungFehler) return res.status(err.status).json({ error: err.message });
     console.error('PATCH /api/postbuch/:postid/handwerkerrechnung error:', err);
     res.status(500).json({ error: 'Interner Serverfehler' });
   }
@@ -1354,6 +1569,16 @@ router.patch('/:postid/arztrechnung', async (req, res) => {
       const s = String(v).trim();
       return s === '' ? null : s;
     };
+
+    // Behandelte Person: jeder erfasste Mensch oder jedes Tier, unabhängig
+    // von einer Versicherung – oder leer.
+    if ('behandelte_person' in req.body) {
+      const v = normalizeText(req.body.behandelte_person);
+      if (v !== null) {
+        const m = await query('SELECT 1 FROM postbuch.mensch WHERE kurzname = $1', [v]);
+        if (!m.rowCount) return res.status(400).json({ error: 'behandelte_person ist kein erfasster Kurzname' });
+      }
+    }
 
     for (const f of textFields) {
       if (f in req.body) {
@@ -1419,21 +1644,213 @@ router.patch('/:postid/arztrechnung', async (req, res) => {
     }
 
     params.push(postid);
-    const result = await query(
-      `UPDATE postbuch.arztrechnung SET ${updates.join(', ')} WHERE postid = $${paramIdx} RETURNING *`,
-      params
-    );
+    // Ein geänderter Rechnungsbetrag verschiebt den offenen Rest; der
+    // Zahlstatus wird in derselben Transaktion neu abgeleitet.
+    const result = await inTransaktion(async (client) => {
+      const r = await client.query(
+        `UPDATE postbuch.arztrechnung SET ${updates.join(', ')} WHERE postid = $${paramIdx} RETURNING *`,
+        params
+      );
+      if (r.rows.length === 0 || !('gesamtbetrag' in req.body)) return r;
+      await gleicheZahlungenAn(client, postid);
+      return client.query(`SELECT * FROM postbuch.arztrechnung WHERE postid = $1`, [postid]);
+    });
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Arztrechnung nicht gefunden' });
     }
 
     res.json(result.rows[0]);
+    if ('behandelte_person' in req.body) zieheNachBehandelterPerson(postid);
     uiLog('UPDATE', 'arztrechnung', postid,
       `fields: ${Object.keys(req.body).filter(k => [...textFields, ...dateFields, ...numericFields, 'einreichung_seite_von', 'einreichung_seite_bis'].includes(k)).join(', ')}`);
   } catch (err) {
+    if (err instanceof ZahlungFehler) return res.status(err.status).json({ error: err.message });
     console.error('PATCH /api/postbuch/:postid/arztrechnung error:', err);
     res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// ── Einzelpositionen einer Arztrechnung manuell pflegen ──────────────────────
+// Die Differenzposition (ist_differenz) pflegt ausschließlich der DB-Trigger
+// fn_arz_differenz_abgleichen beim Commit; sie ist hier weder bearbeit- noch
+// löschbar. Neue Positionen erhalten die nächste freie subid, bestehende
+// subids werden nie umnummeriert (Kürzungen und SymLinks verweisen darauf).
+
+const POSITION_TEXT_FELDER = ['goa_goz_gebueh_pzn', 'leistung', 'begruendung'];
+
+// Liefert { felder } oder { error }. Nur im Body vorhandene Felder werden übernommen.
+function parsePositionFelder(body) {
+  const felder = {};
+  for (const f of POSITION_TEXT_FELDER) {
+    if (!(f in body)) continue;
+    const v = body[f];
+    const s = v === null || v === undefined ? '' : String(v).trim();
+    if (s.length > 2000) return { error: `${f} ist zu lang` };
+    felder[f] = s === '' ? null : s;
+  }
+  if ('behandlungs_datum' in body) {
+    const v = body.behandlungs_datum;
+    if (v === null || v === undefined || v === '') felder.behandlungs_datum = null;
+    else if (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) && !isNaN(Date.parse(String(v)))) felder.behandlungs_datum = String(v);
+    else return { error: 'Ungültiges Behandlungsdatum' };
+  }
+  const zahl = (raw) => {
+    if (raw === null || raw === undefined || raw === '') return null;
+    const n = typeof raw === 'number' ? raw : parseFloat(String(raw).replace(',', '.'));
+    return Number.isFinite(n) ? Math.round(n * 100) / 100 : NaN;
+  };
+  if ('faktor' in body) {
+    const n = zahl(body.faktor);
+    if (Number.isNaN(n) || (n !== null && (n <= 0 || n >= 1000))) return { error: 'Ungültiger Faktor' };
+    felder.faktor = n;
+  }
+  if ('betrag' in body) {
+    const n = zahl(body.betrag);
+    if (n === null || Number.isNaN(n) || Math.abs(n) >= 1e10) return { error: 'Ungültiger Betrag' };
+    felder.betrag = n;
+  }
+  return { felder };
+}
+
+async function ladePositionen(postid) {
+  const r = await query(
+    `SELECT * FROM arztrechnung_einzelposition WHERE postid = $1 ORDER BY subid`,
+    [postid]
+  );
+  return r.rows;
+}
+
+// Sperrt den Rechnungskopf; liefert false, wenn es keine Arztrechnung gibt.
+async function sperreArztrechnung(client, postid) {
+  const r = await client.query(`SELECT 1 FROM arztrechnung WHERE postid = $1 FOR UPDATE`, [postid]);
+  return r.rows.length > 0;
+}
+
+// POST /:postid/arztrechnung/positionen — neue Position anhängen
+router.post('/:postid/arztrechnung/positionen', async (req, res) => {
+  const { postid } = req.params;
+  if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
+  const { felder, error } = parsePositionFelder(req.body || {});
+  if (error) return res.status(400).json({ error });
+  if (felder.betrag === undefined) return res.status(400).json({ error: 'Betrag fehlt' });
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    if (!(await sperreArztrechnung(client, postid))) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Arztrechnung nicht gefunden' });
+    }
+    const spalten = Object.keys(felder);
+    const naechste = await client.query(
+      `SELECT COALESCE(MAX(subid), 0) + 1 AS subid FROM arztrechnung_einzelposition WHERE postid = $1`,
+      [postid]
+    );
+    const subid = naechste.rows[0].subid;
+    await client.query(
+      `INSERT INTO arztrechnung_einzelposition (postid, subid, ${spalten.join(', ')})
+       VALUES ($1, $2, ${spalten.map((_, i) => `$${i + 3}`).join(', ')})`,
+      [postid, subid, ...spalten.map(k => felder[k])]
+    );
+    await client.query('COMMIT');
+    uiLog('CREATE', 'arztrechnung_position', postid, `subid=${subid}, betrag=${felder.betrag}`);
+    res.status(201).json({ subid, einzelpositionen: await ladePositionen(postid) });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('POST /api/postbuch/:postid/arztrechnung/positionen error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  } finally {
+    client.release();
+  }
+});
+
+// PATCH /:postid/arztrechnung/positionen/:subid — Position ändern
+router.patch('/:postid/arztrechnung/positionen/:subid', async (req, res) => {
+  const { postid, subid } = req.params;
+  if (!POSTID_RE.test(postid) || !SUBID_RE.test(subid)) return res.status(400).json({ error: 'Ungültige Position' });
+  const { felder, error } = parsePositionFelder(req.body || {});
+  if (error) return res.status(400).json({ error });
+  const spalten = Object.keys(felder);
+  if (spalten.length === 0) return res.status(400).json({ error: 'Keine aktualisierbaren Felder angegeben' });
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    await sperreArztrechnung(client, postid);
+    const pos = await client.query(
+      `SELECT ist_differenz FROM arztrechnung_einzelposition WHERE postid = $1 AND subid = $2 FOR UPDATE`,
+      [postid, Number(subid)]
+    );
+    if (pos.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Position nicht gefunden' });
+    }
+    if (pos.rows[0].ist_differenz) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Der automatisch ermittelte Differenzbetrag wird selbst berechnet und kann nicht bearbeitet werden.' });
+    }
+    await client.query(
+      `UPDATE arztrechnung_einzelposition SET ${spalten.map((k, i) => `${k} = $${i + 3}`).join(', ')}
+        WHERE postid = $1 AND subid = $2`,
+      [postid, Number(subid), ...spalten.map(k => felder[k])]
+    );
+    await client.query('COMMIT');
+    uiLog('UPDATE', 'arztrechnung_position', postid, `subid=${subid}, fields: ${spalten.join(', ')}`);
+    res.json({ einzelpositionen: await ladePositionen(postid) });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('PATCH /api/postbuch/:postid/arztrechnung/positionen/:subid error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  } finally {
+    client.release();
+  }
+});
+
+// DELETE /:postid/arztrechnung/positionen/:subid — nur ohne verknüpfte Kürzung
+router.delete('/:postid/arztrechnung/positionen/:subid', async (req, res) => {
+  const { postid, subid } = req.params;
+  if (!POSTID_RE.test(postid) || !SUBID_RE.test(subid)) return res.status(400).json({ error: 'Ungültige Position' });
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+    await sperreArztrechnung(client, postid);
+    const pos = await client.query(
+      `SELECT ist_differenz FROM arztrechnung_einzelposition WHERE postid = $1 AND subid = $2 FOR UPDATE`,
+      [postid, Number(subid)]
+    );
+    if (pos.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Position nicht gefunden' });
+    }
+    if (pos.rows[0].ist_differenz) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Der automatisch ermittelte Differenzbetrag verschwindet von selbst, sobald die Positionen den Rechnungsbetrag ergeben.' });
+    }
+    const kuerzungen = await client.query(
+      `SELECT DISTINCT postid FROM erstattungsbescheid_kuerzung
+        WHERE arz_postid = $1 AND arz_subid = $2 ORDER BY postid`,
+      [postid, Number(subid)]
+    );
+    if (kuerzungen.rows.length > 0) {
+      await client.query('ROLLBACK');
+      const ebs = kuerzungen.rows.map(r => r.postid).join(', ');
+      return res.status(409).json({ error: `Position ${subid} ist mit einer Kürzung aus ${ebs} verknüpft und kann nicht gelöscht werden. Bitte zuerst die Kürzungszuordnung im Erstattungsbescheid lösen.` });
+    }
+    await client.query(`DELETE FROM arztrechnung_einzelposition WHERE postid = $1 AND subid = $2`, [postid, Number(subid)]);
+    await client.query('COMMIT');
+    uiLog('DELETE', 'arztrechnung_position', postid, `subid=${subid}`);
+    res.json({ einzelpositionen: await ladePositionen(postid) });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err?.code === '23503') {
+      return res.status(409).json({ error: 'Position ist mit einem Erstattungsbescheid verknüpft und kann nicht gelöscht werden.' });
+    }
+    console.error('DELETE /api/postbuch/:postid/arztrechnung/positionen/:subid error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  } finally {
+    client.release();
   }
 });
 
@@ -1746,10 +2163,17 @@ router.patch('/:postid/generischerechnung', async (req, res) => {
     }
 
     params.push(postid);
-    const result = await query(
-      `UPDATE postbuch.generische_rechnung SET ${updates.join(', ')} WHERE postid = $${paramIdx} RETURNING *`,
-      params
-    );
+    // Ein geänderter Rechnungsbetrag verschiebt den offenen Rest; der
+    // Zahlstatus wird in derselben Transaktion neu abgeleitet.
+    const result = await inTransaktion(async (client) => {
+      const r = await client.query(
+        `UPDATE postbuch.generische_rechnung SET ${updates.join(', ')} WHERE postid = $${paramIdx} RETURNING *`,
+        params
+      );
+      if (r.rows.length === 0 || !('gesamtbetrag' in req.body)) return r;
+      await gleicheZahlungenAn(client, postid);
+      return client.query(`SELECT * FROM postbuch.generische_rechnung WHERE postid = $1`, [postid]);
+    });
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Generische Rechnung nicht gefunden' });
@@ -1759,6 +2183,7 @@ router.patch('/:postid/generischerechnung', async (req, res) => {
     uiLog('UPDATE', 'generische_rechnung', postid,
       `fields: ${Object.keys(req.body).filter(k => [...textFields, ...dateFields, ...numericFields].includes(k)).join(', ')}`);
   } catch (err) {
+    if (err instanceof ZahlungFehler) return res.status(err.status).json({ error: err.message });
     console.error('PATCH /api/postbuch/:postid/generischerechnung error:', err);
     res.status(500).json({ error: 'Interner Serverfehler' });
   }
@@ -1793,10 +2218,27 @@ router.delete('/:postid/generischerechnung', async (req, res) => {
       });
     }
 
-    const delResult = await query(
-      `DELETE FROM generische_rechnung WHERE postid = $1 RETURNING postid`,
-      [postid]
+    const kante = await query(
+      `SELECT 1 FROM postbuch.dokument_beziehung WHERE art = 'ersetzt' AND (von_postid = $1 OR zu_postid = $1)`,
+      [postid],
     );
+    if (kante.rowCount > 0) {
+      return res.status(409).json({
+        error: 'Die Rechnung ist mit einer Korrekturrechnung verknüpft – bitte zuerst die Ersetzung aufheben.',
+      });
+    }
+
+    // Zahlungen hängen am Dokument, nicht am Block — mit dem Block entfernen.
+    const delResult = await inTransaktion(async (client) => {
+      const r = await client.query(
+        `DELETE FROM generische_rechnung WHERE postid = $1 RETURNING postid`,
+        [postid]
+      );
+      if (r.rows.length > 0) {
+        await client.query('DELETE FROM postbuch.rechnung_zahlung WHERE postid = $1', [postid]);
+      }
+      return r;
+    });
     if (delResult.rows.length === 0) {
       return res.status(404).json({ error: 'Kein Rechnungsblock für dieses Dokument vorhanden' });
     }

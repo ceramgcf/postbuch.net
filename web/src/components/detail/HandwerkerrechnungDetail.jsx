@@ -4,81 +4,14 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { formatDate, formatCurrency, formatIban } from '@/lib/utils';
 import { Pencil, Check, X, Trash2 } from 'lucide-react';
-import { useMarkPaid, useUpdateHandwerker } from '@/hooks/usePostbuch';
+import { useUpdateHandwerker } from '@/hooks/usePostbuch';
 import { useUndoHistory } from '@/hooks/useUndoHistory';
 import { CopyableField } from './CopyableField';
 import { GiroCode } from './GiroCode';
+import { ZahlungField, offenerRestbetrag } from './ZahlungField';
 import { useAuth } from '@/hooks/useAuth';
-import { DisputeAction, DisputeStatus } from './DisputeField';
-import { InvalidateRechnungAction } from './InvalidateRechnungAction';
-
-function BezahldatumField({ postid, bezahlt_am }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
-  const { mutate: markPaid, mutateAsync: markPaidAsync, isPending } = useMarkPaid();
-  const { pushAction } = useUndoHistory();
-  const { canWrite } = useAuth();
-
-  function startEdit() {
-    setDraft(bezahlt_am ? bezahlt_am.split('T')[0] : '');
-    setEditing(true);
-  }
-  function save() {
-    const oldDate = bezahlt_am ? bezahlt_am.split('T')[0] : null;
-    const newDate = draft || null;
-    markPaid({ postid, date: newDate }, {
-      onSuccess: () => {
-        setEditing(false);
-        pushAction('Bezahldatum geändert', () => markPaidAsync({ postid, date: oldDate }), () => markPaidAsync({ postid, date: newDate }));
-      },
-    });
-  }
-  function remove() {
-    const oldDate = bezahlt_am ? bezahlt_am.split('T')[0] : null;
-    markPaid({ postid, date: null }, {
-      onSuccess: () => {
-        setEditing(false);
-        pushAction('Als offen markiert', () => markPaidAsync({ postid, date: oldDate }), () => markPaidAsync({ postid, date: null }));
-      },
-    });
-  }
-
-  return (
-    <div>
-      <div className="flex items-center gap-1.5 mb-1">
-        <dt className="text-muted-foreground">Bezahlt am</dt>
-        {!editing && canWrite && (
-          <button onClick={startEdit} className="text-muted-foreground/30 hover:text-muted-foreground transition-colors" title="Bezahldatum bearbeiten">
-            <Pencil className="h-3 w-3" />
-          </button>
-        )}
-      </div>
-      {editing ? (
-        <div className="space-y-1.5">
-          <Input type="date" value={draft} onChange={e => setDraft(e.target.value)} className="h-7 text-sm w-[160px]" />
-          <div className="flex items-center gap-1.5">
-            <Button size="sm" onClick={save} disabled={isPending} className="h-6 px-2.5 text-xs gap-1">
-              <Check className="h-3 w-3" />{isPending ? 'Speichern…' : 'Speichern'}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={isPending} className="h-6 px-2 text-xs gap-1 text-muted-foreground">
-              <X className="h-3 w-3" />Abbrechen
-            </Button>
-            <Button variant="ghost" size="sm" onClick={remove} disabled={isPending} className="h-6 px-2 text-xs gap-1 text-destructive/60 hover:text-destructive ml-auto" title="Als offen markieren">
-              <Trash2 className="h-3 w-3" />Entfernen
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <dd className="font-medium">
-          {bezahlt_am
-            ? <span className="text-green-600">{formatDate(bezahlt_am)}</span>
-            : <span className="text-amber-600">Offen</span>
-          }
-        </dd>
-      )}
-    </div>
-  );
-}
+import { DisputeStatus } from './DisputeField';
+import { RechnungMenu, ErsetzungHinweis } from './RechnungMenu';
 
 /**
  * Inline-Editor für ein Feld der Handwerkerrechnung.
@@ -96,7 +29,7 @@ function EditableField({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
-  const { mutate, mutateAsync, isPending } = useUpdateHandwerker();
+  const { mutate, mutateAsync, isPending, error, reset } = useUpdateHandwerker();
   const { pushAction } = useUndoHistory();
   const { canWrite } = useAuth();
 
@@ -108,6 +41,7 @@ function EditableField({
     } else {
       setDraft(value != null ? String(value) : '');
     }
+    reset();
     setEditing(true);
   }
 
@@ -183,7 +117,8 @@ function EditableField({
               autoFocus
             />
           )}
-          <div className="flex items-center gap-1.5">
+          {error && <p className="text-xs text-destructive">{error.message}</p>}
+          <div className="flex flex-wrap items-center gap-1.5">
             <Button size="sm" onClick={save} disabled={isPending} className="h-6 px-2.5 text-xs gap-1">
               <Check className="h-3 w-3" />{isPending ? 'Speichern…' : 'Speichern'}
             </Button>
@@ -204,17 +139,59 @@ function EditableField({
   );
 }
 
+/**
+ * § 35a EStG: Der Nutzer schließt eine Rechnung ausdrücklich von der
+ * steuerlichen Auswertung aus. Die KI setzt das nie; Standard ist „relevant".
+ */
+function Estg35aAusschluss({ postid, value }) {
+  const { mutate, mutateAsync, isPending, error } = useUpdateHandwerker();
+  const { pushAction } = useUndoHistory();
+  const { canWrite } = useAuth();
+  const ausgeschlossen = value === true;
+
+  function setze(neu) {
+    mutate({ postid, estg35a_irrelevant: neu }, {
+      onSuccess: () => pushAction(
+        neu ? '§ 35a-Ausschluss gesetzt' : '§ 35a-Ausschluss aufgehoben',
+        () => mutateAsync({ postid, estg35a_irrelevant: !neu }),
+        () => mutateAsync({ postid, estg35a_irrelevant: neu }),
+      ),
+    });
+  }
+
+  return (
+    <div>
+      <label className={`inline-flex items-start gap-2 ${canWrite ? 'cursor-pointer' : 'cursor-default'}`}>
+        <input
+          type="checkbox"
+          checked={ausgeschlossen}
+          disabled={!canWrite || isPending}
+          onChange={(e) => setze(e.target.checked)}
+          className="mt-0.5 accent-primary"
+        />
+        <span>
+          <span className="font-medium">Für § 35a EStG nicht relevant</span>
+          <span className="block text-xs text-muted-foreground">
+            Schließt die Rechnung aus der Auswertung Analyse → Handwerker aus.
+          </span>
+        </span>
+      </label>
+      {error && <p className="mt-1 text-xs text-destructive">{error.message}</p>}
+    </div>
+  );
+}
+
 export function HandwerkerrechnungDetail({ data }) {
   if (!data) return null;
 
   return (
     <div className="space-y-4">
+      <ErsetzungHinweis postid={data.postid} ersetzung={data.ersetzung} />
       <Card>
         <CardHeader className="pb-3 flex-row items-center justify-between gap-3 flex-wrap space-y-0">
           <CardTitle className="text-base">Handwerkerrechnung</CardTitle>
           <div className="flex items-center gap-2 flex-wrap">
-            <DisputeAction postid={data.postid} gesamtbetrag={data.gesamtbetrag} bestritten_betrag={data.bestritten_betrag} />
-            <InvalidateRechnungAction postid={data.postid} />
+            <RechnungMenu data={data} />
           </div>
         </CardHeader>
         <CardContent>
@@ -266,8 +243,8 @@ export function HandwerkerrechnungDetail({ data }) {
               type="date"
               format={formatDate}
             />
-            <BezahldatumField postid={data.postid} bezahlt_am={data.bezahlt_am} />
-            <DisputeStatus gesamtbetrag={data.gesamtbetrag} bestritten_betrag={data.bestritten_betrag} />
+            <ZahlungField postid={data.postid} bezahlt_am={data.bezahlt_am} zahlung={data.zahlung} ersetzung={data.ersetzung} />
+            <DisputeStatus gesamtbetrag={data.gesamtbetrag} bestritten_betrag={data.bestritten_betrag} offen={offenerRestbetrag(data)} />
             <EditableField
               label="Gesamtbetrag"
               postid={data.postid}
@@ -314,12 +291,15 @@ export function HandwerkerrechnungDetail({ data }) {
                 inputClassName="w-full max-w-full"
               />
             </div>
+            <div className="col-span-2 md:col-span-3">
+              <Estg35aAusschluss postid={data.postid} value={data.estg35a_irrelevant} />
+            </div>
           </dl>
         </CardContent>
       </Card>
 
       {/* Zahlung – nur bei offenen Rechnungen */}
-      {!data.bezahlt_am && Number(data.gesamtbetrag || 0) > Number(data.bestritten_betrag || 0) && (data.iban || data.name_unternehmen) && (
+      {offenerRestbetrag(data) > 0 && (data.iban || data.name_unternehmen) && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Zahlung</CardTitle>
@@ -341,9 +321,7 @@ export function HandwerkerrechnungDetail({ data }) {
                 />
                 <CopyableField
                   label="Betrag"
-                  value={data.gesamtbetrag
-                    ? (parseFloat(data.gesamtbetrag) - parseFloat(data.bestritten_betrag || 0)).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                    : null}
+                  value={offenerRestbetrag(data).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   highlight
                 />
                 {data.verwendungszweck && (
@@ -358,7 +336,7 @@ export function HandwerkerrechnungDetail({ data }) {
               <GiroCode
                 iban={data.iban}
                 name={data.name_unternehmen}
-                amount={parseFloat(data.gesamtbetrag) - parseFloat(data.bestritten_betrag || 0)}
+                amount={offenerRestbetrag(data)}
                 reference={data.verwendungszweck}
                 size={150}
               />

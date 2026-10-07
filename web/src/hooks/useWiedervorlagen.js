@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { api } from '../api/client';
 
 export function useWiedervorlagen(params) {
@@ -10,10 +10,16 @@ export function useWiedervorlagen(params) {
   });
 }
 
-export function useWiedervorlagenDashboard() {
+/**
+ * @param {string[]|null} personen  Personenauswahl des Dashboards, null = alle
+ * @param {boolean} enabled  false, solange die Auswahl noch nicht feststeht
+ */
+export function useWiedervorlagenDashboard(personen = null, enabled = true) {
   return useQuery({
-    queryKey: ['wiedervorlagen', 'dashboard'],
-    queryFn: () => api.wiedervorlagen.dashboard(),
+    queryKey: ['wiedervorlagen', 'dashboard', personen ?? 'alle'],
+    queryFn: () => api.wiedervorlagen.dashboard(personen),
+    placeholderData: keepPreviousData,
+    enabled,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
   });

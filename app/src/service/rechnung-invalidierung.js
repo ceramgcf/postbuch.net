@@ -48,6 +48,8 @@ export async function ermittleInvalidierungsLage(postid, db = pool) {
             (g.postid IS NOT NULL) AS hat_generisch,
             COALESCE(a.bezahlt_am_manuell, h.bezahlt_am_manuell, g.bezahlt_am_manuell, false) AS bezahlt_manuell,
             COALESCE(a.bestritten_betrag, h.bestritten_betrag, g.bestritten_betrag) AS bestritten_betrag,
+            EXISTS (SELECT 1 FROM postbuch.dokument_beziehung db
+                     WHERE db.art = 'ersetzt' AND (db.von_postid = p.postid OR db.zu_postid = p.postid)) AS hat_ersetzung,
             a.abrechnungsperiode_pkv, a.abrechnungsperiode_beihilfe,
             a.pkv_satz_override, a.beihilfe_satz_override
        FROM postbuch.postbuch p
@@ -66,7 +68,10 @@ export async function ermittleInvalidierungsLage(postid, db = pool) {
 
   const gruende = [];
   if (row.bezahlt_manuell) {
-    gruende.push('Die Rechnung trägt ein manuell gesetztes Bezahldatum. Bitte zuerst im Feld „Bezahlt am" entfernen — eine bezahlte Rechnung sollte ihren Block behalten.');
+    gruende.push('Die Rechnung trägt ein manuell gesetztes Bezahldatum oder erfasste Zahlungen. Bitte zuerst im Feld „Bezahlt am" bzw. in der Zahlungstabelle entfernen — eine bezahlte Rechnung sollte ihren Block behalten.');
+  }
+  if (row.hat_ersetzung) {
+    gruende.push('Die Rechnung ist mit einer Korrekturrechnung verknüpft. Bitte zuerst die Ersetzung aufheben.');
   }
   if (row.bestritten_betrag != null) {
     gruende.push('Die Rechnung hat einen offenen Streitfall. Bitte zuerst den bestrittenen Betrag auflösen.');

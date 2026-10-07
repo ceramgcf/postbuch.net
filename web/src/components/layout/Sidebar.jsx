@@ -3,12 +3,13 @@ import { NavLink, useNavigate } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { useIsPortrait } from '@/hooks/useOrientationLock';
 import { api } from '@/api/client';
 import {
   LayoutDashboard, FileText, AlertCircle, Scissors,
   CalendarRange, LogOut, Search, Wrench, Pin, PinOff,
   FolderOpen, ScrollText, Scale, Users, CalendarClock, Settings,
-  Upload, MessageCircle, BookOpen,
+  Upload, MessageCircle, BookOpen, HeartPulse,
 } from 'lucide-react';
 import { TaskStatusBar } from './TaskStatusBar';
 import { UndoRedoBar } from '@/components/ui/UndoRedoBar';
@@ -31,6 +32,7 @@ const KRANKENVERSICHERUNG_ITEMS = [
 const ANALYSE_ITEMS_BASE = [
   { to: '/analyse/unbezahlt', icon: AlertCircle, label: 'Unbezahlt' },
   { to: '/analyse/handwerker', icon: Wrench, label: 'Handwerker' },
+  { to: '/analyse/gesundheitskosten', icon: HeartPulse, label: 'Gesundheitskosten' },
   { to: '/analyse/wiedervorlagen', icon: CalendarClock, label: 'Kalender' },
 ];
 const ANALYSE_ITEM_SALDEN = { to: '/analyse/salden', icon: Scale, label: 'Salden' };
@@ -200,7 +202,7 @@ function SidebarInner({ isExpanded, isPinned, onTogglePin, onNavClick, onLogout 
         style={{ height: HEADER_H }}
       >
         {isExpanded ? <SidebarLogoFull instanceName={appSettings?.instance_name?.value} /> : <SidebarLogoIcon />}
-        {isExpanded && (
+        {isExpanded && onTogglePin && (
           <button
             onClick={onTogglePin}
             title={isPinned ? 'Sidebar lösen' : 'Sidebar anheften'}
@@ -335,12 +337,18 @@ function SidebarInner({ isExpanded, isPinned, onTogglePin, onNavClick, onLogout 
 }
 
 export function Sidebar() {
-  const [isPinned, setIsPinned] = usePersistedBool('sidebar-pinned', true);
+  const [pinGewuenscht, setIsPinned] = usePersistedBool('sidebar-pinned', true);
   const [isHovered, setIsHovered] = useState(false);
   // Mobile: temporäres Ausklappen für 3 Sekunden per Tipp auf die eingeklappte Leiste
   const [tempExpanded, setTempExpanded] = useState(false);
   const tempTimerRef = useRef(null);
   const isMobile = useIsMobile();
+  const isPortrait = useIsPortrait();
+  // Hochformat auf dem Handy (Detailseite): eine angeheftete 256-px-Leiste
+  // ließe dem Inhalt kaum Platz. Dort immer die schmale Leiste zeigen; die
+  // gespeicherte Wahl gilt wieder, sobald das Gerät quer liegt.
+  const pinErzwungenAus = isMobile && isPortrait;
+  const isPinned = pinGewuenscht && !pinErzwungenAus;
   const { logout } = useAuth();
   const navigate = useNavigate();
 
@@ -378,7 +386,7 @@ export function Sidebar() {
   const innerProps = {
     isExpanded,
     isPinned,
-    onTogglePin: handleTogglePin,
+    onTogglePin: pinErzwungenAus ? undefined : handleTogglePin,
     onNavClick: handleNavClick,
     onLogout: handleLogout,
   };

@@ -8,10 +8,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FileText } from 'lucide-react';
 
-// Dialog zum Auswählen eines Dokuments (auf `arten` eingeschränkt) – per Suche
+// Dialog zum Auswählen eines Dokuments (auf `arten` oder mit `nurRechnungen` auf
+// Dokumente mit Rechnungsblock eingeschränkt) – per Suche
 // (Nummer/Betreff/Kontakt) ODER per direktem Einfügen eines SymLink-Tokens.
 // Als Dialog ([role="dialog"]) bleibt er auch auf Mobile im Portrait sichtbar.
-export function DocumentPicker({ open, onOpenChange, arten, title, description, onSelect, isPending }) {
+export function DocumentPicker({ open, onOpenChange, arten, nurRechnungen = false, title, description, onSelect, isPending }) {
   const [q, setQ] = useState('');
   const [items, setItems] = useState([]);
   const [hi, setHi] = useState(0);
@@ -28,7 +29,7 @@ export function DocumentPicker({ open, onOpenChange, arten, title, description, 
     if (term.length < 2) { setItems([]); setLoading(false); return; }
     const rid = ++reqIdRef.current;
     setLoading(true);
-    api.search.suggest(term, 8, { arten })
+    api.search.suggest(term, 8, { arten, nurRechnungen })
       .then(({ suggestions }) => {
         if (rid !== reqIdRef.current) return;
         setItems(suggestions || []);
@@ -36,7 +37,7 @@ export function DocumentPicker({ open, onOpenChange, arten, title, description, 
       })
       .catch(() => { if (rid === reqIdRef.current) setItems([]); })
       .finally(() => { if (rid === reqIdRef.current) setLoading(false); });
-  }, [debouncedQ, arten]);
+  }, [debouncedQ, arten, nurRechnungen]);
 
   // Wenn die Eingabe ein gültiges SymLink-Token ist, „direkt zuordnen" anbieten.
   const pastedPostid = parsePostidToken(q);

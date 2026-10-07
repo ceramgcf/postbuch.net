@@ -14,6 +14,7 @@
 
 import pool from '../db.js';
 import { appLog } from '../app-log.js';
+import { sperrePerioden } from './perioden-sperre.js';
 
 // ── Manuelle Perioden-Operationen ─────────────────────────────────────────────
 
@@ -129,6 +130,16 @@ async function throwIfOffenePruefvormerkung(client, person, kostentraeger, perio
   }
 }
 
+// Anzeigenamen der Status für Fehlermeldungen, die bis in die Oberfläche
+// durchgereicht werden. Die Enum-Werte selbst bleiben in DB und API unverändert.
+const STATUS_ANZEIGE = {
+  COLLECTING: 'SAMMELT',
+  SUBMITTED: 'EINGEREICHT',
+  COMPLETED: 'ABGESCHLOSSEN',
+  OMITTED: 'AUSGELASSEN',
+};
+const anzeige = (status) => STATUS_ANZEIGE[status] || status;
+
 /**
  * Setzt eine Periode auf einen neuen Status.
  * Erlaubte Übergänge (sonst Fehler):
@@ -145,6 +156,7 @@ export async function setPeriodeStatus({ person, kostentraeger, periode, targetS
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await sperrePerioden(client, [{ person, kostentraeger }]);
 
     const cur = await client.query(
       `SELECT status FROM abrechnungsperiode_buch WHERE person = $1 AND kostentraeger = $2 AND periode = $3 FOR UPDATE`,
@@ -154,7 +166,7 @@ export async function setPeriodeStatus({ person, kostentraeger, periode, targetS
     const currentStatus = cur.rows[0].status;
 
     if (expectedCurrentStatus && currentStatus !== expectedCurrentStatus) {
-      throw new Error(`Aktueller Status ist '${currentStatus}', erwartet '${expectedCurrentStatus}'`);
+      throw new Error(`Aktueller Status ist '${anzeige(currentStatus)}', erwartet '${anzeige(expectedCurrentStatus)}'`);
     }
 
     // Übergangsregeln
@@ -164,10 +176,10 @@ export async function setPeriodeStatus({ person, kostentraeger, periode, targetS
       OMITTED:     ['COLLECTING'],
     };
     if (currentStatus === 'COMPLETED') {
-      throw new Error('COMPLETED-Perioden können nur durch Löschen des Erstattungsbescheids zurückgesetzt werden');
+      throw new Error('ABGESCHLOSSEN-Perioden können nur durch Löschen des Erstattungsbescheids zurückgesetzt werden');
     }
     if (!allowed[currentStatus]?.includes(targetStatus)) {
-      throw new Error(`Übergang ${currentStatus} → ${targetStatus} nicht erlaubt`);
+      throw new Error(`Übergang ${anzeige(currentStatus)} → ${anzeige(targetStatus)} nicht erlaubt`);
     }
 
     await throwIfSessionLocked(client, person, kostentraeger, periode);
@@ -217,13 +229,14 @@ export async function omitPeriode({ person, kostentraeger, periode }) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await sperrePerioden(client, [{ person, kostentraeger }]);
 
     const cur = await client.query(
       `SELECT status FROM abrechnungsperiode_buch WHERE person = $1 AND kostentraeger = $2 AND periode = $3 FOR UPDATE`,
       [person, kostentraeger, periode]
     );
     if (cur.rows.length === 0) throw new Error('Periode nicht gefunden');
-    if (cur.rows[0].status !== 'COLLECTING') throw new Error('Nur COLLECTING kann auf OMITTED gesetzt werden');
+    if (cur.rows[0].status !== 'COLLECTING') throw new Error('Nur SAMMELT-Perioden können auf AUSGELASSEN gesetzt werden');
 
     await throwIfSessionLocked(client, person, kostentraeger, periode);
     await throwIfOffenePruefvormerkung(client, person, kostentraeger, periode,
@@ -281,6 +294,7 @@ export async function deleteHighestCollecting({ person, kostentraeger, periode }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await sperrePerioden(client, [{ person, kostentraeger }]);
 
     const colls = await client.query(
       `SELECT periode FROM abrechnungsperiode_buch
@@ -288,10 +302,10 @@ export async function deleteHighestCollecting({ person, kostentraeger, periode }
        ORDER BY periode DESC FOR UPDATE`,
       [person, kostentraeger]
     );
-    if (colls.rows.length < 2) throw new Error('Mindestens zwei COLLECTING-Perioden nötig');
+    if (colls.rows.length < 2) throw new Error('Mindestens zwei SAMMELT-Perioden nötig');
     const highest = colls.rows[0].periode;
     const nextLower = colls.rows[1].periode;
-    if (periode !== highest) throw new Error(`Nur die höchste COLLECTING (${highest}) darf gelöscht werden`);
+    if (periode !== highest) throw new Error(`Nur die höchste SAMMELT-Periode (${highest}) darf gelöscht werden`);
 
     await throwIfSessionLocked(client, person, kostentraeger, highest);
     await throwIfSessionLocked(client, person, kostentraeger, nextLower);
@@ -358,6 +372,7 @@ export async function mergePerioden({ person, kostentraeger, sourcePeriode, targ
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await sperrePerioden(client, [{ person, kostentraeger }]);
 
     const src = await client.query(
       `SELECT status FROM abrechnungsperiode_buch
@@ -367,7 +382,7 @@ export async function mergePerioden({ person, kostentraeger, sourcePeriode, targ
     if (src.rows.length === 0) throw new Error('Source-Periode nicht gefunden');
     const sourceStatus = src.rows[0].status;
     if (!['COLLECTING', 'OMITTED'].includes(sourceStatus)) {
-      throw new Error(`Source darf nur COLLECTING oder OMITTED sein (ist ${sourceStatus})`);
+      throw new Error(`Quellperiode muss SAMMELT oder AUSGELASSEN sein (ist ${anzeige(sourceStatus)})`);
     }
     if (sourcePeriode === targetPeriode) throw new Error('Source und Target sind identisch');
 
@@ -378,9 +393,9 @@ export async function mergePerioden({ person, kostentraeger, sourcePeriode, targ
       [person, kostentraeger]
     );
     const collPerioden = colls.rows.map(r => r.periode);
-    if (collPerioden.length === 0) throw new Error('Keine COLLECTING-Periode als Target vorhanden');
+    if (collPerioden.length === 0) throw new Error('Keine SAMMELT-Periode als Ziel vorhanden');
     const highest = collPerioden[0];
-    if (targetPeriode !== highest) throw new Error(`Target muss die höchste COLLECTING (${highest}) sein`);
+    if (targetPeriode !== highest) throw new Error(`Ziel muss die höchste SAMMELT-Periode (${highest}) sein`);
 
     await throwIfSessionLocked(client, person, kostentraeger, sourcePeriode);
     await throwIfSessionLocked(client, person, kostentraeger, targetPeriode);
@@ -449,6 +464,7 @@ export async function nullAPForCollectingPeriode({ person, kostentraeger, period
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await sperrePerioden(client, [{ person, kostentraeger }]);
 
     const cur = await client.query(
       `SELECT status FROM abrechnungsperiode_buch
@@ -457,7 +473,7 @@ export async function nullAPForCollectingPeriode({ person, kostentraeger, period
     );
     if (cur.rows.length === 0) throw new Error('Periode nicht gefunden');
     if (cur.rows[0].status !== 'COLLECTING') {
-      throw new Error('Nur COLLECTING-Perioden können so entfernt werden');
+      throw new Error('Nur SAMMELT-Perioden können so entfernt werden');
     }
 
     await throwIfSessionLocked(client, person, kostentraeger, periode);
@@ -523,6 +539,7 @@ export async function restoreCollectingFromMerge({ person, kostentraeger, period
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await sperrePerioden(client, [{ person, kostentraeger }]);
 
     await client.query(
       `INSERT INTO abrechnungsperiode_buch (person, kostentraeger, periode, status, satz)
@@ -580,6 +597,7 @@ export async function undoOmit({ person, kostentraeger, periode, autoCreatedPeri
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await sperrePerioden(client, [{ person, kostentraeger }]);
 
     await client.query(
       `UPDATE abrechnungsperiode_buch SET status = 'COLLECTING'

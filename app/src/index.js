@@ -69,8 +69,8 @@ import { startHelpEmbeddingJob } from './service/help-corpus.js';
 
 function recoverPipeline(settings) {
   return recoverPendingPipelineFiles(settings, {
-    onEbPending: (postid, journalJobId) => {
-      starteErstattungsbescheidVerarbeitung(postid)
+    onEbPending: (postid, journalJobId, { korrekturAnweisung, modelTier } = {}) => {
+      starteErstattungsbescheidVerarbeitung(postid, korrekturAnweisung, { modelTier })
         .then(() => acknowledgeEbComplete(journalJobId))
         .catch((err) => console.error(
           `[pipeline-recovery] EB-Fachjob ${postid} bleibt vorgemerkt: ${err.message}`,

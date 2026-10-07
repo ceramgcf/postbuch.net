@@ -62,7 +62,7 @@ Eingriffe, ganz rechts das Löschen.
 | Knopf                                                                   | Wirkung                                                                                        |
 | ----------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | ![Freigabe-Symbol](icons/check-check.svg) **Freigabe erteilen**         | Status → User ✓ (siehe oben)                                                                   |
-| ![Bezahlt-Symbol](icons/banknote.svg) **Als bezahlt markieren**         | Nur bei Rechnungen. Trägt das heutige Datum als Zahldatum ein; danach steht dort „Bezahlt".    |
+| ![Bezahlt-Symbol](icons/banknote.svg) **Als bezahlt markieren**         | Nur bei Rechnungen. Verbucht den offenen Rest als heute gezahlt; danach steht dort „Bezahlt".  |
 | ![Chat-Symbol](icons/message-circle.svg) **Im Chat besprechen**         | Springt in den Assistenten, mit `#<Postnummer>` schon im Eingabefeld                           |
 | ![Archiv-Symbol](icons/archive.svg) **Archivieren** / **Historisch**    | Setzt bzw. entfernt die Historisch-Markierung                                                  |
 | ![Wiederverarbeiten-Symbol](icons/refresh-cw.svg) **Wiederverarbeiten** | Lässt die KI das Dokument neu analysieren                                                      |
@@ -105,7 +105,7 @@ Erstattung unterwegs ist, bleibt das Dokument aktuell.
 | ![Dashboard-Symbol](icons/layout-dashboard.svg) **Dashboard**                   | zählt nicht mit – weder in „Dokumente gesamt" noch in den Verteilungen nach Lebensbereich und Dokumentart |
 | **Offene Rechnungen**                                                           | bleiben im Fälligkeitskalender sichtbar                                                                   |
 | ![Analyse-Symbol](icons/circle-alert.svg) **Analyse → Unbezahlt, Kürzungen**    | bleiben außen vor                                                                                         |
-| ![Handwerker-Symbol](icons/wrench.svg) **Analyse → Handwerker**                 | **zählt weiter mit** – der Lohnanteil bleibt absetzbar; die Zeile wird als **Archiviert** gekennzeichnet  |
+| ![Handwerker-Symbol](icons/wrench.svg) **Analyse → Handwerker**                 | **zählt weiter mit** – der Lohnanteil bleibt absetzbar; die Zeile wird als **Archiviert** gekennzeichnet; ebenso in **Analyse → Gesundheitskosten** |
 | ![Abrechnungsperioden-Symbol](icons/calendar-range.svg) **Abrechnungsperioden** | **bleiben unberührt** – die Rechnung zählt weiter zur Periode und wird mit eingereicht                    |
 | ![Kalender-Symbol](icons/calendar-clock.svg) **Kalender und Wiedervorlagen**    | Termine laufen unverändert weiter                                                                         |
 | ![Assistent-Symbol](icons/message-circle.svg) **Assistent**                     | findet sie weiter, kennzeichnet sie aber in seinem Kontext ausdrücklich als **ARCHIVIERT**                |
@@ -117,9 +117,9 @@ Erstattungsbezüge, Verbleib. Nichts wird abgeschnitten.
 Genau deshalb ist Archivieren **kein Ersatz für eine inhaltliche Klärung**: Eine
 unbezahlte Rechnung bleibt eine unbezahlte Rechnung, sie ist nur ausgeblendet.
 Wird sie später zurückgeholt, steht sie sofort wieder in „Unbezahlt". Wo eine
-Forderung tatsächlich erloschen ist – der klassische Fall ist die
-[Korrekturrechnung](#sonderfall-korrekturrechnung) –, gehört zusätzlich der
-Rechnungsblock entfernt.
+Forderung tatsächlich erloschen ist, gehört die Rechnung zusätzlich
+[ersetzt](#sonderfall-korrekturrechnung) – der klassische Fall ist die
+Korrekturrechnung – oder ihr Rechnungsblock [entfernt](#rechnung-invalidieren).
 
 Umgekehrt gilt dasselbe: **Archivieren entwertet nichts.** Wo eine Zahl über das
 Wegräumen hinaus gilt, zählt sie weiter – der Lohnanteil einer
@@ -368,6 +368,10 @@ Was danach passiert, entscheidet der Server:
   Extraktion. Nach der Bestätigung läuft eine Wiederverarbeitung im Hintergrund,
   mit einer Korrekturanweisung, die den gewünschten Zieltyp benennt. Der oben
   beschriebene Schutz gegen destruktive Wiederverarbeitung gilt hier genauso.
+  Ist die Rechnung mit einer [Korrekturrechnung](#sonderfall-korrekturrechnung)
+  verbunden und würde sie durch den Wechsel zu einer anderen Art (z. B.
+  Arztrechnung → Arztbericht), lehnt postbuch.net den Wechsel sofort ab, statt
+  erst die Wiederverarbeitung zu starten.
 
 ## Notiz
 
@@ -485,11 +489,24 @@ Dashboard und erscheint im Fälligkeitskalender.
 
 Die Kopfzeile des Blocks trägt seinen Namen, bei medizinischen Rechnungen
 zusätzlich die Postnummer und das [SymLink](#symlinks)-
-![Verknüpfen-Symbol](icons/link-2.svg) **Kettensymbol**; rechts stehen die
-Knöpfe ![Bestreiten-Symbol](icons/alert-triangle.svg) **Rechnung bestreiten**
-und – je nach Spielart – ![Invalidieren-Symbol](icons/ban.svg) **Rechnung
-invalidieren** oder ![Löschen-Symbol](icons/trash-2.svg) **Rechnungsblock
-löschen** (siehe [Sonderfall Korrekturrechnung](#sonderfall-korrekturrechnung)).
+![Verknüpfen-Symbol](icons/link-2.svg) **Kettensymbol**. Rechts steht das Menü
+![Rechnung-Symbol](icons/receipt.svg) **Rechnung** mit allem, was die Rechnung
+als Ganzes betrifft:
+
+- ![Bestreiten-Symbol](icons/alert-triangle.svg) **Rechnung bestreiten …**
+  bzw. **Streitfall bearbeiten …** (siehe
+  [Eine Rechnung bestreiten](#eine-rechnung-bestreiten)),
+- ![Ersetzen-Symbol](icons/replace.svg) **Ersetzt eine frühere Rechnung …**
+  und **Wird ersetzt durch …** (siehe
+  [Sonderfall Korrekturrechnung](#sonderfall-korrekturrechnung)),
+- bei Arzt-, Handwerker- und Pflichttyp-Rechnungen
+  ![Invalidieren-Symbol](icons/ban.svg) **Rechnung invalidieren …**.
+
+Bei einer sonstigen Rechnung steht daneben der Knopf
+![Löschen-Symbol](icons/trash-2.svg) **Rechnungsblock löschen**. Bezahlen und
+Teilzahlungen erfassen bleiben dort, wo sie hingehören: in der Aktionsleiste
+bzw. am Feld „Bezahlt am“. Das Menü erscheint nur mit Schreibrecht.
+
 Darunter das Datenraster. In jeder Spielart wiederkehrend:
 
 | Feld                                                  | Bedeutung                                                          |
@@ -499,6 +516,7 @@ Darunter das Datenraster. In jeder Spielart wiederkehrend:
 | **Rechnungsdatum**                                    | Datum auf der Rechnung                                             |
 | **Fälligkeit**                                        | Zahlungstermin – er speist den Fälligkeitskalender                 |
 | **Bezahlt am**                                        | leer heißt „Offen" (bernsteinfarben), gesetzt heißt bezahlt (grün) |
+| **Zahlungen**                                         | nur bei Teilzahlung: Tabelle der Zahlungen samt offenem Rest       |
 | **Streitfall**                                        | „Nicht bestritten" oder der bestrittene Anteil samt „Noch fällig"  |
 | **Gesamtbetrag**                                      | hervorgehoben                                                      |
 | **IBAN**, **Zahlungsempfänger**, **Verwendungszweck** | die Überweisungsdaten                                              |
@@ -522,18 +540,56 @@ schreiben in dasselbe Feld:
   Weg für eine Rechnung, die vor drei Wochen überwiesen wurde. Im
   Bearbeitungsmodus setzt **Entfernen** die Rechnung wieder auf offen.
 
+Hinter jedem Bezahldatum steht eine Zahlung mit Betrag: postbuch.net merkt
+sich, dass der zu zahlende Betrag – Gesamtbetrag minus bestrittener Anteil – an
+diesem Tag beglichen wurde. Solange es genau diese eine Zahlung ist, bleibt es
+bei der schlichten Anzeige „Bezahlt am“.
+
 Mit dem Bezahldatum verschwindet die Rechnung aus „Unbezahlt", aus der Summe
 offener Beträge und aus dem Fälligkeitskalender – und der Zahlungsblock darunter
 verschwindet gleich mit.
+
+#### Teilzahlung
+
+Wird eine Rechnung in Raten oder zunächst nur zum Teil beglichen, öffnet der
+dezente Link **Teilzahlung erfassen** unter „Bezahlt am“ eine kleine Tabelle.
+Teilzahlungen sind immer eine eigene Entscheidung: postbuch.net liest keine
+Raten aus dem Dokument.
+
+- Jede Zeile ist eine Zahlung mit **Datum** und **Betrag**.
+  ![Hinzufügen-Symbol](icons/plus.svg) **Zahlung hinzufügen** schlägt das
+  heutige Datum und den noch offenen Rest vor; der Papierkorb entfernt eine
+  Zeile. Erst ![Speichern-Symbol](icons/check.svg) **Speichern** übernimmt die
+  ganze Tabelle und landet im Rückgängig-Verlauf.
+- Unter der Tabelle stehen **Gezahlt**, **Noch offen** bzw. **Ausgeglichen** und,
+  falls zu viel eingetragen wurde, **Überzahlt um …**.
+- Die Rechnung bleibt **offen**, bis die Zahlungen den zu zahlenden Betrag
+  erreichen. Bis dahin steht sie in „Unbezahlt", in der Summe offener Beträge
+  und im Fälligkeitskalender – jeweils mit dem **Rest**, nicht mit dem
+  Rechnungsbetrag. Als Bezahldatum gilt der Tag der Zahlung, die den Betrag
+  ausgleicht.
+- Bleibt nur eine Zahlung über den vollen Betrag übrig, verschwindet die Tabelle
+  wieder und es gilt die normale Anzeige „Bezahlt am“. Wer alle Zeilen löscht und
+  speichert, setzt die Rechnung auf offen.
+- ![Bezahlt-Symbol](icons/banknote.svg) **Als bezahlt markieren** verbucht bei
+  einer Teilzahlung den offenen Rest als heute gezahlt.
+
+Eine Teilzahlung braucht einen positiven Rechnungsbetrag. Bei Rechnungen ohne
+Betrag, über 0 € und bei Gutschriften gibt es nur das schlichte „Bezahlt am“
+als Erledigt-Vermerk.
+
+Wer den **Gesamtbetrag** später korrigiert, verschiebt damit auch den Rest: Aus
+einer Vollzahlung kann eine Teilzahlung mit offenem Rest werden. Solange
+Zahlungen erfasst sind, lässt sich der Gesamtbetrag nicht leeren.
 
 #### Zahlung und GiroCode
 
 ![Zahlungsblock eines Rechnungsdokuments](screenshots/dokument-detail-zahlungsblock.jpg)
 
 Solange eine Rechnung **offen** ist und tatsächlich noch etwas zu zahlen bleibt,
-zeigt postbuch.net einen eigenen Block **Zahlung**. Er erscheint nur unter drei
-Bedingungen: kein Bezahldatum, der Gesamtbetrag liegt über dem bestrittenen
-Anteil, und es ist wenigstens eine Zahlungsangabe bekannt.
+zeigt postbuch.net einen eigenen Block **Zahlung**. Er erscheint nur unter zwei
+Bedingungen: Nach Abzug des bestrittenen Anteils und erfasster Teilzahlungen
+bleibt ein Rest, und es ist wenigstens eine Zahlungsangabe bekannt.
 
 Links stehen **Zahlungsempfänger**, **IBAN**, **Betrag** und, falls vorhanden,
 der **Verwendungszweck** – hervorgehoben und jeweils mit einem kleinen
@@ -547,7 +603,9 @@ EPC016-06, den jede gängige Banking-App als Überweisungsvorlage einliest. Er
 erscheint nur, wenn IBAN, Empfänger und ein Betrag größer null vorliegen.
 
 Wichtig ist der Betrag darin: Es ist der **offene** Betrag, also Gesamtbetrag
-minus bestrittener Anteil – nicht zwingend die Summe, die auf dem Papier steht.
+minus bestrittener Anteil minus bereits erfasste Teilzahlungen – nicht zwingend
+die Summe, die auf dem Papier steht. Dasselbe gilt für das Feld **Betrag**
+links.
 Und auch hier gilt die Warnung von oben doppelt: IBAN und Betrag stammen aus der
 KI-Auslesung. Ein Abgleich mit dem PDF daneben wird dringend empfohlen, bevor
 der QR-Code fotografiert wird.
@@ -555,10 +613,10 @@ der QR-Code fotografiert wird.
 #### Eine Rechnung bestreiten
 
 Ist eine Rechnung ganz oder teilweise strittig, wäre sie in der Liste
-„Unbezahlt" ein Dauergast – obwohl gerade nichts zu zahlen ist. Dafür gibt es in
-der Kopfzeile jedes Rechnungsblocks den Knopf
-![Bestreiten-Symbol](icons/alert-triangle.svg) **Rechnung bestreiten** (später
-![Bearbeiten-Symbol](icons/alert-triangle.svg) **Streitfall bearbeiten**).
+„Unbezahlt" ein Dauergast – obwohl gerade nichts zu zahlen ist. Dafür gibt es im
+Menü ![Rechnung-Symbol](icons/receipt.svg) **Rechnung** jedes Rechnungsblocks
+den Eintrag ![Bestreiten-Symbol](icons/alert-triangle.svg) **Rechnung
+bestreiten …** (später **Streitfall bearbeiten …**).
 
 Der Dialog fragt genau eine Zahl ab: den **bestrittenen Betrag**, höchstens den
 Rechnungsbetrag. Vorbelegt ist der volle Betrag.
@@ -569,13 +627,21 @@ Rechnungsbetrag. Vorbelegt ist der volle Betrag.
   fällig.
 
 Das Feld **Streitfall** im Datenraster zeigt danach „_X_ bestritten" bzw.
-„Vollständig bestritten" und darunter „Noch fällig: …". Der bestrittene Anteil
-ist überall abgezogen, wo Offenes summiert wird: in der Liste „Unbezahlt", in
-den Dashboard-Kacheln und im GiroCode.
+„Vollständig bestritten" und darunter „Noch fällig: …" – den Rest nach Abzug
+erfasster Zahlungen. Der bestrittene Anteil ist überall abgezogen, wo Offenes
+summiert wird: in der Liste „Unbezahlt", in den Dashboard-Kacheln und im
+GiroCode.
 
-postbuch.net führt bewusst **keine strukturierte Streitakte**. Der Dialog bittet
-deshalb darum, in der Dokumentnotiz festzuhalten, wann und wie der unbestrittene
-Teil gezahlt wurde, was bestritten wird und wie die Klärung ausgeht.
+Bestritt und Zahlungen werden getrennt geführt. Wurde der unbestrittene Teil
+bezahlt und fällt der Streit später weg, wird aus der bisherigen Zahlung
+automatisch eine Teilzahlung: Die Rechnung ist wieder offen, und zwar mit dem
+bislang bestrittenen Betrag als Rest. War eine Rechnung vollständig bestritten
+und trotzdem als bezahlt vermerkt, ist sie nach dem Aufheben mit dem vollen
+Betrag wieder offen.
+
+postbuch.net führt bewusst **keine strukturierte Streitakte**. Zahlungen des
+unbestrittenen Teils gehören in „Bezahlt am“ bzw. die Teilzahlung; was
+bestritten wird und wie die Klärung ausgeht, hält die Dokumentnotiz fest.
 
 Das gilt für alle drei Spielarten des Rechnungsblocks gleichermaßen.
 
@@ -587,10 +653,10 @@ Gutschriftvermerk zur alten. Dann gibt es zwei Dokumente für einen Vorgang, und
 die Frage ist, was mit dem alten passiert.
 
 Fachlich ist die Lage eindeutig: Eine Rechnung, die durch eine andere Rechnung
-ersetzt wurde, **ist keine Rechnung mehr**. Sie fordert nichts mehr, sie ist
-nicht mehr fällig, sie kann nicht mehr bezahlt werden. Übrig bleibt ein
-Schriftstück, das dokumentiert, was zuerst behauptet wurde. Genau so soll das
-alte Dokument danach im Postbuch stehen.
+ersetzt wurde, **fordert nichts mehr**. Sie ist nicht mehr fällig und kann nicht
+mehr bezahlt werden; was auf sie schon gezahlt wurde, zählt für die neue.
+Übrig bleibt ein Schriftstück, das dokumentiert, was zuerst behauptet wurde.
+Genau das bildet postbuch.net mit der **Ersetzung** ab.
 
 **Der empfohlene Weg:**
 
@@ -599,33 +665,80 @@ alte Dokument danach im Postbuch stehen.
    („PDF ersetzen" ist hier **falsch**: das ist für einen besseren Scan
    desselben Schreibens gedacht, nicht für ein neues Schreiben mit anderem
    Inhalt.)
-2. **Den Rechnungsblock der alten Rechnung entfernen** – bei Arzt-, Handwerker-
-   und Pflichttyp-Rechnungen mit dem Knopf ![Invalidieren-Symbol](icons/ban.svg)
-   **Rechnung invalidieren**, sonst mit ![Löschen-Symbol](icons/trash-2.svg)
-   **Rechnungsblock löschen**. Damit hört das Dokument auf, eine Forderung zu
-   sein: keine Fälligkeit, kein offener Betrag, kein GiroCode, kein Streitfall
-   mehr. Welcher Knopf wo steht: siehe unten.
-3. ![Archiv-Symbol](icons/archive.svg) **Optional: Die alte Rechnung
+2. **Beide Rechnungen verbinden.** Im Menü
+   ![Rechnung-Symbol](icons/receipt.svg) **Rechnung** der neuen Rechnung
+   ![Ersetzen-Symbol](icons/replace.svg) **Ersetzt eine frühere Rechnung …**
+   wählen – oder umgekehrt an der alten **Wird ersetzt durch …**. Das Menü
+   schlägt bis zu vier passende Rechnungen vor: gleicher Absender, gleiche
+   IBAN, ähnliche Rechnungsnummer, passende Reihenfolge der Rechnungsdaten,
+   ähnlicher Betrag und inhaltliche Nähe. Bei der Suche nach der alten Rechnung
+   rücken offene, bestrittene und teilbezahlte nach vorn. Steht die gesuchte
+   nicht dabei, öffnet ![Suchen-Symbol](icons/search.svg) **Andere Rechnung
+   suchen …** eine Suche nach Nummer, Betreff oder Absender; dort lässt sich
+   auch ein [SymLink](#symlinks) einfügen.
+3. **Bestätigen.** Der Dialog nennt, welche Rechnung welche ersetzt, wie viele
+   Zahlungen umziehen und ob die neue Rechnung danach **überzahlt** wäre. Erst
+   **Ersetzen** führt es aus; der Schritt landet im Rückgängig-Verlauf.
+4. ![Archiv-Symbol](icons/archive.svg) **Optional: Die alte Rechnung
    archivieren.** Sie verschwindet aus den Listen, bleibt aber vollständig
-   erhalten und auffindbar. Man greift aber nicht mehr versehentlich die
-   Falsche.
-4. **Optional: Beide verbinden.** In die Notiz der alten Rechnung
-   `[[[P000456]]]` (die neue) schreiben, in die Notiz der neuen `[[[P000123]]]`
-   (die alte), jeweils mit einem Satz dazu. Beide Notizen werden zu klickbaren
-   Verweisen. Wer den Vorgang später prüft, sieht in beiden Richtungen, was
-   passiert ist. Noch sauberer: beide in eine gemeinsame Akte legen.
+   erhalten und auffindbar.
 
-**Warum der Block weg muss und Archivieren allein nicht genügt.** Archivieren
-setzt nur eine Markierung. Solange der Rechnungsblock steht, bleibt das Dokument
-eine unbezahlte Rechnung – nur eine versteckte. Holt jemand es später aus dem
-Archiv zurück (ein Klick, auch versehentlich beim Aufräumen), steht die längst
-korrigierte Forderung sofort wieder in „Unbezahlt" und in der Summe offener
-Beträge. Im **Fälligkeitskalender** taucht sie sogar durchgehend auf: Der zeigt
-offene Fälligkeiten unabhängig davon, ob ein Dokument archiviert ist. Ohne
-Rechnungsblock kann beides nicht passieren – dann ist das Dokument das, was es
-tatsächlich ist: ein Schreiben ohne Forderung.
+**Was die Ersetzung bewirkt:**
 
-**So entfernt man den Block, je nach Spielart:**
+- Die alte Rechnung gilt als **erledigt**: Sie verschwindet aus „Unbezahlt",
+  aus der Summe offener Beträge, aus den Dashboard-Kacheln, aus den
+  Zahlungserinnerungen und aus dem Fälligkeitskalender – auch dann, wenn sie
+  später aus dem Archiv zurückgeholt wird. Ihre Rechnungsdaten bleiben
+  **unverändert** stehen; „Bezahlt am“ zeigt stattdessen **Erledigt – ersetzt
+  durch …**, ein Zahlungsblock samt GiroCode erscheint nicht mehr.
+- **Erfasste Zahlungen ziehen um** – Datum und Betrag wandern auf die neue
+  Rechnung. Typischer Fall: Während des Streits wurde der unbestrittene Teil in
+  Raten gezahlt; nach der Ersetzung stehen diese Raten als Teilzahlungen an der
+  Korrekturrechnung, und offen ist nur noch deren Rest. Übersteigen sie deren
+  Betrag, zeigt die Zahlungstabelle **Überzahlt um …** – eine Rückerstattung
+  hält man in der Notiz fest.
+- Ein **Streitfall der alten Rechnung endet**. Ist auch die Korrekturrechnung
+  strittig, wird sie dort neu bestritten.
+- Beide Dokumente tragen über dem Rechnungsblock einen **Hinweis** mit
+  klickbarer Postnummer der jeweils anderen Rechnung: „ersetzt durch …“ bzw.
+  „ersetzt die frühere Rechnung …“.
+- An der alten Rechnung lassen sich danach weder Zahlungen erfassen noch
+  bestreiten, und ihr Menü **Rechnung** entfällt.
+
+**Rückgängig:** ![Rückgängig-Symbol](icons/undo-2.svg) **Ersetzung aufheben**
+im Hinweis – an einer der beiden Rechnungen – löst die Verbindung wieder. Die
+umgezogenen Zahlungen kehren zur alten Rechnung zurück, und sie ist wieder
+offen, soweit sie es vorher war; auch ein früherer Streitfall gilt wieder.
+Wurden die umgezogenen Zahlungen an der neuen Rechnung
+inzwischen geändert, lehnt postbuch.net das Aufheben ab, statt Zahlungen zu
+raten; dann zuerst die Zahlungen wieder in den alten Stand bringen.
+
+**Regeln und Sperren:**
+
+- Jede Rechnung ersetzt **höchstens eine** und wird von **höchstens einer**
+  ersetzt. Ketten sind möglich (die zweite Korrektur ersetzt die erste), eine
+  bereits ersetzte Rechnung kann aber keine andere mehr ersetzen.
+- Arztrechnungen werden nur durch Arztrechnungen ersetzt; Handwerker- und
+  sonstige Rechnungen untereinander frei.
+- Abgelehnt wird die Ersetzung, solange die alte Arztrechnung einer
+  Abrechnungsperiode zugeordnet ist, einen eigenen PKV- oder Beihilfe-Satz
+  trägt, ein Erstattungsbescheid auf sie verweist oder sie an einer Periode
+  angeheftet ist. Erst dort auflösen, sonst zeigt der Bescheid später auf eine
+  Rechnung, die es so nicht mehr gibt. Siehe
+  [PKV, Beihilfe und Abrechnung](abrechnung-pkv-beihilfe.md).
+- Tragen Zahlungen um, braucht die neue Rechnung einen Gesamtbetrag.
+- Solange zwei Rechnungen verbunden sind, lassen sich beide weder invalidieren
+  noch ihr Rechnungsblock löschen. Eine Wiederverarbeitung bleibt möglich,
+  solange das Dokument eine Rechnung derselben Art bleibt. Gelöscht werden
+  kann ein Dokument erst nach dem Aufheben der Ersetzung; danach lassen sich
+  beide Rechnungen einzeln löschen.
+
+#### Rechnung invalidieren
+
+Die Ersetzung ist der Weg, wenn es eine **neue Rechnung** gibt. Ist ein
+Dokument dagegen gar keine Forderung (mehr) – eine Stornierung ohne neue
+Rechnung, ein zu Unrecht als Rechnung erkanntes Schreiben –, wird der
+Rechnungsblock entfernt:
 
 - **Sonstige Rechnung** (Block _Rechnungsdetails_) bei einer Dokumentart, die
   keine Rechnung sein muss – etwa _Mitteilung_ oder _Korrespondenz_: In der
@@ -634,9 +747,10 @@ tatsächlich ist: ein Schreiben ohne Forderung.
   KI-Lauf, keine Kosten, alles andere am Dokument bleibt, wie es ist.
 - **Arztrechnung, Handwerkerrechnung, Dokumentart _Rechnung_ oder _Kaufbeleg_:**
   Hier hängt der Block an der Einordnung – ein Fachblock ohne passende
-  Dokumentart wäre ein Widerspruch. Deshalb steht in der Kopfzeile des Blocks
-  ![Invalidieren-Symbol](icons/ban.svg) **Rechnung invalidieren**. Der Dialog
-  kündigt vorher an, was der Knopf auslöst, und wartet auf die Bestätigung:
+  Dokumentart wäre ein Widerspruch. Deshalb steht im Menü
+  ![Rechnung-Symbol](icons/receipt.svg) **Rechnung** der Eintrag
+  ![Invalidieren-Symbol](icons/ban.svg) **Rechnung invalidieren …**. Der Dialog
+  kündigt vorher an, was er auslöst, und wartet auf die Bestätigung:
   - Die Dokumentart wird automatisch auf **Korrespondenz** umgeschaltet, der
     Lebensbereich bleibt.
   - Das Dokument wird **neu durch die KI verarbeitet**. Die KI bekommt als
@@ -649,17 +763,26 @@ tatsächlich ist: ein Schreiben ohne Forderung.
     der Fortschritt steht in der Aufgabenleiste unten.
 
   **Verloren gehen dabei die Rechnungsdaten** – Beträge, Fälligkeit,
-  Einzelpositionen, Lohnanteil. **Erhalten bleiben** Postnummer, Notiz,
-  Wiedervorlagen, Aktenzugehörigkeit, Originalverbleib und der Archivstatus.
+  Einzelpositionen, Lohnanteil und ein von der KI übernommenes Bezahldatum.
+  **Erhalten bleiben** Postnummer, Notiz, Wiedervorlagen, Aktenzugehörigkeit,
+  Originalverbleib und der Archivstatus.
 
-  **Abgelehnt wird die Invalidierung**, solange am Dokument ein manuell
-  gesetztes Bezahldatum oder ein Streitfall hängt, es an einer
+  **Abgelehnt wird die Invalidierung**, solange am Dokument ein von Hand
+  erfasstes Bezahldatum, eine Teilzahlung oder ein Streitfall hängt, es mit
+  einer anderen Rechnung durch eine Ersetzung verbunden ist, an einer
   Abrechnungsperiode bzw. einem Satz-Override klebt, ein Erstattungsbescheid
-  darauf verweist oder gerade eine Dateiablage-Migration läuft. Die Meldung nennt den
-  Grund; erst das auflösen – Bezahldatum entfernen, Streitfall aufheben,
-  Abrechnungsperiode leeren. Das ist Absicht: Eine bereits bezahlte oder
-  eingereichte Rechnung ist kein Fall für die Invalidierung, sie behält ihren
-  Block.
+  darauf verweist oder gerade eine Dateiablage-Migration läuft. Die Meldung
+  nennt den Grund. Das ist Absicht: Eine bereits bezahlte oder eingereichte
+  Rechnung ist kein Fall für die Invalidierung – gibt es eine Korrekturrechnung,
+  ist die Ersetzung der richtige Weg, denn sie nimmt die Zahlungen mit.
+
+**Warum Archivieren allein nicht genügt.** Archivieren setzt nur eine
+Markierung. Ohne Ersetzung oder Invalidierung bleibt das Dokument eine
+unbezahlte Rechnung – nur eine versteckte. Holt jemand es später aus dem Archiv
+zurück (ein Klick, auch versehentlich beim Aufräumen), steht die längst
+erledigte Forderung sofort wieder in „Unbezahlt" und in der Summe offener
+Beträge. Im **Fälligkeitskalender** taucht sie sogar durchgehend auf: Der zeigt
+offene Fälligkeiten unabhängig davon, ob ein Dokument archiviert ist.
 
 **Warum nicht löschen?** Möglich, aber selten richtig. Der Beleg, dass zuerst
 falsch abgerechnet wurde, ist genau das, was man bei einer erneuten Nachfrage
@@ -672,21 +795,12 @@ wurde, verweigert postbuch.net das Löschen ohnehin.
 **Warum nicht bloß „vollständig bestritten" lassen?** Weil das den falschen
 Sachverhalt festhält. Bestreiten heißt „strittig, Ausgang offen"; nach der
 Korrektur ist nichts mehr strittig, sondern erledigt. Rechnerisch käme man zum
-selben Ergebnis, fachlich liest sich das Postbuch danach falsch. Kein
-Rechnungsblock plus Archiv sagt, was tatsächlich gilt: **keine Forderung,
-abgeschlossen**.
+selben Ergebnis, fachlich liest sich das Postbuch danach falsch.
 
-**Zwei Sonderfälle:**
-
-- **Die alte Rechnung wurde bereits bezahlt** und der Differenzbetrag kommt
-  zurück: Rechnungsblock **stehen lassen** und nicht archivieren, bis die
-  Gutschrift verbucht ist – Betrag und Bezahldatum sind hier der Nachweis, und
-  ohne sie verliert man die Spur. Die Gutschrift selbst ist ein eigenes
-  Dokument.
-- **Die alte Arztrechnung wurde bereits eingereicht** und steckt in einer
-  Abrechnungsperiode: erst dort auflösen, sonst zeigt der Bescheid später auf
-  eine Rechnung, die es so nicht mehr gibt. Siehe
-  [PKV, Beihilfe und Abrechnung](abrechnung-pkv-beihilfe.md).
+**Sonderfall: Die alte Rechnung wurde voll bezahlt** und der Differenzbetrag
+kommt zurück. Auch hier ersetzen: Die Zahlung zieht auf die Korrekturrechnung
+um, deren Zahlungstabelle zeigt **Überzahlt um …** – genau den Betrag, der
+zurückkommt. Die Gutschrift selbst ist ein eigenes Dokument.
 
 ### Untertyp: Arztrechnung, Laborrechnung, Hilfsmittelrechnung, Rezept
 
@@ -697,11 +811,21 @@ aus _Patient_ wird _Tier_, aus _Ziffer_ wird _GOT / PZN_, und der Block heißt
 „Tierarztrechnung".
 
 Zusätzlich zu den gemeinsamen Rechnungsfeldern stehen hier **Patient** (bzw.
-**Tier**) sowie die Felder für die Erstattung: **AP PKV** und **AP Beihilfe**
-für die Abrechnungsperioden und, sobald eine davon greift, **PKV-Satz** und
-**Beihilfe-Satz**. Die Satzfelder zeigen grau den Satz, der an der Person
+**Tier**) sowie die Felder für die Erstattung. **Patient** ist eine
+Auswahlliste aller erfassten Menschen und Tiere (Tiere mit dem Zusatz
+„(Tier)"), unabhängig von einer Versicherung. **AP PKV** und **AP Beihilfe**
+stehen für die Abrechnungsperioden; zuordnen lässt sich eine Periode nur, wenn
+die gewählte Person beim jeweiligen Kostenträger versichert ist. Sobald eine
+davon greift, erscheinen **PKV-Satz** und **Beihilfe-Satz**. Die Satzfelder zeigen grau den Satz, der an der Person
 hinterlegt ist; wird einer überschrieben, gilt der Wert nur für diese eine
 Rechnung. Bei Tieren entfällt die Beihilfe.
+
+Hinter der Periodennummer steht der **Status der Periode** als farbiges
+Kennzeichen: `SAMMELT`, `EINGEREICHT`, `ABGESCHLOSSEN` oder `AUSGELASSEN`. Die
+Kopfzeile des Blocks wiederholt ihn je Kostenträger („PKV #3 SAMMELT"), damit
+der Abrechnungsstand ohne Suchen sichtbar ist. Ist die Person beim
+Kostenträger versichert, die Rechnung aber keiner Periode zugeordnet, lautet
+das Kennzeichen rot gestrichelt „nicht zugeordnet".
 
 Neben **AP PKV** bzw. **AP Beihilfe** steht ein
 ![Hinzufügen-Symbol](icons/plus.svg) **Plus**, solange es eine offene, sammelnde
@@ -746,6 +870,38 @@ einen Faktor über 2,3 –, wird sie klein darunter eingeblendet.
 Positionen, die in einem Erstattungsbescheid **gekürzt** wurden, erscheinen
 **rot**. Das ist der schnellste Weg zu sehen, woran eine Erstattung gescheitert
 ist. Am rechten Rand jeder Zeile liegt das [SymLink](#symlinks)-Kettensymbol.
+Die letzte Zeile **Summe** addiert alle Positionen.
+
+##### Positionen bearbeiten, hinzufügen und löschen
+
+Hat die KI eine Position falsch oder gar nicht gelesen, lässt sich die Liste
+von Hand richtigstellen (nicht mit Lesezugriff):
+
+- **Bearbeiten** – das Stift-Symbol am Zeilenende öffnet einen Dialog mit
+  Datum, Ziffer, Leistung, Faktor, Betrag und Begründung.
+- **Hinzufügen** – **Position hinzufügen** oben rechts in der Karte legt eine
+  neue Position an. Sie bekommt die nächste freie Nummer; vorhandene Nummern
+  ändern sich nie, weil Kürzungen und SymLinks auf sie verweisen.
+- **Löschen** – das Papierkorb-Symbol entfernt eine Position nach Rückfrage.
+  Ist eine Kürzung aus einem Erstattungsbescheid mit ihr verknüpft, ist das
+  Symbol ausgegraut: erst die Kürzungszuordnung im Bescheid lösen.
+
+Jede dieser Änderungen steht im Rückgängig-Verlauf. Eine gelöschte und per
+**Strg+Z** zurückgeholte Position erhält dabei eine neue Nummer.
+
+##### Automatisch ermittelter Differenzbetrag
+
+Ergibt die Summe der Positionen nicht den Rechnungsbetrag, steht am Ende der
+Liste eine kursive Zeile **automatisch ermittelter Differenzbetrag**. Sie nimmt
+genau den Unterschied auf, damit die Positionen zusammen wieder den
+Rechnungsbetrag ergeben, und passt sich bei jeder Änderung an Positionen oder
+Gesamtbetrag von selbst an. Stimmen die Summen überein, verschwindet sie. Ein
+negativer Betrag bedeutet, dass die Positionen zusammen mehr ergeben als der
+Rechnungsbetrag. Die Zeile lässt sich weder bearbeiten noch löschen. Ohne
+Einzelpositionen oder ohne Gesamtbetrag gibt es sie nicht.
+
+Eine [Wiederverarbeitung](#wiederverarbeiten) liest die Positionen neu aus und
+ersetzt dabei auch die von Hand geänderten.
 
 #### Erstattungen und Abrechnungsperioden
 
@@ -825,20 +981,24 @@ eigene Felder:
   erbracht wurde. postbuch.net ermittelt sie automatisch bei der
   Klassifikation; wie jedes andere Feld lässt sie sich manuell ändern
   (inklusive Rückgängig machen). Auf der Seite
-  ![Handwerker-Symbol](icons/wrench.svg) **Analyse → Handwerker** wird nach
-  diesem Jahr gruppiert – nicht nach dem Rechnungsdatum, denn für die
-  Steuererklärung zählt das Leistungsjahr, nicht der Tag der Rechnungsstellung.
-  Rechnungen, denen kein Jahr zugeordnet werden konnte, erscheinen dort in
-  einer eigenen Gruppe „Ohne Zuordnung".
+  ![Handwerker-Symbol](icons/wrench.svg) **Analyse → Handwerker** steht es
+  zur Information in der Tabelle; gruppiert wird dort nach dem Jahr der
+  Zahlung, denn das zählt für die Steuererklärung (siehe
+  [Analyse](analyse.md)).
 - **Leistungsdatum** als freier Text – der Original-Wortlaut von der
   Rechnung (z. B. „2025" oder „03/2025"), rein zur Information und
   unabhängig vom Leistungsjahr.
 - **Lohnkosten** – der nach § 35a EStG begünstigte Anteil. Er wird auf der Seite
-  **Analyse → Handwerker** je Leistungsjahr aufsummiert – **auch dann, wenn
+  **Analyse → Handwerker** je Zahljahr aufsummiert – **auch dann, wenn
   das Dokument archiviert ist.** Ein bezahlter Handwerkervorgang kann ins
   Archiv, bleibt aber absetzbar; die Seite weist archivierte Rechnungen
   deshalb eigens aus, statt sie stillschweigend wegzulassen (siehe
   [Archivieren](#archivieren-historisch)).
+- **Für § 35a EStG nicht relevant** – ein Kästchen, das nur der Nutzer setzt;
+  die KI lässt es immer leer. Angekreuzt fällt die Rechnung auf der Seite
+  **Analyse → Handwerker** aus der Standardansicht und aus allen Summen
+  heraus (siehe [Analyse](analyse.md)). Die Markierung bleibt beim
+  Wiederverarbeiten erhalten und lässt sich rückgängig machen.
 
 Auch **Leistung** (was gemacht wurde) steht hier als eigenes Feld.
 
@@ -882,21 +1042,21 @@ deutlich: Der Block wird **dauerhaft** entfernt und lässt sich nur über eine
 [Wiederverarbeitung](#wiederverarbeiten) neu erzeugen; der Rückgängig-Verlauf
 hilft hier nicht.
 
-Der zweite, ebenso wichtige Anwendungsfall ist die
-[Korrekturrechnung](#sonderfall-korrekturrechnung): Ein Dokument, dessen
-Forderung durch eine neue Rechnung ersetzt wurde, soll den Block verlieren – es
-ist keine Rechnung mehr, und ohne Block kann es auch nach einem versehentlichen
-Zurückholen aus dem Archiv nicht wieder als fällig auftauchen.
+Der zweite Anwendungsfall ist eine [stornierte Forderung ohne neue
+Rechnung](#rechnung-invalidieren): Ohne Block kann sie auch nach einem
+versehentlichen Zurückholen aus dem Archiv nicht wieder als fällig auftauchen.
+Gibt es eine Korrekturrechnung, ist stattdessen die
+[Ersetzung](#sonderfall-korrekturrechnung) der richtige Weg.
 
-Bei den Dokumentarten **Rechnung** und **Kaufbeleg** steht an dieser Stelle
-stattdessen ![Invalidieren-Symbol](icons/ban.svg) **Rechnung invalidieren**:
+Bei den Dokumentarten **Rechnung** und **Kaufbeleg** steht statt des Knopfs im
+Menü ![Rechnung-Symbol](icons/receipt.svg) **Rechnung** der Eintrag
+![Invalidieren-Symbol](icons/ban.svg) **Rechnung invalidieren …**:
 Dort ist der Rechnungsblock zwingend, und der Server lehnt ein bloßes Löschen
 auch dann ab, wenn es auf anderem Weg versucht wird – ein Dokument der Art
 _Rechnung_ ohne Rechnungsdaten wäre ein Widerspruch. Der Invalidieren-Knopf löst
 deshalb beides gemeinsam aus: Umstellung der Dokumentart auf _Korrespondenz_ und
 Wiederverarbeitung ohne Rechnungsblock. Was der Dialog ankündigt und wann er
-ablehnt, steht unter
-[Sonderfall Korrekturrechnung](#sonderfall-korrekturrechnung).
+ablehnt, steht unter [Rechnung invalidieren](#rechnung-invalidieren).
 
 ### Obertyp: Erstattungsbescheid
 

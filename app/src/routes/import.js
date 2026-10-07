@@ -358,9 +358,11 @@ router.post('/upload-merged', async (req, res) => {
 const VALID_CONFLICT_MODES = new Set(['skip', 'createNew']);
 const MAX_ARCHIVE_ZIP_BYTES = 2 * 1024 * 1024 * 1024; // 2 GiB, gepackt
 // Sicherheitsabstand für die Tempdatei: /tmp liegt im selben Dateisystem wie
-// die Postgres-Daten (kein eigenes Docker-Volume) — ein 2-GB-Upload darf die
-// Datenbank nicht durch volllaufende Platte gefährden.
-const ARCHIVE_MIN_FREE_BYTES = 6 * 1024 * 1024 * 1024;
+// die Postgres-Daten (kein eigenes Docker-Volume) — ein Upload darf die
+// Datenbank nicht durch volllaufende Platte gefährden. Benötigt wird die
+// angekündigte Uploadgröße plus diese Reserve; ohne Content-Length die
+// Höchstgröße. Node liest nie mehr Body-Bytes als angekündigt.
+const ARCHIVE_RESERVE_BYTES = 1 * 1024 * 1024 * 1024;
 // Solange eine vorbereitete Übergabe auf die Zuordnung wartet, belegt ihre
 // Tempdatei Platz — nach dieser Frist wird sie verworfen.
 const ARCHIV_BEREIT_TTL_MS = 30 * 60 * 1000;
@@ -383,13 +385,18 @@ function eigenerSlot(req) {
   return slot;
 }
 
-async function hatGenugPlatz(benoetigteBytes) {
+/** Freie Bytes unter /tmp, null wenn statfs nicht verfügbar ist. */
+async function freierPlatz() {
   try {
     const s = await statfs('/tmp');
-    return s.bavail * s.bsize > benoetigteBytes;
+    return s.bavail * s.bsize;
   } catch {
-    return true; // statfs auf dieser Plattform nicht verfügbar → nicht blockieren
+    return null; // statfs auf dieser Plattform nicht verfügbar → nicht blockieren
   }
+}
+
+function formatGiB(bytes) {
+  return `${(bytes / 1024 ** 3).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} GiB`;
 }
 
 // Räumt beim App-Start liegen gebliebene Tempdateien eines abgebrochenen
@@ -434,8 +441,14 @@ router.post('/archiv/vorpruefung', requireAdmin, async (req, res) => {
   if (Number.isFinite(contentLength) && contentLength > MAX_ARCHIVE_ZIP_BYTES) {
     return res.status(413).json({ error: 'ZIP-Archiv ist zu groß (maximal 2 GB).' });
   }
-  if (!(await hatGenugPlatz(ARCHIVE_MIN_FREE_BYTES))) {
-    return res.status(507).json({ error: 'Nicht genügend freier Speicherplatz für den Archiv-Import.' });
+  const uploadBytes = Number.isFinite(contentLength) && contentLength > 0 ? contentLength : MAX_ARCHIVE_ZIP_BYTES;
+  const benoetigt = uploadBytes + ARCHIVE_RESERVE_BYTES;
+  const frei = await freierPlatz();
+  if (frei !== null && frei < benoetigt) {
+    return res.status(507).json({
+      error: `Nicht genügend freier Speicherplatz für den Archiv-Import: benötigt ${formatGiB(benoetigt)} `
+        + `(Upload plus ${formatGiB(ARCHIVE_RESERVE_BYTES)} Reserve), frei ${formatGiB(frei)}.`,
+    });
   }
   if (archivSlot) {
     return res.status(409).json({ error: 'Es läuft bereits eine Dokumentenübergabe. Bitte warten, bis sie abgeschlossen ist.' });

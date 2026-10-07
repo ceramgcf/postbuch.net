@@ -84,12 +84,18 @@ export async function noteDbComplete(jobId) {
   if (r.rowCount !== 1) throw new Error(`Pipeline-Journal für Job ${jobId} fehlt.`);
 }
 
-export async function noteEbPending(jobId, db = pool) {
+/**
+ * Merkt den EB-Fachjob vor. Korrekturanweisung und Modellstufe der auslösenden
+ * Wiederverarbeitung werden mitgespeichert, damit eine spätere Wiederholung
+ * durch recoverPending() denselben Auftrag ausführt und nicht ohne sie.
+ */
+export async function noteEbPending(jobId, db = pool, { korrekturAnweisung = '', modelTier = null } = {}) {
   const r = await db.query(
     `UPDATE postbuch._pipeline_file_journal
-        SET state='eb_pending', updated_at=NOW()
+        SET state='eb_pending', updated_at=NOW(),
+            eb_korrektur_anweisung=$2, eb_model_tier=$3
       WHERE job_id=$1`,
-    [jobId],
+    [jobId, korrekturAnweisung || null, modelTier || null],
   );
   if (r.rowCount !== 1) throw new Error(`Pipeline-Journal für Job ${jobId} fehlt.`);
 }
@@ -198,7 +204,12 @@ export async function recoverPending(settings, { onEbPending } = {}) {
       // der bewusst separate EB-Matchingjob steht noch aus. Der Marker bleibt
       // bis zu dessen Erfolg bestehen und ist damit eine persistente Outbox.
       if (row.state === 'eb_pending' && row.db_storage_id) {
-        if (onEbPending) onEbPending(row.postid, row.job_id);
+        if (onEbPending) {
+          onEbPending(row.postid, row.job_id, {
+            korrekturAnweisung: row.eb_korrektur_anweisung || '',
+            modelTier: row.eb_model_tier || null,
+          });
+        }
         summary.completed++;
         continue;
       }

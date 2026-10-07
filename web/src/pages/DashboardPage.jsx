@@ -16,6 +16,7 @@ import { ablageLabel } from '@/lib/ablage';
 import { empfohlenerSchritt, offeneReste } from '@/pages/AblageUmzugPage';
 import PendingDecisionsCard from '@/components/dashboard/PendingDecisionsCard';
 import FailedDocumentsCard from '@/components/dashboard/FailedDocumentsCard';
+import PersonenFilter, { useDashboardPersonenFilter } from '@/components/dashboard/PersonenFilter';
 import { MODEL_CLASSES } from '@/components/settings/modelClasses';
 
 function BackupBanner() {
@@ -704,7 +705,9 @@ export default function DashboardPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
-  const { data, isLoading, error } = useDashboardStats();
+  const personenFilter = useDashboardPersonenFilter();
+  const personenAuswahl = personenFilter.auswahl.length ? personenFilter.auswahl : null;
+  const { data, isLoading, error } = useDashboardStats(personenAuswahl, personenFilter.bereit);
   const { data: appSettings } = useQuery({
     queryKey: ['settings-public'],
     queryFn: () => api.settingsPublic.getAll(),
@@ -718,7 +721,7 @@ export default function DashboardPage() {
   const { data: saldenData } = useSaldenList();
   const showSalden = isAdmin || appSettings?.nav_visibility?.value?.salden !== false;
   const salden = showSalden ? (saldenData?.data || []) : [];
-  const { data: wvDashboard = [] } = useWiedervorlagenDashboard();
+  const { data: wvDashboard = [] } = useWiedervorlagenDashboard(personenAuswahl, personenFilter.bereit);
   const instanceName = appSettings?.instance_name?.value?.trim();
   // Auch archivierte Versicherte halten die PKV-/Beihilfe-Historie sichtbar.
   const hasInsuredPerson = (personenData?.data ?? []).some((p) => p.pkv || p.beihilfe);
@@ -758,11 +761,28 @@ export default function DashboardPage() {
     return (stats?.nachLxd || []).filter((row) => row.dokumentart === selectedDokumentart);
   }, [stats, selectedDokumentart]);
 
+  // Die Personenauswahl reist in Folgeansichten mit, die einen Personenfilter
+  // kennen: Postbuch-Liste (Rolle Adressat, wie die Dashboard-Zählung) und
+  // Kürzungen (behandelte Person). Leere Auswahl = kein Filter.
+  const postbuchLink = (filter = {}) => {
+    const params = new URLSearchParams(filter);
+    if (personenAuswahl) {
+      params.set('person', personenAuswahl.join(','));
+      params.set('person_as_adressat', 'true');
+      params.set('person_as_patient', 'false');
+    }
+    const qs = params.toString();
+    return qs ? `/postbuch?${qs}` : '/postbuch';
+  };
+  const kuerzungenLink = personenAuswahl
+    ? `/analyse/kuerzungen?${new URLSearchParams({ person: personenAuswahl.join(',') })}`
+    : '/analyse/kuerzungen';
+
   const openPostbuch = ({ lebensbereich, dokumentart }) => {
-    const params = new URLSearchParams();
-    if (lebensbereich) params.set('lebensbereich', lebensbereich);
-    if (dokumentart) params.set('dokumentart', dokumentart);
-    navigate(`/postbuch?${params.toString()}`);
+    const filter = {};
+    if (lebensbereich) filter.lebensbereich = lebensbereich;
+    if (dokumentart) filter.dokumentart = dokumentart;
+    navigate(postbuchLink(filter));
   };
 
   const handleSortChange = (mode) => {
@@ -770,8 +790,9 @@ export default function DashboardPage() {
     localStorage.setItem('dashboard-letzte-sort', mode);
   };
 
-  if (isLoading) return <PageLoader />;
-  if (error) return <p className="p-6 text-destructive">Fehler: {error.message}</p>;
+  if (error && !data) return <p className="p-6 text-destructive">Fehler: {error.message}</p>;
+  // Ohne Daten auch dann laden, wenn die Abfrage noch auf die Personenliste wartet.
+  if (isLoading || !data) return <PageLoader />;
 
   return (
     <div className="px-6 pt-4 pb-6 lg:px-8 lg:pb-8 space-y-8 max-w-6xl">
@@ -780,6 +801,9 @@ export default function DashboardPage() {
         <GlowHeading>{instanceName ? `Dashboard ${instanceName}` : 'Dashboard'}</GlowHeading>
         <p className="text-muted-foreground mt-1">Übersicht über alle Dokumente und Aktivitäten.</p>
       </div>
+
+      {/* Personenfilter: wirkt nur auf die Kennzahlen und Listen dieses Dashboards */}
+      <PersonenFilter filter={personenFilter} />
 
       {/* Backup-Warnung: ganz oben, für alle Rollen sichtbar (Datenverlustrisiko) */}
       <BackupBanner />
@@ -818,7 +842,7 @@ export default function DashboardPage() {
           iconKey="FileText"
           label="Dokumente gesamt"
           value={stats.totalDokumente}
-          to="/postbuch"
+          to={postbuchLink()}
         />
         <StatCard
           iconKey="Banknote"
@@ -835,7 +859,7 @@ export default function DashboardPage() {
             iconKey="Scissors"
             label="Kürzungen gesamt"
             value={formatCurrency(stats.kuerzungenGesamt)}
-            to="/analyse/kuerzungen"
+            to={kuerzungenLink}
             valueClass="text-red-500"
           />
         )}
@@ -843,7 +867,7 @@ export default function DashboardPage() {
           iconKey="TriangleAlert"
           label="Reviews ausstehend"
           value={stats.nachStatus?.NeedsUserReview || 0}
-          to="/postbuch?status=NeedsUserReview"
+          to={postbuchLink({ status: 'NeedsUserReview' })}
         />
       </div>
 

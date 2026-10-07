@@ -107,14 +107,14 @@ async function loadDetail(postid) {
       `SELECT * FROM postbuch.arztrechnung_einzelposition WHERE postid = $1 ORDER BY subid`,
       [postid]
     );
-    return { type: 'arztrechnung', fields: arz.rows[0], einzelpositionen: pos.rows };
+    return { type: 'arztrechnung', fields: arz.rows[0], einzelpositionen: pos.rows, zahlungen: await ladeZahlungenExport(postid), ersetzt: await ladeErsetztExport(postid) };
   }
 
   // Handwerkerrechnung
-  if (hw.rows.length) return { type: 'handwerkerrechnung', fields: hw.rows[0] };
+  if (hw.rows.length) return { type: 'handwerkerrechnung', fields: hw.rows[0], zahlungen: await ladeZahlungenExport(postid), ersetzt: await ladeErsetztExport(postid) };
 
   // Generische Rechnung
-  if (gr.rows.length) return { type: 'generische_rechnung', fields: gr.rows[0] };
+  if (gr.rows.length) return { type: 'generische_rechnung', fields: gr.rows[0], zahlungen: await ladeZahlungenExport(postid), ersetzt: await ladeErsetztExport(postid) };
 
   // Arztbericht
   if (ab.rows.length) return { type: 'arztbericht', fields: ab.rows[0] };
@@ -133,6 +133,28 @@ async function loadDetail(postid) {
   }
 
   return null;
+}
+
+// Zahlungen einer Rechnung (Datum, Betrag) in fachlicher Reihenfolge.
+async function ladeZahlungenExport(postid) {
+  const r = await query(
+    `SELECT datum, betrag FROM postbuch.rechnung_zahlung WHERE postid = $1 ORDER BY datum, zahlung_id`,
+    [postid]
+  );
+  return r.rows;
+}
+
+// Ersetzt diese Rechnung eine andere (Korrekturrechnung)? Die Kante wird an
+// der ersetzenden Rechnung geführt; der Import stellt sie wieder her, wenn
+// beide Dokumente im selben Lauf neu angelegt werden.
+async function ladeErsetztExport(postid) {
+  const r = await query(
+    `SELECT zu_postid, umgezogene_zahlungen, alt_bezahlt_am_manuell, neu_bezahlt_am_manuell FROM postbuch.dokument_beziehung
+      WHERE art = 'ersetzt' AND von_postid = $1`,
+    [postid]
+  );
+  const k = r.rows[0];
+  return k ? { postid: k.zu_postid, umgezogene_zahlungen: k.umgezogene_zahlungen, alt_bezahlt_am_manuell: k.alt_bezahlt_am_manuell, neu_bezahlt_am_manuell: k.neu_bezahlt_am_manuell } : null;
 }
 
 // Abrechnungskontext und manuelle Workflowmarker gehören nicht zum

@@ -36,12 +36,60 @@ export function getFolders(settings, backend) {
 
 /**
  * Ablagestruktur: 'lxd' = <Lebensbereich>/<Dokumentart> (Default),
- * 'person_lxd' = <Familienmitglied>/<Lebensbereich>/<Dokumentart>.
+ * 'person_lxd' = <Familienmitglied>/<Lebensbereich>/<Dokumentart>,
+ * 'benutzerdefiniert' = frei gewählte Ebenen aus _settings.ablage_ebenen.
  * Umgeschaltet wird ausschließlich über POST /api/settings/ablage-struktur,
  * weil jeder Wechsel einen Gesamtumzug braucht.
  */
 export function getAblageStruktur(settings) {
-  return settings?.ablage_struktur === 'person_lxd' ? 'person_lxd' : 'lxd';
+  const s = settings?.ablage_struktur;
+  if (s === 'person_lxd') return 'person_lxd';
+  if (s === 'benutzerdefiniert' && normalisiereAblageEbenen(settings?.ablage_ebenen)) return 'benutzerdefiniert';
+  return 'lxd';
+}
+
+/** Mögliche Ordnerebenen der Ablage, in der Reihenfolge der Auswahlliste. */
+export const ABLAGE_EBENEN = Object.freeze(['person', 'lebensbereich', 'dokumentart', 'jahr', 'richtung']);
+export const ABLAGE_EBENEN_MAX = 4;
+
+/** Feste Ebenenfolgen der beiden vordefinierten Strukturen. */
+export const ABLAGE_VORLAGEN = Object.freeze({
+  lxd: Object.freeze(['lebensbereich', 'dokumentart']),
+  person_lxd: Object.freeze(['person', 'lebensbereich', 'dokumentart']),
+});
+
+/**
+ * Prüft eine Ebenenfolge: 1 bis 4 verschiedene bekannte Ebenen.
+ * @returns {string[]|null}  bereinigte Kopie oder null bei ungültiger Eingabe
+ */
+export function normalisiereAblageEbenen(ebenen) {
+  if (!Array.isArray(ebenen) || ebenen.length < 1 || ebenen.length > ABLAGE_EBENEN_MAX) return null;
+  if (!ebenen.every((e) => ABLAGE_EBENEN.includes(e))) return null;
+  if (new Set(ebenen).size !== ebenen.length) return null;
+  return [...ebenen];
+}
+
+/**
+ * Ordnerebenen der aktiven Ablagestruktur von der Wurzel zum Blattordner.
+ * Einzige Quelle für alle Pfadberechnungen; die Vorlagen sind nur Namen für
+ * bestimmte Ebenenfolgen.
+ */
+export function getAblageEbenen(settings) {
+  const struktur = getAblageStruktur(settings);
+  if (struktur === 'benutzerdefiniert') return normalisiereAblageEbenen(settings.ablage_ebenen);
+  return [...ABLAGE_VORLAGEN[struktur]];
+}
+
+/**
+ * Wer den Personenordner bestimmt, wenn Person eine Ablageebene ist:
+ * 'adressat' = familienmitglied (Default), 'behandelt' = die behandelte
+ * Person bzw. das behandelte Tier bei Arztrechnung, Arztbericht und
+ * Erstattungsbescheid. Ohne eindeutige behandelte Person gilt der Adressat.
+ */
+export const ABLAGE_PERSON_QUELLEN = Object.freeze(['adressat', 'behandelt']);
+
+export function getAblagePersonQuelle(settings) {
+  return settings?.ablage_person_quelle === 'behandelt' ? 'behandelt' : 'adressat';
 }
 
 /** Reiner LxD-Reader: ein Leaf-Key ist immer `<lebensbereich>/<dokumentart>`. */

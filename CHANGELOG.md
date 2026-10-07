@@ -19,6 +19,27 @@ angezeigt. Sie sind an Endnutzer gerichtet, nicht an Entwickler.
 
 ---
 
+## 2.11.0 – 2026-10-07
+
+- Neue Seite Analyse → Gesundheitskosten: nicht erstattete Arzt-, Labor- und Hilfsmittelkosten je Zahljahr und Person bzw. Tier, mit Erstattung und Eigenbehalt für die Steuererklärung.
+- Handwerker- und Gesundheitskosten sowie Kürzungen lassen sich als Excel-Datei herunterladen, jeweils genau in der angezeigten Auswahl.
+- Die Handwerkerseite gruppiert nach Zahljahr statt nach Leistungsjahr. Nicht begünstigte Rechnungen lassen sich mit „Für § 35a EStG nicht relevant“ ausschließen.
+- Rechnungen kennen jetzt Teilzahlungen: Offene Reste erscheinen in „Unbezahlt“, in den Summen und im Fälligkeitskalender.
+- Korrekturrechnungen ersetzen die alte Rechnung per Menü „Rechnung“. Passende Rechnungen werden vorgeschlagen, bisherige Zahlungen ziehen mit um.
+- Bestreiten, Ersetzen und Invalidieren sind im neuen Menü „Rechnung“ im Rechnungsblock gebündelt.
+- Einzelpositionen von Arztrechnungen lassen sich bearbeiten, ergänzen und löschen. Eine automatische Differenzzeile gleicht Abweichungen zum Rechnungsbetrag aus.
+- Das Dashboard hat einen Personenfilter mit Mehrfachauswahl.
+- Die Kürzungsliste hat Filter nach Person, Kostenträger und Bescheidjahr. Der Browser merkt sich gewählte Filter je Benutzer.
+- Abrechnungsperioden zeigen ihren Status auf Deutsch (Sammelt, Eingereicht, Abgeschlossen, Ausgelassen), auch als Kennzeichen im Rechnungsblock.
+- Die Periodenseite zeigt angepinnte Dokumente und Prüffälle direkt an der Periode. Offene Anheftungen lassen sich dort lösen.
+- Gleichzeitig eintreffende Erstattungsbescheide können eine Rechnung nicht mehr doppelt belegen.
+- Behandelte Personen werden auch ohne Versicherung erkannt, Tiere eingeschlossen. Perioden gibt es weiterhin nur für Versicherte.
+- Die Dateiablage lässt sich frei in bis zu vier Ebenen gliedern (Person, Lebensbereich, Dokumentart, Jahr, Richtung). Personenordner können der behandelten Person folgen.
+- Ein Strukturwechsel während eines laufenden Ablage-Umzugs bricht diesen sauber ab und startet den neuen. Das Aufräumen alter Ordner läuft schneller.
+- Korrekturanweisungen für Erstattungsbescheide gelten auch für das Auslesen der Positionen und bleiben bei automatischen Wiederholungen erhalten.
+- Der Archiv-Import prüft vorab den freien Speicherplatz und nennt benötigten und freien Platz.
+- Aktualisierte KI-Modellempfehlungen mit Haiku 5.5.
+
 ## 2.10.0 – 2026-10-02
 
 - Erste öffentliche Version.

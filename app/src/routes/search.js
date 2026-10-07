@@ -295,6 +295,8 @@ router.get('/suggest', async (req, res) => {
     // die Dokument-Vorschläge ('P') ein; wenn gesetzt, werden keine Akten ('A') geliefert.
     const arten = (req.query.arten || '').split(',').map((s) => s.trim()).filter(Boolean);
     const artenFilter = arten.length > 0 ? arten : null;
+    // rechnung=1: nur Dokumente mit Rechnungsblock (Auswahl einer Bezugsrechnung)
+    const nurRechnungen = req.query.rechnung === '1';
 
     const docExacts = exactCandidates(idq, 'P');
     const docPrefixes = prefixCandidates(idq, 'P').map((p) => p + '%');
@@ -311,12 +313,15 @@ router.get('/suggest', async (req, res) => {
         WHERE (p.postid = ANY($1::text[]) OR p.postid LIKE ANY($2::text[])
            OR ($3::text IS NOT NULL AND (p.betreff ILIKE $3 OR p.kontakt ILIKE $3)))
            AND ($5::text[] IS NULL OR p.dokumentart = ANY($5::text[]))
+           AND (NOT $6::boolean OR EXISTS (SELECT 1 FROM arztrechnung r WHERE r.postid = p.postid)
+                OR EXISTS (SELECT 1 FROM handwerkerrechnung r WHERE r.postid = p.postid)
+                OR EXISTS (SELECT 1 FROM generische_rechnung r WHERE r.postid = p.postid))
         ORDER BY prio DESC, p.briefdatum DESC NULLS LAST
         LIMIT $4
-      `, [docExacts, docPrefixes, textPattern, limit, artenFilter]);
+      `, [docExacts, docPrefixes, textPattern, limit, artenFilter, nurRechnungen]);
       suggestions.push(...r.rows);
     }
-    if (!artenFilter && (akteExacts.length || aktePrefixes.length || textPattern)) {
+    if (!artenFilter && !nurRechnungen && (akteExacts.length || aktePrefixes.length || textPattern)) {
       const r = await query(`
         SELECT 'A' AS type, a.akteid AS id, a.betreff, a.historisch,
                (SELECT COUNT(*)::int FROM akte_dokument ad WHERE ad.akteid = a.akteid) AS dok_count,

@@ -1,5 +1,10 @@
 const BASE = '/api';
 
+/** Personenauswahl des Dashboards als Query-String (leer = kein Filter). */
+function personenQuery(personen) {
+  return personen?.length ? `?${new URLSearchParams({ personen: personen.join(',') })}` : '';
+}
+
 async function request(path, options = {}) {
   const { noRedirect, ...fetchOptions } = options;
   const res = await fetch(`${BASE}${path}`, {
@@ -29,6 +34,43 @@ async function request(path, options = {}) {
   return res.json();
 }
 
+// GET-Download einer Datei (z. B. Excel-Export); Dateiname aus Content-Disposition.
+async function downloadDatei(path) {
+  const res = await fetch(`${BASE}${path}`, { credentials: 'include', cache: 'no-store' });
+  if (res.status === 401) {
+    window.location.href = '/login';
+    throw new Error('Nicht authentifiziert');
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    let payload = null;
+    try { payload = text ? JSON.parse(text) : null; } catch { /* keine JSON-Antwort */ }
+    throw new Error(payload?.error || text || `HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const match = (res.headers.get('Content-Disposition') || '').match(/filename="([^"]+)"/);
+  a.download = match?.[1] || 'export';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// Filterlisten als kommagetrennte Query-Parameter, Einzelwerte direkt;
+// leere Listen und leere Werte entfallen.
+function filterQuery(filter) {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(filter || {})) {
+    if (Array.isArray(v)) { if (v.length > 0) params.set(k, v.join(',')); }
+    else if (v != null && v !== '') params.set(k, String(v));
+  }
+  const qs = params.toString();
+  return qs ? `?${qs}` : '';
+}
+
 export const api = {
   postbuch: {
     list: (params) => {
@@ -51,6 +93,21 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ bezahlt_am: date }),
     }),
+    zahlungen: (postid) => request(`/postbuch/${postid}/zahlungen`),
+    setZahlungen: (postid, zahlungen) => request(`/postbuch/${postid}/zahlungen`, {
+      method: 'PUT',
+      body: JSON.stringify({ zahlungen }),
+    }),
+    ersetzung: (postid) => request(`/postbuch/${postid}/ersetzung`),
+    ersetzungKandidaten: (postid, richtung) =>
+      request(`/postbuch/${postid}/ersetzung/kandidaten?${new URLSearchParams({ richtung })}`),
+    /** body: { vorgaenger } (diese Rechnung ersetzt jene) oder { nachfolger } (jene ersetzt diese) */
+    ersetze: (postid, body) => request(`/postbuch/${postid}/ersetzung`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+    /** postid ist die ersetzte Rechnung */
+    hebeErsetzungAuf: (postid) => request(`/postbuch/${postid}/ersetzung`, { method: 'DELETE' }),
     setBestritten: (postid, bestritten_betrag) => request(`/postbuch/${postid}/bestritten`, {
       method: 'PUT',
       body: JSON.stringify({ bestritten_betrag }),
@@ -70,6 +127,17 @@ export const api = {
     updateArztrechnung: (postid, data) => request(`/postbuch/${postid}/arztrechnung`, {
       method: 'PATCH',
       body: JSON.stringify(data),
+    }),
+    addArztPosition: (postid, data) => request(`/postbuch/${postid}/arztrechnung/positionen`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+    updateArztPosition: (postid, subid, data) => request(`/postbuch/${postid}/arztrechnung/positionen/${subid}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+    deleteArztPosition: (postid, subid) => request(`/postbuch/${postid}/arztrechnung/positionen/${subid}`, {
+      method: 'DELETE',
     }),
     /**
      * EBP (Erstattungsbescheid-Position) einer ganzen Arztrechnung zuordnen/lösen. arzPostid=null löst.
@@ -177,10 +245,12 @@ export const api = {
       return request(`/search/akten/semantic?${params}`);
     },
     /** Leichtgewichtiges Autocomplete für #P/#A-Referenzen (Nummer oder Betreff/Kontakt).
-     *  opts.arten (Array oder CSV) schränkt auf Dokument-Arten ein (dann keine Akten). */
+     *  opts.arten (Array oder CSV) schränkt auf Dokument-Arten ein (dann keine Akten),
+     *  opts.nurRechnungen auf Dokumente mit Rechnungsblock (ebenfalls ohne Akten). */
     suggest: (q, limit = 8, opts = {}) => {
       const params = new URLSearchParams({ q, limit: String(limit) });
       if (opts.arten) params.set('arten', Array.isArray(opts.arten) ? opts.arten.join(',') : opts.arten);
+      if (opts.nurRechnungen) params.set('rechnung', '1');
       return request(`/search/suggest?${params}`);
     },
   },
@@ -301,14 +371,25 @@ export const api = {
     unbezahlt: () => request('/analyse/unbezahlt'),
     /** @param {'offen'|'alle'|'gesehen'} [gesehen] Default serverseitig 'offen'. */
     kuerzungen: (gesehen) => request(`/analyse/kuerzungen${gesehen ? `?gesehen=${gesehen}` : ''}`),
+    /** @param {{gesehen?: string, person?: string[], kostentraeger?: string[], jahre?: string[], periode?: number}} filter */
+    kuerzungenExport: (filter) => downloadDatei(`/analyse/kuerzungen/export${filterQuery(filter)}`),
     perioden: () => request('/analyse/perioden'),
     periodenRechnungen: (person, kostentraeger, periode) =>
       request(`/analyse/perioden/${encodeURIComponent(person)}/${encodeURIComponent(kostentraeger)}/${encodeURIComponent(periode)}/rechnungen`),
-    handwerker: () => request('/analyse/handwerker'),
+    /** @param {'relevant'|'irrelevant'|'alle'} [relevanz] § 35a-Filter, Standard: relevant */
+    handwerker: (relevanz = 'relevant') => request(`/analyse/handwerker${filterQuery({ relevanz })}`),
+    /** @param {{jahre?: string[], relevanz?: string}} filter */
+    handwerkerExport: (filter) => downloadDatei(`/analyse/handwerker/export${filterQuery(filter)}`),
+    gesundheitskosten: () => request('/analyse/gesundheitskosten'),
+    /** @param {{jahre?: string[], personen?: string[]}} filter */
+    gesundheitskostenExport: (filter) =>
+      downloadDatei(`/analyse/gesundheitskosten/export${filterQuery(filter)}`),
+    periodenPins: (person, kostentraeger, periode) =>
+      request(`/analyse/perioden/${encodeURIComponent(person)}/${encodeURIComponent(kostentraeger)}/${encodeURIComponent(periode)}/pins`),
     collectingPerioden: () => request('/analyse/perioden/collecting'),
   },
   stats: {
-    dashboard: () => request('/stats/dashboard'),
+    dashboard: (personen) => request(`/stats/dashboard${personenQuery(personen)}`),
     scanRetryQueue: () => request('/stats/scan-retry-queue'),
   },
   akten: {
@@ -448,7 +529,7 @@ export const api = {
       );
       return request(`/wiedervorlagen?${new URLSearchParams(cleaned)}`);
     },
-    dashboard: () => request('/wiedervorlagen/dashboard'),
+    dashboard: (personen) => request(`/wiedervorlagen/dashboard${personenQuery(personen)}`),
     kalender: (von, bis) => request(`/wiedervorlagen/kalender?von=${von}&bis=${bis}`),
     create: (data) => request('/wiedervorlagen', { method: 'POST', body: JSON.stringify(data) }),
     update: (id, data) => request(`/wiedervorlagen/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
@@ -520,10 +601,13 @@ export const api = {
       body: JSON.stringify({ value }),
     }),
     promptsPreview: () => request('/settings/prompts-preview'),
-    /** Ablagestruktur ('lxd' | 'person_lxd'). Umschalten startet den Gesamtumzug. */
+    /**
+     * Ablagestruktur ('lxd' | 'person_lxd' | 'benutzerdefiniert' mit 1–4 Ebenen).
+     * Umschalten startet den Gesamtumzug.
+     */
     ablageStruktur: () => request('/settings/ablage-struktur'),
-    setAblageStruktur: (struktur) => request('/settings/ablage-struktur', {
-      method: 'POST', body: JSON.stringify({ struktur }),
+    setAblageStruktur: (struktur, ebenen, personQuelle) => request('/settings/ablage-struktur', {
+      method: 'POST', body: JSON.stringify({ struktur, ebenen, personQuelle }),
     }),
     /**
      * Fragt das Scanner-Gerät nach seinen Fähigkeiten und speichert das

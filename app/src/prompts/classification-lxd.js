@@ -57,7 +57,8 @@ function buildFamilyContext(persons) {
   return {
     familyBlock: lines,
     familyKurznames: list.map((p) => p.kurzname),
-    patientKurznames: list.filter((p) => p.pkv || p.beihilfe).map((p) => p.kurzname),
+    // Behandelt werden kann jeder erfasste Mensch und jedes Tier, auch ohne Versicherung.
+    patientKurznames: list.map((p) => p.kurzname),
   };
 }
 
@@ -526,7 +527,8 @@ B5. behandeltePerson ist etwas ANDERES als familienmitglied.
     behandeltePerson = der behandelte Patient laut Dokumentinhalt ("Patient:",
     Geburtsdatum, Name im Behandlungskontext).
     Gültig sind ausschließlich die Kurznamen aus der Patientenliste im
-    ANWENDUNGSKONTEXT (versicherte Menschen und Tiere). Rechtschreibfehler und
+    ANWENDUNGSKONTEXT (alle erfassten Menschen und Tiere, auch ohne
+    Versicherung). Rechtschreibfehler und
     Abwandlungen korrigieren. Bei Unklarheit oder leerer Liste: null.
 
 ── C. Postbuch-Felder ──

@@ -15,7 +15,7 @@
 
 import pool from '../db.js';
 import { loadDynamicSettings } from '../config.js';
-import { callLLM, resolveKlassenModell, buildCostMap, calculateCost } from '../lib/llm.js';
+import { callLLM, resolveKlassenModell, buildCostMap, calculateCost, parseJsonFromText } from '../lib/llm.js';
 import * as discord from '../lib/discord.js';
 import { retrieveDocument } from './document-retriever.js';
 import { buildEbParsePrompt, buildMatchKuerzungenPrompt } from '../prompts/erstattungsbescheid.js';
@@ -24,24 +24,13 @@ import { appLog } from '../app-log.js';
 import { sendPushToAllUsers } from '../lib/webpush.js';
 import { toDate, toNumeric } from '../lib/coerce.js';
 import { gleichePersonAb } from '../lib/personen-abgleich.js';
-import { bewertePeriodenNachBescheid, setzeBescheidwirkungZurueck } from './periodenabschluss.js';
+import { bewertePeriodenNachBescheid, setzeBescheidwirkungZurueck, sperreZuordnungFuerBescheid } from './periodenabschluss.js';
+import { sperreBescheidzuordnung } from './perioden-sperre.js';
 
 // ── Hilfsfunktionen ──────────────────────────────────────────────────────────
 // toDate/toNumeric lagen hier als byte-identische Kopie aus document-inserter.js.
 // Beide sind jetzt in lib/coerce.js zusammengeführt und dabei gehärtet worden
 // (deutsche Zahlnotation, Infinity, echte Kalenderprüfung).
-
-/**
- * Parst die LLM-Antwort als JSON. Entfernt ggf. Markdown-Codeblöcke.
- */
-function parseJsonResponse(text) {
-  let cleaned = text.trim();
-  // Markdown-Codeblock entfernen
-  if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-  }
-  return JSON.parse(cleaned);
-}
 
 /**
  * Prüft die minimale Struktur, die der EB-Fachschritt vor seiner atomaren
@@ -184,13 +173,19 @@ export function matchToInvoices(ebData, submittedInvoices, postid) {
 
 // ── Hauptfunktion ────────────────────────────────────────────────────────────
 
+// Modellstufen, die eine Wiederverarbeitung fest vorgeben kann (routes/actions.js).
+const EB_MODELLSTUFEN = new Set(['leicht', 'mittel', 'schwierig', 'large']);
+
 /**
  * Verarbeitet einen Erstattungsbescheid vollständig.
  *
  * @param {string} postid              - PostID des Erstattungsbescheids in postbuch
  * @param {string} [korrekturAnweisung] - Optionale Korrektur-/Hinweistexte bei Wiederverarbeitung
+ * @param {object} [opts]
+ * @param {string} [opts.modelTier]     - Manuelle Modellstufe der Wiederverarbeitung; gilt auch
+ *                                        für das Auslesen des Bescheids ('auto'/leer = 'mittel')
  */
-export async function processErstattungsbescheid(postid, korrekturAnweisung = '') {
+export async function processErstattungsbescheid(postid, korrekturAnweisung = '', { modelTier = null } = {}) {
   const settings = await loadDynamicSettings();
   let client;
 
@@ -226,13 +221,17 @@ export async function processErstattungsbescheid(postid, korrekturAnweisung = ''
     const ebParsePrompt = korrekturAnweisung
       ? `### KORREKTUR-ANWEISUNGEN VOM BENUTZER ###\n${korrekturAnweisung}\n\n` + ebParsePromptBase
       : ebParsePromptBase;
-    // Modell aus Settings: "Mittel"-Modell (wie für mittelschwere Dokumente konfiguriert)
+    // Modell aus Settings: "Mittel"-Modell (wie für mittelschwere Dokumente konfiguriert).
+    // Hat der Nutzer die Wiederverarbeitung mit einer festen Modellstufe angestoßen,
+    // gilt diese Wahl auch hier – sonst läse ein schwächeres Modell den Bescheid aus
+    // als das, das der Nutzer für das Dokument ausdrücklich bestimmt hat.
     const costMap = buildCostMap(settings);
-    const ebParseModel = resolveKlassenModell('mittel', settings).model;
+    const ebKlasse = EB_MODELLSTUFEN.has(modelTier) ? modelTier : 'mittel';
+    const ebParseModel = resolveKlassenModell(ebKlasse, settings).model;
     const llmResult = await callLLM(ebParseModel, ebParsePrompt, { pdf, maxTokens: 16384 }, settings, {
       kategorie: 'erstattungsbescheid', entity: 'postbuch', entityId: postid, correlationId: postid,
     });
-    const ebData = parseJsonResponse(llmResult.text);
+    const ebData = parseJsonFromText(llmResult.text);
     const ebTokensIn  = llmResult.usage?.inputTokens  ?? null;
     const ebTokensOut = llmResult.usage?.outputTokens ?? null;
     const ebCostUsd   = calculateCost(ebParseModel, ebTokensIn, ebTokensOut, costMap);
@@ -276,141 +275,64 @@ export async function processErstattungsbescheid(postid, korrekturAnweisung = ''
       ? aktiveProfile.find((p) => p.name === erkanntesProfilName) || null
       : null;
 
-    // ─── 3. Eingereichte Rechnungen laden ───
-    // Bei einer Wiederverarbeitung zuerst die Periodenwirkung des vorherigen
-    // Laufs zurücknehmen: Restperioden auflösen, abgeschlossene Perioden wieder
-    // auf SUBMITTED. Erst danach steht der ungeteilte Rechnungsbestand für das
-    // Matching bereit, und die anschließende Bewertung startet ohne Altlast.
-    await setzeBescheidwirkungZurueck(postid, {
-      grund: korrekturAnweisung ? 'wiederverarbeitung-mit-korrektur' : 'wiederverarbeitung',
-    });
-
-    const invoicesResult = await pool.query(
-      `SELECT a.postid, a.gesamtbetrag, a.behandelte_person, a.name_arzt, a.typ,
-              a.rechnungsdatum, a.re_nr,
-              CASE WHEN $1 = 'PKV'
-                   THEN a.abrechnungsperiode_pkv
-                   ELSE a.abrechnungsperiode_beihilfe END AS abrechnungsperiode
-       FROM arztrechnung a
-       JOIN postbuch.mensch m ON m.kurzname = a.behandelte_person AND m.ist_tier = $2
-       JOIN abrechnungsperiode_buch ab
-         ON ab.person = a.behandelte_person
-         AND ab.kostentraeger = $1
-         AND ab.periode = CASE WHEN $1 = 'PKV'
-                               THEN a.abrechnungsperiode_pkv
-                               ELSE a.abrechnungsperiode_beihilfe END
-       WHERE (ab.status = 'SUBMITTED'
-              OR (ab.status = 'COMPLETED' AND ab.eb_postid = $3))
-       ORDER BY a.behandelte_person, a.gesamtbetrag`,
-      [kostentraeger, istTier, postid]
-    );
-
-    const submittedInvoices = invoicesResult.rows;
-
-    // ─── 4. Matching ───
-    const matchResults = matchToInvoices(ebData, submittedInvoices, postid);
-
-    const matchedCount = matchResults.filter(m => m.arz_postid).length;
-    const unmatchedCount = matchResults.length - matchedCount;
-
-    const matchingSummary = `${matchedCount}/${matchResults.length} Positionen zugeordnet` +
-      (unmatchedCount > 0 ? ` (${unmatchedCount} ohne Rechnung)` : '');
-
-    appLog('INFO', 'erstattungsbescheid', `Matching: ${matchingSummary}`, { entity: 'postbuch', entityId: postid });
-
-    // ─── 5. DB-Inserts (in Transaktion) ───
-    client = await pool.connect();
-    await client.query('BEGIN');
-
-    // 5a. Erstattungsbescheid-Kopf
-    await client.query(
-      `INSERT INTO erstattungsbescheid
-         (postid, kostentraeger, bescheiddatum, erstattungsbetrag, matching_summary, hinweise, ist_tier,
-          ai_eb_model, ai_eb_tokens_in, ai_eb_tokens_out, ai_eb_cost_usd,
-          kostentraeger_profil_id, kostentraeger_profil_name)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-       ON CONFLICT (postid) DO UPDATE SET
-         kostentraeger = EXCLUDED.kostentraeger,
-         bescheiddatum = EXCLUDED.bescheiddatum,
-         erstattungsbetrag = EXCLUDED.erstattungsbetrag,
-         matching_summary = EXCLUDED.matching_summary,
-         hinweise = EXCLUDED.hinweise,
-         ist_tier = EXCLUDED.ist_tier,
-         ai_eb_model = EXCLUDED.ai_eb_model,
-         ai_eb_tokens_in = EXCLUDED.ai_eb_tokens_in,
-         ai_eb_tokens_out = EXCLUDED.ai_eb_tokens_out,
-         ai_eb_cost_usd = EXCLUDED.ai_eb_cost_usd,
-         kostentraeger_profil_id = EXCLUDED.kostentraeger_profil_id,
-         kostentraeger_profil_name = EXCLUDED.kostentraeger_profil_name`,
-      [
-        postid,
-        kostentraeger,
-        toDate(ebData.bescheiddatum),
-        toNumeric(ebData.erstattungsbetrag),
-        matchingSummary,
-        ebData.hinweise || null,
-        istTier,
-        ebParseModel,
-        ebTokensIn,
-        ebTokensOut,
-        ebCostUsd,
-        erkanntesProfil?.id ?? null,
-        erkanntesProfil?.name ?? null,
-      ]
-    );
-
-    // 5b. Alte Einzelpositionen löschen (falls Reprocessing)
-    await client.query(
-      `DELETE FROM erstattungsbescheid_einzelposition WHERE postid = $1`,
-      [postid]
-    );
-
-    // 5c. Einzelpositionen einfügen
-    for (const ep of matchResults) {
-      await client.query(
-        `INSERT INTO erstattungsbescheid_einzelposition
-           (postid, subid, arz_postid, erstattungsbetrag, rechnungsbetrag,
-            kuerzungsbetrag, behandelte_person, kostenart, bezugsdatum, beleg_nr)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-        [
-          postid,
-          ep.subid,
-          ep.arz_postid,
-          toNumeric(ep.erstattungsbetrag),
-          toNumeric(ep.rechnungsbetrag),
-          toNumeric(ep.kuerzungsbetrag),
-          ep.behandeltePerson,
-          ep.kostenart,
-          ep.bezugsdatum,
-          ep.belegNr != null ? String(ep.belegNr) : null,
-        ]
-      );
+    // ─── 3.–5. + 7. Zuordnung und Periodenwirkung (eine Transaktion) ───
+    // Rücknahme der alten Wirkung, Laden der eingereichten Rechnungen,
+    // Matching, Speichern der Positionen und Periodenbewertung bilden einen
+    // atomaren Block unter der Bescheidzuordnungs-Sperre des Kostenträgers
+    // (service/perioden-sperre.js). Gleichzeitig eintreffende Bescheide
+    // desselben Kostenträgers laufen dadurch strikt nacheinander durch diesen
+    // Block: Der zweite sieht die Abschlüsse und Restperioden des ersten und
+    // kann eine bereits abgerechnete Rechnung nicht noch einmal belegen. Der
+    // Block enthält bewusst keinen KI-Aufruf und hält die Sperre nur kurz.
+    // Bei einer Wiederverarbeitung steht so nach der Rücknahme wieder der
+    // ungeteilte Rechnungsbestand für das Matching bereit.
+    const ruecknahmeGrund = korrekturAnweisung ? 'wiederverarbeitung-mit-korrektur' : 'wiederverarbeitung';
+    let matchResults;
+    let matchingSummary;
+    let periodenBewertung;
+    for (let versuch = 1; ; versuch++) {
+      client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        ({ matchResults, matchingSummary, periodenBewertung } = await ordneBescheidZu(client, {
+          postid, ebData, kostentraeger, istTier, ruecknahmeGrund,
+          ebParseModel, ebTokensIn, ebTokensOut, ebCostUsd, erkanntesProfil,
+        }));
+        await client.query('COMMIT');
+        break;
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => {});
+        // Eine Verklemmung mit einem Weg außerhalb der Sperrhierarchie (z. B.
+        // Ersetzen einer Arztrechnung) bricht PostgreSQL atomar ab. Der Block
+        // liest alles neu und darf deshalb gefahrlos wiederholt werden.
+        if (!['40P01', '40001'].includes(err.code) || versuch >= 3) throw err;
+        appLog('WARN', 'erstattungsbescheid',
+          `${postid}: Zuordnung kollidierte mit paralleler Änderung (${err.code}), Versuch ${versuch + 1}`,
+          { entity: 'postbuch', entityId: postid });
+      } finally {
+        client.release();
+        client = null;
+      }
     }
 
-    await client.query('COMMIT');
-
     // ─── 6. Kürzungen verarbeiten ───
+    // Nach der Periodenbewertung: Die Kürzungszuordnung braucht einen
+    // KI-Aufruf und berührt keine Periode, sie läuft deshalb außerhalb der
+    // Sperre. Der Abschlussmarker folgt erst danach — bricht der Lauf hier ab,
+    // wiederholt die Recovery den gesamten Bescheid, und dessen Rücknahme
+    // macht die Bewertung idempotent.
     const allKuerzungen = matchResults.filter(ep => ep.kuerzungen && ep.kuerzungen.length > 0);
 
     if (allKuerzungen.length > 0) {
       await processKuerzungen(postid, allKuerzungen, settings, korrekturAnweisung);
     }
 
-    // ─── 7. Abrechnungsperioden bewerten ───
-    // Letzten fachlichen DB-Schritt und persistenten Abschlussmarker atomar
-    // setzen. Danach darf Recovery niemals erneut die nichtdeterministische
-    // LLM-Analyse starten, selbst wenn nur das Journal-Cleanup scheitert.
-    await client.query('BEGIN');
-    const periodenBewertung = await bewertePeriodenNachBescheid(postid, {
-      grund: 'eb-verarbeitung', db: client,
-    });
-    await client.query(
+    await pool.query(
       `UPDATE postbuch._pipeline_file_journal
           SET state='eb_complete', updated_at=NOW()
         WHERE postid=$1 AND state='eb_pending'`,
       [postid],
     );
-    await client.query('COMMIT');
 
     // ─── 8. Discord-Nachricht ───
     const discordMsg = buildDiscordMessage(postid, ebData, matchResults, periodenBewertung);
@@ -449,6 +371,135 @@ export async function processErstattungsbescheid(postid, korrekturAnweisung = ''
   } finally {
     if (client) client.release();
   }
+}
+
+/**
+ * Zuordnungsblock einer EB-Verarbeitung. Läuft vollständig auf `client` in
+ * der Transaktion des Aufrufers und sperrt zuerst die Bescheidzuordnung des
+ * alten und des neuen Kostenträgers.
+ */
+async function ordneBescheidZu(client, {
+  postid, ebData, kostentraeger, istTier, ruecknahmeGrund,
+  ebParseModel, ebTokensIn, ebTokensOut, ebCostUsd, erkanntesProfil,
+}) {
+  // Neuer und bisheriger Kostenträger in einem Aufruf, damit die feste
+  // Sperrreihenfolge auch bei einer Kostenträgerkorrektur gilt.
+  const bisher = await client.query(
+    `SELECT (SELECT kostentraeger FROM postbuch.erstattungsbescheid WHERE postid = $1) AS kostentraeger,
+            ARRAY(SELECT DISTINCT kostentraeger FROM postbuch.abrechnungsperiode_buch
+                   WHERE eb_postid = $1) AS perioden_kt`,
+    [postid],
+  );
+  await sperreBescheidzuordnung(client, [
+    kostentraeger,
+    ...(bisher.rows[0].kostentraeger ? [bisher.rows[0].kostentraeger] : []),
+    ...bisher.rows[0].perioden_kt,
+  ]);
+  await setzeBescheidwirkungZurueck(postid, { grund: ruecknahmeGrund, db: client });
+
+  const invoicesResult = await client.query(
+    `SELECT a.postid, a.gesamtbetrag, a.behandelte_person, a.name_arzt, a.typ,
+            a.rechnungsdatum, a.re_nr,
+            CASE WHEN $1 = 'PKV'
+                 THEN a.abrechnungsperiode_pkv
+                 ELSE a.abrechnungsperiode_beihilfe END AS abrechnungsperiode
+     FROM arztrechnung a
+     JOIN postbuch.mensch m ON m.kurzname = a.behandelte_person AND m.ist_tier = $2
+     JOIN abrechnungsperiode_buch ab
+       ON ab.person = a.behandelte_person
+       AND ab.kostentraeger = $1
+       AND ab.periode = CASE WHEN $1 = 'PKV'
+                             THEN a.abrechnungsperiode_pkv
+                             ELSE a.abrechnungsperiode_beihilfe END
+     WHERE (ab.status = 'SUBMITTED'
+            OR (ab.status = 'COMPLETED' AND ab.eb_postid = $3))
+     ORDER BY a.behandelte_person, a.gesamtbetrag`,
+    [kostentraeger, istTier, postid]
+  );
+
+  // ─── 4. Matching ───
+  const matchResults = matchToInvoices(ebData, invoicesResult.rows, postid);
+
+  const matchedCount = matchResults.filter(m => m.arz_postid).length;
+  const unmatchedCount = matchResults.length - matchedCount;
+
+  const matchingSummary = `${matchedCount}/${matchResults.length} Positionen zugeordnet` +
+    (unmatchedCount > 0 ? ` (${unmatchedCount} ohne Rechnung)` : '');
+
+  appLog('INFO', 'erstattungsbescheid', `Matching: ${matchingSummary}`, { entity: 'postbuch', entityId: postid });
+
+  // ─── 5. DB-Inserts ───
+  // 5a. Erstattungsbescheid-Kopf
+  await client.query(
+    `INSERT INTO erstattungsbescheid
+       (postid, kostentraeger, bescheiddatum, erstattungsbetrag, matching_summary, hinweise, ist_tier,
+        ai_eb_model, ai_eb_tokens_in, ai_eb_tokens_out, ai_eb_cost_usd,
+        kostentraeger_profil_id, kostentraeger_profil_name)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     ON CONFLICT (postid) DO UPDATE SET
+       kostentraeger = EXCLUDED.kostentraeger,
+       bescheiddatum = EXCLUDED.bescheiddatum,
+       erstattungsbetrag = EXCLUDED.erstattungsbetrag,
+       matching_summary = EXCLUDED.matching_summary,
+       hinweise = EXCLUDED.hinweise,
+       ist_tier = EXCLUDED.ist_tier,
+       ai_eb_model = EXCLUDED.ai_eb_model,
+       ai_eb_tokens_in = EXCLUDED.ai_eb_tokens_in,
+       ai_eb_tokens_out = EXCLUDED.ai_eb_tokens_out,
+       ai_eb_cost_usd = EXCLUDED.ai_eb_cost_usd,
+       kostentraeger_profil_id = EXCLUDED.kostentraeger_profil_id,
+       kostentraeger_profil_name = EXCLUDED.kostentraeger_profil_name`,
+    [
+      postid,
+      kostentraeger,
+      toDate(ebData.bescheiddatum),
+      toNumeric(ebData.erstattungsbetrag),
+      matchingSummary,
+      ebData.hinweise || null,
+      istTier,
+      ebParseModel,
+      ebTokensIn,
+      ebTokensOut,
+      ebCostUsd,
+      erkanntesProfil?.id ?? null,
+      erkanntesProfil?.name ?? null,
+    ]
+  );
+
+  // 5b. Alte Einzelpositionen löschen (falls Reprocessing)
+  await client.query(
+    `DELETE FROM erstattungsbescheid_einzelposition WHERE postid = $1`,
+    [postid]
+  );
+
+  // 5c. Einzelpositionen einfügen
+  for (const ep of matchResults) {
+    await client.query(
+      `INSERT INTO erstattungsbescheid_einzelposition
+         (postid, subid, arz_postid, erstattungsbetrag, rechnungsbetrag,
+          kuerzungsbetrag, behandelte_person, kostenart, bezugsdatum, beleg_nr)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        postid,
+        ep.subid,
+        ep.arz_postid,
+        toNumeric(ep.erstattungsbetrag),
+        toNumeric(ep.rechnungsbetrag),
+        toNumeric(ep.kuerzungsbetrag),
+        ep.behandeltePerson,
+        ep.kostenart,
+        ep.bezugsdatum,
+        ep.belegNr != null ? String(ep.belegNr) : null,
+      ]
+    );
+  }
+
+  // ─── 7. Abrechnungsperioden bewerten ───
+  const periodenBewertung = await bewertePeriodenNachBescheid(postid, {
+    grund: 'eb-verarbeitung', db: client,
+  });
+
+  return { matchResults, matchingSummary, periodenBewertung };
 }
 
 // ── Kürzungen ────────────────────────────────────────────────────────────────
@@ -528,7 +579,7 @@ async function processKuerzungen(postid, epsWithKuerzungen, settings, korrekturA
       const matchResult = await callLLM(kuerzungModel, prompt, {}, settings, {
         kategorie: 'kuerzung', entity: 'postbuch', entityId: postid, correlationId: postid,
       });
-      const matchedKuerzungen = parseJsonResponse(matchResult.text);
+      const matchedKuerzungen = parseJsonFromText(matchResult.text, { erwartet: 'array' });
       const kuerzungTokensIn  = matchResult.usage?.inputTokens  ?? null;
       const kuerzungTokensOut = matchResult.usage?.outputTokens ?? null;
       const kuerzungCostUsd   = calculateCost(kuerzungModel, kuerzungTokensIn, kuerzungTokensOut, buildCostMap(settings));
@@ -669,6 +720,9 @@ export async function setEbpZuordnung(ebPostid, ebSubid, arzPostid, restoreKuerz
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Vor jeder Zeilensperre: Eine parallel laufende EB-Verarbeitung desselben
+    // Kostenträgers könnte sonst dieselbe Rechnung gleichzeitig belegen.
+    await sperreZuordnungFuerBescheid(client, ebPostid);
 
     const epRes = await client.query(
       `SELECT arz_postid FROM postbuch.erstattungsbescheid_einzelposition
@@ -685,12 +739,17 @@ export async function setEbpZuordnung(ebPostid, ebSubid, arzPostid, restoreKuerz
                 ) AS dokument_existiert,
                 EXISTS (
                   SELECT 1 FROM postbuch.arztrechnung WHERE postid = $1
-                ) AS ist_arztrechnung`,
+                ) AS ist_arztrechnung,
+                (SELECT von_postid FROM postbuch.dokument_beziehung
+                  WHERE zu_postid = $1 AND art = 'ersetzt') AS ersetzt_durch`,
         [arzPostid]
       );
       if (!arzRes.rows[0].dokument_existiert) throw httpError(`Dokument ${arzPostid} nicht gefunden`, 404);
       if (!arzRes.rows[0].ist_arztrechnung) {
         throw httpError(`${arzPostid} ist keine Arztrechnung`, 400);
+      }
+      if (arzRes.rows[0].ersetzt_durch) {
+        throw httpError(`${arzPostid} ist durch ${arzRes.rows[0].ersetzt_durch} ersetzt – bitte die Korrekturrechnung zuordnen.`, 409);
       }
     }
 
