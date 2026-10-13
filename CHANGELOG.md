@@ -19,6 +19,11 @@ angezeigt. Sie sind an Endnutzer gerichtet, nicht an Entwickler.
 
 ---
 
+## 2.11.1 – 2026-10-13
+
+- Behoben: Neue Arzt- und Laborrechnungen mit mehreren Einzelpositionen, deren Summe vom Rechnungsbetrag abweicht, scheiterten beim Speichern und landeten in _failed.
+- Ein Fehler beim Speichern eines neuen Dokuments hinterlässt keine unvollständigen Einträge mehr.
+
 ## 2.11.0 – 2026-10-07
 
 - Neue Seite Analyse → Gesundheitskosten: nicht erstattete Arzt-, Labor- und Hilfsmittelkosten je Zahljahr und Person bzw. Tier, mit Erstattung und Eigenbehalt für die Steuererklärung.

@@ -228,6 +228,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
   let _lockedId = null; // die ID, die wir in _inFlightIds registriert haben
   let replacementStarted = false;
   let replacementClient = null;
+  let neuanlageClient = null;
   let dbStateComplete = false;
   // Schon vor Phase 1 bekannt: Auch ein früher Nutzerabbruch darf beim
   // Reprocess niemals die weiterhin gültige Originaldatei entsorgen.
@@ -1157,6 +1158,22 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     }
     endPhase('QR-Codes');
 
+    // Auch die Neuanlage ist eine einzige DB-Transaktion. Zurückgestellte
+    // Constraint-Trigger (Differenzposition der Arztrechnung) laufen sonst im
+    // Autocommit nach jeder einzelnen Zeile statt erst nach dem vollständigen
+    // Detail-Insert, und ein Fehler hinterließe Teilzeilen.
+    if (!replacementClient) {
+      neuanlageClient = await pool.connect();
+      try {
+        await neuanlageClient.query('BEGIN');
+      } catch (e) {
+        neuanlageClient.release();
+        neuanlageClient = null;
+        throw e;
+      }
+      dbWriter = neuanlageClient;
+    }
+
     // Postbuch-Insert
     await dbWriter.query(
       `INSERT INTO postbuch
@@ -1502,7 +1519,10 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         }
 
       } else {
-        if (ebPending) await pipelineFileJournal.noteEbPending(jobId, undefined, ebAuftrag);
+        if (ebPending) await pipelineFileJournal.noteEbPending(jobId, dbWriter, ebAuftrag);
+        await neuanlageClient.query('COMMIT');
+        neuanlageClient.release();
+        neuanlageClient = null;
         dbStateComplete = true;
       }
 
@@ -1567,6 +1587,11 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       await replacementClient.query('ROLLBACK').catch(() => {});
       replacementClient.release();
       replacementClient = null;
+    }
+    if (neuanlageClient) {
+      await neuanlageClient.query('ROLLBACK').catch(() => {});
+      neuanlageClient.release();
+      neuanlageClient = null;
     }
     // Beim normalen Reprocess wurde dieselbe physische Datei bereits bewegt.
     // Nach DB-Rollback bleibt die vollständige Altzeile bestehen; wir gleichen
