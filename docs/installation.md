@@ -363,7 +363,7 @@ Danach ist noch außerhalb von postbuch.net zu erledigen:
 > Neue Verbindungen erteilen postbuch.net nur die Berechtigung
 > `Files.ReadWrite.AppFolder`: Zugriff auf den eigenen App-Ordner unter
 > `Apps/`, nicht auf den Rest des OneDrive. Das Token liegt in der Datenbank
-> und in jedem Backup. Mehr dazu:
+> und in jedem verschlüsselten Backup. Mehr dazu:
 > [Sicherheit](sicherheit.md#wie-weit-der-zugriff-auf-die-dateiablage-reicht).
 
 Beim Browser-Redirect geht der OAuth-Callback von Microsoft an

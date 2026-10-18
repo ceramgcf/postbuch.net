@@ -66,7 +66,7 @@ ihren eigenen App-Ordner.
 Ältere Verbindungen nutzen den **Vollzugriff** (`Files.ReadWrite.All`) auf alle
 Ordner des Kontos; der postbuch-Ordner kann dann an beliebiger Stelle liegen.
 Das Token liegt in beiden Fällen in der Datenbank (`_settings.onedrive_tokens`)
-und damit auch in jeder Backup-Datei, siehe
+und in jedem verschlüsselten Backup, siehe
 [Sicherheit](sicherheit.md#wie-weit-der-zugriff-auf-die-dateiablage-reicht).
 Ganz auf eine Dateiablage zu verzichten ist nicht möglich. Eine OneDrive-Verbindung lässt sich für Wartung,
 Neuverbindung oder einen Backend-Wechsel unter
@@ -168,8 +168,8 @@ du irgendwo sonst dein Passwort ändern musst.
 > Nextcloud-App-Passwort gilt für **alle Dateien dieses Cloud-Kontos** – dass
 > postbuch.net nur unterhalb seines eigenen Ordners arbeitet, ist eine
 > Selbstbeschränkung der Anwendung, keine Grenze der Berechtigung. Das
-> App-Passwort steht unverschlüsselt in der Datenbank und damit in jeder
-> Backup-Datei. Zwei Unterschiede zu OneDrive: Der Zugriff lässt sich in der
+> App-Passwort steht unverschlüsselt in der Datenbank und in jedem
+> verschlüsselten Backup. Zwei Unterschiede zu OneDrive: Der Zugriff lässt sich in der
 > Cloud jederzeit einzeln widerrufen, und der Server gehört möglicherweise dir.
 
 ### Unverschlüsselte Adressen

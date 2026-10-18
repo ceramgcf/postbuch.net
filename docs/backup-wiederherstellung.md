@@ -41,10 +41,12 @@ Web-Sitzungen: Ein Restore bringt keine alten Anmeldungen zurück. Nicht
 enthalten ist außerdem die Datei `.env` des Servers.
 
 Daraus folgt die zweite Warnung, die postbuch.net über jeder Backup-Ansicht
-zeigt: **Die Backup-Datei ist ein Generalschlüssel.** Wer ein verschlüsseltes
-Backup samt Passwort hat, hat Zugriff auf deine Cloud; ein unverschlüsseltes
-liest jeder, der die Datei hat, wenn auch ohne Zugangsdaten. Sie gehört nicht in einen Support-Chat, nicht in ein
-Ticketsystem und nicht in einen öffentlich erreichbaren Ordner.
+zeigt: **Die Backup-Datei gehört nicht in fremde Hände.** Wer ein
+verschlüsseltes Backup samt Passwort hat, hat Zugriff auf deine Dateiablage und
+deine KI-Konten. Ein unverschlüsseltes enthält keine Zugangsdaten, aber alle
+Dokumentendaten im Klartext; lesen kann es jeder, der die Datei hat. Sie gehört
+nicht in einen Support-Chat, nicht in ein Ticketsystem und nicht in einen
+öffentlich erreichbaren Ordner.
 
 > [!CAUTION]
 >
@@ -404,8 +406,8 @@ Einmal-Container desselben Images:
 
 Rückgabewert `0` heißt entschlüsselt (oder war gar nicht verschlüsselt), `2`
 heißt, das Passwort passt nicht. Danach `unset BACKUP_PASSWORT
-BACKUP_SCHLUESSELDATEI`. Die Klartextdatei ist wieder ein Generalschlüssel und
-gehört nach dem Einspielen gelöscht.
+BACKUP_SCHLUESSELDATEI`. Die Klartextdatei enthält alle Zugangsdaten
+unverschlüsselt und gehört nach dem Einspielen gelöscht.
 
 ---
 
@@ -467,8 +469,10 @@ Vermutung.
 
 Der Ordner `<postbuch.net-Wurzelverzeichnis>/_backup` liegt innerhalb des
 Wurzelordners. Die Datenbank-Dumps werden also automatisch mitgesichert –
-praktisch, aber es bedeutet auch: **die lokale Kopie enthält den
-Generalschlüssel** – verschlüsselt, solange die Backup-Verschlüsselung aktiv ist. Das Ziel des PC-Backups gehört verschlüsselt, und der
+praktisch, aber es bedeutet auch: **die lokale Kopie enthält alle
+Dokumentendaten**, mit aktiver Backup-Verschlüsselung samt der Zugangsdaten
+verschlüsselt, ohne sie im Klartext und ohne Zugangsdaten. Das Ziel des
+PC-Backups gehört verschlüsselt, und der
 externe Datenträger gehört nicht offen herumliegend angeschlossen.
 
 Der zweite Punkt ist die Serverdatei **`.env`**. Sie steht in keinem Dump und

@@ -135,7 +135,6 @@ ausführlichste Behandlung.
 ## G
 
 - **Gemeinsam (Ordner)** – [Ablagestruktur wählen](storage-backends.md#ablagestruktur-wählen)
-- **Generalschlüssel (Backup-Datei)** – [Was im Dump steht](backup-wiederherstellung.md#was-im-dump-steht) · [Backup-Verschlüsselung](backup-wiederherstellung.md#backup-verschlüsselung)
 - **Gesundheitskosten (Steuer, Eigenbehalt)** – [Seite Gesundheitskosten](analyse.md) · [Excel-Export](analyse.md#excel-export)
 - **Gesehen (Kürzung als gesehen markieren)** – [Kürzungen als gesehen markieren](abrechnung-pkv-beihilfe.md#kürzungen-als-gesehen-markieren) · [Kürzungen bearbeiten](dokumentansicht.md#kürzungen-bearbeiten)
 - **GiroCode (Überweisungs-QR)** – [Zahlung und GiroCode](dokumentansicht.md#zahlung-und-girocode) · [Erkannte QR-Codes](dokumentansicht.md#erkannte-qr-codes)

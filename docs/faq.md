@@ -119,7 +119,7 @@ App-Ordner unter `Apps/`. Ältere Verbindungen verwenden noch
 `Files.ReadWrite.All` mit Zugriff auf alle Ordner. Sie lassen sich unter
 **Einstellungen → Dateiablage → Zugriffsumfang** auf den App-Ordner umstellen;
 die Ablage zieht dabei automatisch mit um. In beiden Fällen liegt das Token in
-der Datenbank und in jedem Backup. Einzelheiten:
+der Datenbank und in jedem verschlüsselten Backup. Einzelheiten:
 [Sicherheit](sicherheit.md#wie-weit-der-zugriff-auf-die-dateiablage-reicht).
 
 **Was passiert, wenn das OneDrive-Client-Secret abläuft?**
