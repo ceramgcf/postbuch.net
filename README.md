@@ -295,26 +295,29 @@ Ausführlich in [docs/installation.md](docs/installation.md).
 
 > [!WARNING]
 >
-> **Die Ablage-Verbindung ist ein Vollzugriff.**
+> **Die Ablage-Verbindung reicht weit.**
 >
-> Bei OneDrive verlangt postbuch.net die Berechtigung `Files.ReadWrite.All`:
-> lesen, ändern und löschen in **allen** Ordnern des verbundenen
-> Microsoft-Kontos, nicht nur im postbuch-Ordner. Das ist Absicht – nur so
-> liegen die Dokumente im gewöhnlichen Dateibaum und bleiben auch ohne
-> postbuch.net über OneDrive-App, Explorer oder onedrive.com erreichbar. Ein
-> abgeschotteter App-Ordner wäre die Alternative und würde die Dateien darin
-> einsperren.
+> Bei OneDrive nutzen neue Verbindungen die Berechtigung
+> `Files.ReadWrite.AppFolder`: postbuch.net arbeitet nur in seinem eigenen
+> App-Ordner unter `Apps/`, der über OneDrive-App, Explorer und onedrive.com
+> wie ein gewöhnlicher Ordner erreichbar ist. Ältere Verbindungen nutzen
+> `Files.ReadWrite.All` – lesen, ändern und löschen in **allen** Ordnern des
+> verbundenen Microsoft-Kontos –, bis sie unter `Einstellungen → Dateiablage`
+> auf den App-Ordner umgestellt werden. Ein Nextcloud-/WebDAV-App-Passwort
+> gilt meist für das ganze Cloud-Konto; dass postbuch.net nur in seinem Ordner
+> arbeitet, ist dort eine Selbstbeschränkung der Anwendung. Es lässt sich
+> allerdings einzeln widerrufen.
 >
-> Das dabei ausgestellte Token liegt **unverschlüsselt in der Datenbank** und
-> damit auch in jeder Backup-Datei. Wer Zugriff auf den Server, auf die
-> Datenbank oder auf ein Backup hat, hat vollen Zugriff auf das komplette
-> OneDrive – auch auf alles, was mit postbuch.net nichts zu tun hat. Für ein
-> Nextcloud-App-Passwort gilt sinngemäß dasselbe; es lässt sich dort allerdings
-> einzeln widerrufen.
+> Token bzw. App-Passwort liegen **unverschlüsselt in der Datenbank** und in
+> jedem verschlüsselten Backup; unverschlüsselte Backups enthalten keine
+> Zugangsdaten. Wer Zugriff auf den Server, auf die Datenbank oder auf ein
+> verschlüsseltes Backup samt Passwort hat, hat vollen Zugriff auf die
+> Ablage – beim OneDrive-Vollzugriff auf das komplette OneDrive, auch auf
+> alles, was mit postbuch.net nichts zu tun hat.
 >
 > Wer das nicht möchte: ein separates Microsoft-Konto nur für postbuch.net
 > verwenden oder eine eigene Nextcloud betreiben. Einzelheiten in
-> [docs/sicherheit.md](docs/sicherheit.md#der-zugriff-auf-die-ablage-ist-ein-vollzugriff).
+> [docs/sicherheit.md](docs/sicherheit.md#wie-weit-der-zugriff-auf-die-dateiablage-reicht).
 
 - Der Installer fragt Admin-Passwort und Instanzname ab und erzeugt Datenbank-
   und Session-Secret selbst, zufällig. Bei der manuellen Installation aus dem
