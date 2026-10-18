@@ -19,6 +19,17 @@ angezeigt. Sie sind an Endnutzer gerichtet, nicht an Entwickler.
 
 ---
 
+## 2.12.1 – 2026-10-18
+
+- Updates: Wer Versionen überspringt, sieht in der Update-Karte die Änderungen jeder einzelnen Version, die neueste zuerst. Lange Listen scrollen.
+- Datenbankverbindung: „Verbindung testen“ fragt die Datenbank tatsächlich ab und meldet die Versionen von PostgreSQL und pgvector.
+- Backup-Einstellungen: Der Hinweis zur Backup-Datei warnt nur noch, dass die PDFs nicht enthalten sind. Welche Zugangsdaten ein Backup enthält, steht bei der Backup-Verschlüsselung.
+- Behoben: Nach dem Update von 2.11 blieb der Update-Dialog bei „Warte auf den Update-Agenten …“ stehen, obwohl Update und Datenbank-Umzug fertig waren.
+- Behoben: Die OneDrive-Hinweise nannten das Zugangs-Token als Teil jedes Backups. Es steht nur in verschlüsselten Backups.
+- Behoben: Der Update-Dialog zeigte nach Abschluss oder Fehlschlag weiter „Update wird ausgeführt“.
+- Behoben: Der Update-Agent ließ bei jedem Update eine Kopie von sich auf dem Server liegen. Alte Kopien werden beim nächsten Update entfernt.
+- Behoben: Der Abrechnungs-Assistent bot auch Personen ohne Rechnungen an. Mitgewählt galt ihre leere Periode danach als eingereicht. Jetzt erscheint nur, wer etwas einzureichen hat.
+
 ## 2.12.0 – 2026-10-18
 
 - Neu: Beitragsrückerstattung (BRE) überwachen. PKV-Rechnungen eines Behandlungsjahres werden zurückgehalten, solange die Rückerstattung voraussichtlich höher ist.

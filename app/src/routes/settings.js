@@ -13,6 +13,7 @@
  *   POST /api/settings/onedrive-folders/setup-wizard  → Ordnerstruktur erstellen (+ Datei-Umzug)
  *   POST /api/settings/onedrive-folders/relocate-all  → Manueller Gesamt-Umzug
  *   POST /api/settings/scanner/capabilities           → Gerätefähigkeiten ermitteln + speichern
+ *   GET  /api/settings/datenbank/test                 → Verbindungstest mit PostgreSQL-/pgvector-Version
  */
 
 import { Router } from 'express';
@@ -1433,6 +1434,21 @@ router.post('/storage/:backend/selftest', async (req, res) => {
     if (err?.code === 'BEREITS_AKTIV') return res.status(409).json({ error: err.message });
     console.error('[settings] selftest Fehler:', err);
     res.status(400).json({ error: clientSafeError(err) });
+  }
+});
+
+// GET /api/settings/datenbank/test — echte Abfrage gegen die Datenbank plus
+// Serverversion. `/api/health` taugt dafür nicht: es antwortet ohne DB-Zugriff.
+router.get('/datenbank/test', async (_req, res) => {
+  try {
+    const { rows } = await db.query(
+      `SELECT current_setting('server_version') AS server_version,
+              (SELECT extversion FROM pg_extension WHERE extname = 'vector') AS pgvector`,
+    );
+    // server_version trägt beim Debian-Paket einen Zusatz: „18.0 (Debian 18.0-1.pgdg13+1)“.
+    res.json({ ok: true, serverVersion: String(rows[0].server_version).split(' ')[0], pgvector: rows[0].pgvector ?? null });
+  } catch (err) {
+    res.status(503).json({ ok: false, error: clientSafeError(err) });
   }
 });
 

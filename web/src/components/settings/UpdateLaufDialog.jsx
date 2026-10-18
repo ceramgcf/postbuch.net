@@ -72,6 +72,38 @@ export default function UpdateLaufDialog({ open, onOpenChange, erwarteteNonce = 
     setZuruecknehmen(false);
   }
 
+  // Überschrift und Untertitel folgen dem Endzustand. Sonst stünde über
+  // „abgeschlossen“ oder „fehlgeschlagen“ weiter „wird ausgeführt“.
+  const was = istHostauftrag ? 'Host-Konfiguration' : 'Update';
+  const kopf = {
+    erfolgreich: {
+      titel: `${was} abgeschlossen`,
+      text: istHostauftrag
+        ? 'Der Host-Agent hat die Konfiguration auf dem Server angewendet.'
+        : 'Das Update ist auf dem Server durchgelaufen.',
+    },
+    fehlgeschlagen: {
+      titel: `${was} fehlgeschlagen`,
+      text: 'Was schiefging, steht in der Meldung und im Protokoll unten.',
+    },
+    abgelehnt: {
+      titel: `${was} abgelehnt`,
+      text: 'Der Agent hat die Anforderung nicht ausgeführt. Der Grund steht unten.',
+    },
+  }[phase.art] || (wartetAufAgenten
+    ? {
+      titel: `${was} wird vorbereitet`,
+      text: istHostauftrag
+        ? 'Die Anforderung wurde an den Server übergeben. Der Agent wendet die Konfiguration in Kürze an.'
+        : 'Die Anforderung wurde an den Server übergeben. Der Agent startet das Update in Kürze.',
+    }
+    : {
+      titel: `${was} wird ausgeführt`,
+      text: istHostauftrag
+        ? 'Der Host-Agent wendet die Konfiguration auf dem Server an. Dieses Fenster darf geschlossen werden – der Fortschritt geht dabei nicht verloren.'
+        : 'Das Update läuft auf dem Server. Dieses Fenster darf geschlossen werden – der Fortschritt geht dabei nicht verloren.',
+    });
+
   const ikone = {
     erfolgreich:    <CheckCircle className="h-5 w-5 text-emerald-500" />,
     fehlgeschlagen: <AlertTriangle className="h-5 w-5 text-destructive" />,
@@ -82,20 +114,8 @@ export default function UpdateLaufDialog({ open, onOpenChange, erwarteteNonce = 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange} size="lg">
-      <DialogTitle>
-        {istHostauftrag
-          ? (wartetAufAgenten ? 'Host-Konfiguration wird vorbereitet' : 'Host-Konfiguration wird ausgeführt')
-          : (wartetAufAgenten ? 'Update wird vorbereitet' : 'Update wird ausgeführt')}
-      </DialogTitle>
-      <DialogDescription>
-        {istHostauftrag
-          ? (wartetAufAgenten
-            ? 'Die Anforderung wurde an den Server übergeben. Der Agent wendet die Konfiguration in Kürze an.'
-            : 'Der Host-Agent wendet die Konfiguration auf dem Server an. Dieses Fenster darf geschlossen werden – der Fortschritt geht dabei nicht verloren.')
-          : (wartetAufAgenten
-            ? 'Die Anforderung wurde an den Server übergeben. Der Agent startet das Update in Kürze.'
-            : 'Das Update läuft auf dem Server. Dieses Fenster darf geschlossen werden – der Fortschritt geht dabei nicht verloren.')}
-      </DialogDescription>
+      <DialogTitle>{kopf.titel}</DialogTitle>
+      <DialogDescription>{kopf.text}</DialogDescription>
 
       <div className="mt-4 space-y-4">
         <div className="flex items-start gap-3 rounded-md border border-border bg-muted/30 p-3">

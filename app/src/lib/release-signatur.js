@@ -29,7 +29,7 @@
  * Trennzeichen enthalten — Escaping ist nicht nötig und gäbe es nur als
  * zusätzliche Fehlerquelle.
  *
- * **Nicht abgedeckt: `changelog`.** Das ist reiner Anzeigetext, in bash nicht
+ * **Nicht abgedeckt: `changelog` und `verlauf`.** Das ist reiner Anzeigetext, in bash nicht
  * verlässlich aus dem Manifest zu lösen, und er steuert nichts. Er läuft
  * ohnehin durch `textFeld()` (kein Markup, keine URLs, keine Steuerzeichen).
  * Wer ihn ändern kann, kann damit bestenfalls eine Update-Beschreibung

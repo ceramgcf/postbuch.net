@@ -62,8 +62,11 @@ Bei einer anderen Bezugsquelle als GitHub gibt es den Schalter nicht.
 Drei Zustände:
 
 - **Aktuell** – dezenter grüner Hinweis, sonst nichts.
-- **Update verfügbar** – mit Versionsnummer und Änderungen. Ist die neue
-  Version als sicherheitsrelevant gekennzeichnet, wird der Hinweis auffällig.
+- **Update verfügbar** – mit Versionsnummer und Änderungen. Liegen zwischen
+  installierter und neuer Version weitere Versionen, listet die Karte die
+  Änderungen jeder einzelnen, die neueste zuerst; eine lange Liste scrollt.
+  Ist die neue Version als sicherheitsrelevant gekennzeichnet, wird der
+  Hinweis auffällig.
 - **Automatische Updates sind nicht eingerichtet** – der Regelfall auf einem
   selbst gepflegten Server. Dann gibt es **keinen Knopf**, sondern den Befehl
   zum Kopieren:
@@ -140,6 +143,10 @@ Solange der Umzug aussteht, zeigt die Karte **Updates** in den Einstellungen
 einen Hinweis mit diesem Befehl. postbuch.net arbeitet bis dahin mit
 PostgreSQL 16 weiter. Schlägt ein Umzug fehl, bleibt die alte Datenbank
 unverändert in Betrieb.
+
+Welche Version gerade läuft, zeigt **Einstellungen → Allgemein →
+Datenbankverbindung → Verbindung testen**: Die Rückmeldung nennt die
+PostgreSQL- und die pgvector-Version.
 
 Wurde der Datenbank-Container vor dem Umzug von Hand neu erstellt (etwa mit
 `docker compose up -d --force-recreate`), startet er nicht und meldet im Log

@@ -27,7 +27,7 @@ Dieselbe Übersicht zeigt die App selbst unter ![Import-Symbol](icons/upload.svg
 den aufgelösten Ordnerpfaden deiner Instanz. Direkt nach dem
 Einrichtungsassistenten erscheint sie einmal von selbst.
 
-![Import-Seite mit Scanner, PDF-Upload und Archiv-Import](screenshots/import-uebersicht.jpg)
+![Import-Seite mit Scanner, PDF-Upload und Dokumentenübergabe](screenshots/import-uebersicht.jpg)
 
 _Die Import-Seite mit Scanner-Einstellungen, PDF-Sammlung und bereits
 ausgewählten Dateien._

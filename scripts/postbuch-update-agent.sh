@@ -207,7 +207,7 @@ heartbeat() {
     atomar_schreiben "$AGENT_JSON" <<EOF
 {
   "version": $PROTOKOLL,
-  "agentVersion": "2.3",
+  "agentVersion": "2.4",
   "capabilities": ["update", "zielversion", "netzwerk", "module", "port", "freigabe", "postgres-umzug"],
   "modus": "$AGENT_MODE",
   "docker": "${DOCKER_ART:-null}",
@@ -341,7 +341,16 @@ postgres_umzug_automatisch() {
     marker="$STATE_DIR/postgres-umzug-$version"
     [[ -e "$marker" ]] && return 0
     date -u '+%Y-%m-%dT%H:%M:%SZ' > "$marker"
-    nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+    # Folgt der Umzug direkt auf ein erfolgreiches Update, läuft er unter dessen
+    # Nonce weiter. Der Update-Dialog im Browser (noch aus der alten Version)
+    # wartet auf genau diese Nonce und verwirft jeden Status mit einer anderen.
+    local erfolg="Datenbank auf PostgreSQL 18 umgezogen."
+    nonce=$(vorige_update_nonce)
+    if [[ -n "$nonce" ]]; then
+        erfolg="Update abgeschlossen, Datenbank auf PostgreSQL 18 umgezogen."
+    else
+        nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+    fi
     BEGONNEN_AM="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     : > "$LOGFILE"
     chmod 600 "$LOGFILE" 2>/dev/null || true
@@ -360,17 +369,34 @@ postgres_umzug_automatisch() {
     exitcode=${PIPESTATUS[0]}
     if [[ "$exitcode" -eq 0 ]]; then
         log "Datenbank-Umzug abgeschlossen."
-        status_schreiben "$nonce" "erfolgreich" "fertig" 0 "Datenbank auf PostgreSQL 18 umgezogen." "update"
+        status_schreiben "$nonce" "erfolgreich" "fertig" 0 "$erfolg" "update"
     else
         log "Datenbank-Umzug fehlgeschlagen (Exit $exitcode)."
         status_schreiben "$nonce" "fehlgeschlagen" "fehler" "$exitcode" \
             "Der Datenbank-Umzug ist fehlgeschlagen (Exit $exitcode). Details stehen im Protokoll." "update"
     fi
+    # Eigene Dateinamen: Bei übernommener Nonce liegen dort schon Status und
+    # Protokoll des Updates.
     mkdir -p "$VERLAUF/$nonce" 2>/dev/null || true
-    cp -f "$STATUS_JSON" "$VERLAUF/$nonce/status.json" 2>/dev/null || true
-    cp -f "$LOGFILE"     "$VERLAUF/$nonce/update.log"  2>/dev/null || true
+    cp -f "$STATUS_JSON" "$VERLAUF/$nonce/datenbank-status.json" 2>/dev/null || true
+    cp -f "$LOGFILE"     "$VERLAUF/$nonce/datenbank.log"         2>/dev/null || true
     heartbeat
     exit "$exitcode"
+}
+
+# Nonce des letzten Laufs, wenn das ein erfolgreiches Software-Update war.
+vorige_update_nonce() {
+    [[ -f "$STATUS_JSON" && ! -L "$STATUS_JSON" ]] || return 0
+    local inhalt nonce
+    inhalt=$(head -c 4096 -- "$STATUS_JSON" 2>/dev/null) || return 0
+    [[ "$inhalt" =~ \"status\":\ *\"erfolgreich\" ]] || return 0
+    # Ohne `typ` (ältere Agenten) war es ein Update, wie in der App.
+    if [[ "$inhalt" =~ \"typ\":\ *\"([a-z]+)\" ]]; then
+        [[ "${BASH_REMATCH[1]}" == "update" ]] || return 0
+    fi
+    [[ "$inhalt" =~ \"nonce\":\ *\"([0-9a-f]{32})\" ]] || return 0
+    nonce="${BASH_REMATCH[1]}"
+    [[ "$nonce" != "00000000000000000000000000000000" ]] && printf '%s' "$nonce"
 }
 
 # ── Hauptlauf ────────────────────────────────────────────────────────────────
@@ -490,6 +516,9 @@ rm -f "$ANFORDERUNG_KOPIE"
 # wegzieht. /tmp ist auf gehärteten Systemen oft mit noexec eingehängt; eine
 # dort erzeugte Kopie würde genau hier ohne Status oder Log abbrechen.
 if [[ "${POSTBUCH_AGENT_EXEC_KOPIE:-0}" != "1" ]]; then
+    # Kopien früherer Läufe wegräumen. Bash liest ein laufendes Skript über
+    # seinen offenen Deskriptor, das Löschen stört also auch keine laufende Kopie.
+    rm -f -- "$STATE_DIR"/postbuch-update-agent.*.sh
     KOPIE="$(mktemp "$STATE_DIR/postbuch-update-agent.XXXXXX.sh")"
     cp -f "$0" "$KOPIE"
     chmod 700 "$KOPIE"
@@ -503,7 +532,9 @@ if [[ "${POSTBUCH_AGENT_EXEC_KOPIE:-0}" != "1" ]]; then
 fi
 fi
 
-# Ab hier: die /tmp-Kopie. Die Anforderungsdaten kamen ueber die Umgebung mit.
+# Ab hier: die Kopie. Die Anforderungsdaten kamen ueber die Umgebung mit. Die
+# Datei selbst wird nicht mehr gebraucht (siehe oben) und sofort entfernt.
+[[ "$0" == "$STATE_DIR"/postbuch-update-agent.*.sh ]] && rm -f -- "$0"
 A_NONCE="${POSTBUCH_AGENT_NONCE:-$A_NONCE}"
 A_ZIEL="${POSTBUCH_AGENT_ZIEL:-$A_ZIEL}"
 A_SHA="${POSTBUCH_AGENT_SHA:-$A_SHA}"

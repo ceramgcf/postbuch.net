@@ -23,6 +23,7 @@
  *   "tarball":   { "sha256": "<64 hex>", "groesse": 2013456 },
  *   "installer": { "sha256": "<64 hex>" },
  *   "changelog": ["…", "…"],
+ *   "verlauf": [{ "version": "2.2.0", "datum": "2026-07-30", "changelog": ["…"] }, …],
  *   "signatur": "<Base64, Ed25519>",
  *   "signaturKeyId": "k1"
  * }
@@ -35,12 +36,11 @@
  */
 
 import { textFeld, semver, zahlImBereich, sha256Hex, isoDatum } from './postbuch-feed.js';
+import { MAX_CHANGELOG_EINTRAEGE, MAX_CHANGELOG_LAENGE, MAX_VERLAUF_VERSIONEN } from './release-changelog.js';
 
 export const MANIFEST_SCHEMA_VERSION = 1;
 
 const MAX_TARBALL_BYTES = 200 * 1024 * 1024;
-const MAX_CHANGELOG_EINTRAEGE = 40;
-const MAX_CHANGELOG_LAENGE = 200;
 
 /** Felder, die im Manifest nichts verloren haben. Ihr Auftreten ist ein Fehler. */
 const VERBOTENE_FELDER = ['url', 'urls', 'baseUrl', 'tarballUrl', 'downloadUrl', 'href', 'endpoint', 'mirror'];
@@ -77,7 +77,8 @@ function pruefeKeineUrls(obj, pfad = '') {
  *            sicherheitsrelevant:boolean, mindestVersion:string|null,
  *            tarball:{sha256:string, groesse:number},
  *            installer:{sha256:string|null},
- *            changelog:string[], signatur:string|null}}
+ *            changelog:string[], verlauf:Array<{version:string, datum:string, changelog:string[]}>,
+ *            signatur:string|null}}
  * @throws {ManifestFehler} mit lesbarer deutscher Meldung
  */
 export function validiereManifest(obj) {
@@ -125,20 +126,24 @@ export function validiereManifest(obj) {
     }
   }
 
-  let changelog = [];
-  if (obj.changelog != null) {
-    if (!Array.isArray(obj.changelog)) fehler('"changelog" muss eine Liste sein.');
-    if (obj.changelog.length > MAX_CHANGELOG_EINTRAEGE) {
-      fehler(`"changelog" hat ${obj.changelog.length} Einträge — erlaubt sind höchstens ${MAX_CHANGELOG_EINTRAEGE}.`);
+  const changelog = obj.changelog != null ? changelogListe(obj.changelog, 'changelog') : [];
+
+  // Stichpunkte mehrerer Versionen für Instanzen, die Versionen überspringen
+  // (siehe lib/release-changelog.js). Optional; ältere Manifeste haben ihn nicht.
+  let verlauf = [];
+  if (obj.verlauf != null) {
+    if (!Array.isArray(obj.verlauf)) fehler('"verlauf" muss eine Liste sein.');
+    if (obj.verlauf.length > MAX_VERLAUF_VERSIONEN) {
+      fehler(`"verlauf" hat ${obj.verlauf.length} Versionen — erlaubt sind höchstens ${MAX_VERLAUF_VERSIONEN}.`);
     }
-    changelog = obj.changelog.map((z, i) => {
-      const t = textFeld(z, MAX_CHANGELOG_LAENGE);
-      if (t === null) {
-        fehler(`Changelog-Eintrag #${i + 1} ist unbrauchbar `
-          + `(länger als ${MAX_CHANGELOG_LAENGE} Zeichen, oder enthält Markup/Steuerzeichen).`);
-      }
-      return t;
-    }).filter(Boolean);
+    verlauf = obj.verlauf.map((v, i) => {
+      if (!v || typeof v !== 'object' || Array.isArray(v)) fehler(`"verlauf[${i}]" ist kein Objekt.`);
+      const vVersion = semver(v.version);
+      if (!vVersion) fehler(`"verlauf[${i}].version" ist kein Semver.`);
+      const datum = isoDatum(v.datum);
+      if (!datum) fehler(`"verlauf[${i}].datum" ist kein Datum im Format YYYY-MM-DD.`);
+      return { version: vVersion, datum, changelog: changelogListe(v.changelog ?? [], `verlauf[${i}].changelog`) };
+    });
   }
 
   // Hier nur die FORM. Verifiziert wird in `lib/release-signatur.js`, aufgerufen
@@ -174,9 +179,25 @@ export function validiereManifest(obj) {
     tarball: { sha256: tarSha, groesse },
     installer: { sha256: installerSha },
     changelog,
+    verlauf,
     signatur,
     signaturKeyId,
   };
+}
+
+function changelogListe(liste, feld) {
+  if (!Array.isArray(liste)) fehler(`"${feld}" muss eine Liste sein.`);
+  if (liste.length > MAX_CHANGELOG_EINTRAEGE) {
+    fehler(`"${feld}" hat ${liste.length} Einträge — erlaubt sind höchstens ${MAX_CHANGELOG_EINTRAEGE}.`);
+  }
+  return liste.map((z, i) => {
+    const t = textFeld(z, MAX_CHANGELOG_LAENGE);
+    if (t === null) {
+      fehler(`Eintrag #${i + 1} in "${feld}" ist unbrauchbar `
+        + `(länger als ${MAX_CHANGELOG_LAENGE} Zeichen, oder enthält Markup/Steuerzeichen).`);
+    }
+    return t;
+  }).filter(Boolean);
 }
 
 export { ManifestFehler };

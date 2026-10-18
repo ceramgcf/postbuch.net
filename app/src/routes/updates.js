@@ -157,6 +157,7 @@ async function gesamtbild() {
     sicherheitsrelevant: quelleAktuell && status.sicherheitsrelevant === true,
     mindestVersion:      quelleAktuell ? (status.mindestVersion ?? null) : null,
     changelog:           quelleAktuell && Array.isArray(status.changelog) ? status.changelog : [],
+    changelogVerlauf:    quelleAktuell && Array.isArray(status.changelogVerlauf) ? status.changelogVerlauf : [],
     geprueftAm:          quelleAktuell ? (status.geprueftAm ?? null) : null,
     fehler:              quelleAktuell ? (status.fehler ?? null) : null,
     checkAktiv: aktiv,

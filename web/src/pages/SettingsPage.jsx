@@ -2802,9 +2802,14 @@ function AllgemeinTab() {
     setDbTesting(true);
     setDbStatus(null);
     try {
-      const res = await fetch('/api/health', { credentials: 'include' });
-      if (res.ok) setDbStatus({ ok: true, msg: 'Datenbankverbindung ist aktiv.' });
-      else setDbStatus({ ok: false, msg: `HTTP ${res.status}` });
+      const res = await fetch('/api/settings/datenbank/test', { credentials: 'include' });
+      const daten = await res.json().catch(() => ({}));
+      if (res.ok && daten.ok) {
+        const pgvector = daten.pgvector ? `, pgvector ${daten.pgvector}` : '';
+        setDbStatus({ ok: true, msg: `Datenbankverbindung ist aktiv – PostgreSQL ${daten.serverVersion}${pgvector}.` });
+      } else {
+        setDbStatus({ ok: false, msg: daten.error || `HTTP ${res.status}` });
+      }
     } catch (e) {
       setDbStatus({ ok: false, msg: e.message });
     } finally {

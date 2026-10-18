@@ -129,7 +129,11 @@ Abrechnungsperioden**, dort die Periode über ![Einreichen-Symbol](icons/send.sv
 ![Start-Karte des Abrechnungsassistenten](screenshots/einreichungsassistent.png)
 
 Der Abrechnungs-Assistent startet per Klick auf ![Start-Symbol](icons/play.svg)
-**Starten**. Er
+**Starten**. Zur Auswahl stehen nur Personen und Kostenträger, in deren
+Sammelperiode gerade etwas zum Einreichen liegt: Rechnungen, offene
+Prüfvormerkungen oder angeheftete Dokumente. Eine Periode, die nur bestrittene
+Rechnungen enthält, zählt nicht dazu. Eine leere Periode bleibt unverändert
+offen, auch wenn sie gemeinsam mit anderen gewählt wurde. Der Assistent
 
 1. lädt alle Rechnungen der gewählten Perioden. Trägt eine Rechnung
    [Einreichungsseiten](dokumentansicht.md#einreichungsseiten) ein, fließt nur

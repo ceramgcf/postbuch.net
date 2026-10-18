@@ -12,7 +12,7 @@ Diese Trennung ist der wichtigste Punkt des ganzen Kapitels. Wer nur den
 automatischen Datenbank-Dump hat, hat kein Backup seiner Dokumente – er hat eine
 sehr genaue Beschreibung von Dateien, die möglicherweise nicht mehr existieren.
 
-![Einstellungen → Backup mit den beiden Warnhinweisen und der Karte „Backup-Einstellungen"](screenshots/backup-tab.png)
+![Einstellungen → Backup mit dem Warnhinweis und der Karte „Backup-Einstellungen"](screenshots/backup-tab.png)
 
 ---
 
@@ -40,8 +40,7 @@ nicht in jede Sicherung kopiert. Ebenfalls ohne Inhalt gesichert werden die
 Web-Sitzungen: Ein Restore bringt keine alten Anmeldungen zurück. Nicht
 enthalten ist außerdem die Datei `.env` des Servers.
 
-Daraus folgt die zweite Warnung, die postbuch.net über jeder Backup-Ansicht
-zeigt: **Die Backup-Datei gehört nicht in fremde Hände.** Wer ein
+**Die Backup-Datei gehört nicht in fremde Hände.** Wer ein
 verschlüsseltes Backup samt Passwort hat, hat Zugriff auf deine Dateiablage und
 deine KI-Konten. Ein unverschlüsseltes enthält keine Zugangsdaten, aber alle
 Dokumentendaten im Klartext; lesen kann es jeder, der die Datei hat. Sie gehört

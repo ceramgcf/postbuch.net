@@ -3,14 +3,14 @@ import { FolderTree, KeyRound } from 'lucide-react';
 /**
  * Warnung zum Zugriffsumfang der OneDrive-Verbindung.
  *
- * Zwei fachlich getrennte Aussagen, deshalb zwei Blöcke – nach dem Muster von
- * BackupWarnung.jsx, damit beide Warnungen im UI gleich „klingen":
+ * Zwei fachlich getrennte Aussagen, deshalb zwei Blöcke im Stil von
+ * BackupWarnung.jsx:
  *   (1) Umfang: je nach Modus `Files.ReadWrite.AppFolder` (nur der eigene
  *       App-Ordner unter Apps/) oder `Files.ReadWrite.All` (alle Ordner).
  *       Neutral – beides ist eine bewusste Entscheidung, keine Panne.
- *   (2) Folge: das Token liegt im Klartext in `_settings.onedrive_tokens` und damit
- *       auch in jedem Datenbank-Backup. Wer Server, Datenbank oder Backup-Datei
- *       hat, hat alles, was das Token erreicht. Beim Vollzugriff ist das das
+ *   (2) Folge: das Token liegt im Klartext in `_settings.onedrive_tokens` und in
+ *       jedem verschlüsselten Backup (unverschlüsselte lassen es weg). Wer Server,
+ *       Datenbank oder Backup samt Passwort hat, hat alles, was das Token erreicht. Beim Vollzugriff ist das das
  *       gesamte OneDrive, daher rot und mit den Gegenmaßnahmen direkt daneben;
  *       im App-Ordner-Modus genügt ein sachlicher Satz im Infokasten.
  *
@@ -39,7 +39,7 @@ export default function OneDriveVollzugriffWarnung({ kompakt = false, modus = 'v
                 Alles außerhalb dieses Ordners bleibt für postbuch.net unerreichbar.
               </p>
               <p className="text-xs leading-relaxed text-sky-800/90 dark:text-sky-300/90">
-                Das Zugangs-Token liegt in der Datenbank und damit auch in Backups – behandle
+                Das Zugangs-Token liegt in der Datenbank und in verschlüsselten Backups – behandle
                 Backup-Dateien deshalb vertraulich.
               </p>
             </div>
@@ -72,13 +72,13 @@ export default function OneDriveVollzugriffWarnung({ kompakt = false, modus = 'v
             <KeyRound className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
             <div className="space-y-1.5">
               <p className="text-sm font-semibold text-destructive">
-                Damit liegt ein Generalschlüssel zu deinem OneDrive in dieser Instanz.
+                Damit liegt ein Vollzugriff auf dein OneDrive in dieser Instanz.
               </p>
               <p className="text-xs leading-relaxed text-destructive/90">
-                Das Zugangs-Token steht unverschlüsselt in der Datenbank – und damit auch in
-                jeder Backup-Datei, die postbuch.net erzeugt. <strong>Wer Zugriff auf den Server, auf die
-                Datenbank oder auf eine Backup-Datei hat, hat vollen Zugriff auf dein komplettes
-                OneDrive</strong>, auch auf alles, was mit postbuch.net nichts zu tun hat.
+                Das Zugangs-Token steht unverschlüsselt in der Datenbank und in jedem verschlüsselten
+                Backup. <strong>Wer Zugriff auf den Server, auf die Datenbank oder auf ein verschlüsseltes
+                Backup samt Passwort hat, hat vollen Zugriff auf dein komplettes OneDrive</strong>, auch
+                auf alles, was mit postbuch.net nichts zu tun hat.
               </p>
               {!kompakt && (
                 <ul className="text-xs leading-relaxed text-destructive/90 list-disc pl-4 space-y-1">

@@ -241,7 +241,11 @@ export default function UpdateCard() {
             </p>
           )}
 
-          {verfuegbar && !!data.changelog?.length && (
+          {verfuegbar && data.changelogVerlauf?.length > 0 && (
+            <ChangelogVerlauf verlauf={data.changelogVerlauf} />
+          )}
+
+          {verfuegbar && !data.changelogVerlauf?.length && !!data.changelog?.length && (
             <div>
               <p className="text-xs font-medium mb-1">
                 Neu in {data.verfuegbar}
@@ -410,5 +414,30 @@ export default function UpdateCard() {
         erwarteteNonce={laufNonce}
       />
     </>
+  );
+}
+
+/**
+ * Stichpunkte aller Versionen zwischen installierter und verfügbarer, neueste
+ * zuerst. Wer mehrere Versionen überspringt, sieht so jede einzelne; lange
+ * Listen scrollen innerhalb der Karte.
+ */
+function ChangelogVerlauf({ verlauf }) {
+  return (
+    <div className="max-h-72 overflow-y-auto rounded-md border border-border p-3 space-y-3">
+      {verlauf.map((v) => (
+        <div key={v.version}>
+          <p className="text-xs font-medium mb-1">
+            Neu in {v.version}
+            <span className="text-muted-foreground font-normal">
+              {' '}· {new Date(v.datum).toLocaleDateString('de-DE')}
+            </span>
+          </p>
+          <ul className="text-xs text-muted-foreground space-y-0.5 list-disc pl-4">
+            {v.changelog.map((z, i) => <li key={i}>{z}</li>)}
+          </ul>
+        </div>
+      ))}
+    </div>
   );
 }

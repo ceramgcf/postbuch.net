@@ -261,7 +261,11 @@ function Step1Selection({ onStart, onCancel, istTier, vorauswahl }) {
   // bereits von Kürzungsübersicht/PeriodenPage geteilt).
   const { data: kuerzungenData } = useKuerzungen('alle');
 
-  const collectingRows = (data?.data ?? []).filter((row) => !!row.ist_tier === istTier);
+  // Nur Sammelperioden, in denen etwas zum Einreichen liegt: Rechnungen,
+  // offene Prüfvormerkungen oder Anpinnungen. Bestrittene Rechnungen gehen nie
+  // mit und machen eine Periode allein nicht einreichbar.
+  const collectingRows = (data?.data ?? []).filter((row) => !!row.ist_tier === istTier
+    && (row.rechnung_count ?? 1) + (row.vorgemerkt_count ?? 0) > 0);
   const availablePersons = [...new Set(collectingRows.map((r) => r.person))].sort();
   const availableKT = [...new Set(collectingRows.map((r) => r.kostentraeger))].sort();
 
@@ -342,7 +346,7 @@ function Step1Selection({ onStart, onCancel, istTier, vorauswahl }) {
   if (availablePersons.length === 0) {
     return (
       <div className="py-3 text-sm text-muted-foreground">
-        Keine aktiven SAMMELT-Perioden mit Dokumenten vorhanden.
+        Gerade liegt für {istTier ? 'kein Tier' : 'niemanden'} etwas zum Einreichen vor.
       </div>
     );
   }

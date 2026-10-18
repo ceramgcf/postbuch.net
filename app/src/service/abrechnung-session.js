@@ -122,7 +122,7 @@ async function resolveAndLockTargets(client, { persons, kostentraeger, selection
     }
   }
 
-  if (targets.length === 0) throw new Error('Keine aktiven COLLECTING-Perioden für die gewählte Auswahl gefunden');
+  if (targets.length === 0) throw new Error('Für die gewählte Auswahl gibt es keine offene Sammelperiode.');
 
   // Stabile Sperr-Reihenfolge — verhindert Deadlocks bei parallelen Session-Starts.
   targets.sort((a, b) =>
@@ -308,6 +308,36 @@ async function entferneLeereBreSammelziele(client, targets, docsByTarget, halten
 }
 
 /**
+ * Entfernt Ziele, für die nichts eingereicht würde: keine Rechnung im
+ * Snapshot, keine offene Prüfvormerkung (nur PKV), keine offene Anpinnung.
+ * Ohne das würde eine leere Periode beim Bestätigen als eingereicht gelten
+ * und eine Folgeperiode bekommen, obwohl sie in keinem PDF stand. Ziele mit
+ * Beitragsrückerstattungs-Entscheidung regelt die BRE-Logik selbst.
+ */
+async function entferneLeereZiele(client, targets, docsByTarget, haltenJeZiel, entscheidung) {
+  for (let i = targets.length - 1; i >= 0; i--) {
+    const t = targets[i];
+    const key = zielKey(t);
+    if ((docsByTarget.get(key) || []).length > 0) continue;
+    if (haltenJeZiel.has(key)) continue;
+    if (t.kostentraeger === 'PKV' && entscheidung[t.person]) continue;
+    const offen = await client.query(
+      `SELECT 1 FROM dokument_pin
+        WHERE person = $1 AND kostentraeger = $2 AND periode = $3 AND status = 'VORGEMERKT'
+       UNION ALL
+       SELECT 1 FROM beihilfe_kuerzung_pkv_pruefung
+        WHERE $2 = 'PKV' AND person = $1 AND kostentraeger = 'PKV' AND periode = $3 AND status = 'VORGEMERKT'
+       LIMIT 1`,
+      [t.person, t.kostentraeger, t.periode]
+    );
+    if (offen.rows.length > 0) continue;
+    targets.splice(i, 1);
+    appLog('INFO', 'abrechnungsperiode',
+      `Periode ${t.person}/${t.kostentraeger}/${t.periode} nicht eingereicht – nichts darin`);
+  }
+}
+
+/**
  * Legt Session ('building') + Ziel-Reservierungen an. 409-Konflikt bei
  * Doppelstart auf dasselbe Ziel. `docsByTarget` (Map "person kostentraeger
  * periode" → postid[]) wird als snapshot_postids mitgeschrieben — genau der
@@ -420,6 +450,13 @@ export async function beginAbrechnungsSession({ persons, kostentraeger, selectio
       allDocs = allDocs.filter((d) => behalten.has(`${d.person} ${d.kostentraeger} ${d.periode}`));
       gruppiere();
     }
+    await entferneLeereZiele(client, targets, docsByTarget, haltenJeZiel, entscheidung);
+    if (targets.length === 0) {
+      const err = new Error('Für die gewählte Auswahl liegt nichts zum Einreichen vor – keine Rechnungen, offenen Prüfvormerkungen oder angepinnten Dokumente.');
+      err.code = 'NICHTS_EINZUREICHEN';
+      err.status = 422;
+      throw err;
+    }
     // Phase 5 lässt Prüfvormerkungen zurückgehaltener Rechnungen aus.
     for (const t of targets) {
       const halten = haltenJeZiel.get(zielKey(t));
@@ -427,27 +464,6 @@ export async function beginAbrechnungsSession({ persons, kostentraeger, selectio
     }
     const breEntscheidung = Object.keys(entscheidung).length > 0 ? entscheidung : null;
     const sessionId = await createSessionAndZiel(client, targets, docsByTarget, haltenJeZiel, breEntscheidung);
-
-    if (allDocs.length === 0) {
-      const pkvTargets = targets.filter((t) => t.kostentraeger === 'PKV');
-      const hatOffenePruefung = pkvTargets.length > 0 && (await client.query(
-        `SELECT 1 FROM beihilfe_kuerzung_pkv_pruefung b
-         JOIN (SELECT unnest($1::text[]) AS person, unnest($2::int[]) AS periode) t
-           ON t.person = b.person AND t.periode = b.periode
-         WHERE b.kostentraeger = 'PKV' AND b.status = 'VORGEMERKT' LIMIT 1`,
-        [pkvTargets.map((t) => t.person), pkvTargets.map((t) => t.periode)]
-      )).rows.length > 0;
-      const hatOffenePin = (await client.query(
-        `SELECT 1 FROM dokument_pin d
-         JOIN (SELECT unnest($1::text[]) AS person, unnest($2::text[]) AS kostentraeger, unnest($3::int[]) AS periode) t
-           ON t.person = d.person AND t.kostentraeger = d.kostentraeger AND t.periode = d.periode
-         WHERE d.status = 'VORGEMERKT' LIMIT 1`,
-        [targets.map((t) => t.person), targets.map((t) => t.kostentraeger), targets.map((t) => t.periode)]
-      )).rows.length > 0;
-      if (!hatOffenePruefung && !hatOffenePin) {
-        throw new Error('Keine aktiven COLLECTING-Perioden mit Dokumenten, offenen Prüfvormerkungen oder Anpinnungen für die gewählte Auswahl gefunden');
-      }
-    }
 
     await client.query('COMMIT');
     appLog('INFO', 'abrechnungsperiode', `Session angelegt (building): ${sessionId} — ${allDocs.length} reguläre Dokument(e), ${targets.length} Zielperiode(n)`);

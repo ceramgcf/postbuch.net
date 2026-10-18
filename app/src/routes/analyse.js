@@ -256,15 +256,25 @@ router.get('/perioden', async (req, res) => {
 });
 
 // GET /api/analyse/perioden/collecting — Alle COLLECTING-Perioden (für AP-Verwaltung in Arztrechnung)
+// rechnung_count: einreichbare Rechnungen (ohne bestrittene); vorgemerkt_count:
+// offene Anpinnungen und PKV-Prüfvormerkungen. Beides 0 → nichts einzureichen.
 router.get('/perioden/collecting', async (req, res) => {
   try {
     const result = await query(
       `SELECT ab.person, m.ist_tier, ab.kostentraeger, ab.periode,
-              COUNT(a.postid) FILTER (WHERE a.bestritten_betrag > 0)::int AS bestritten_count
+              COUNT(a.postid) FILTER (WHERE a.bestritten_betrag > 0)::int AS bestritten_count,
+              COUNT(a.postid) FILTER (WHERE COALESCE(a.bestritten_betrag, 0) <= 0)::int AS rechnung_count,
+              (SELECT COUNT(*) FROM dokument_pin d
+                WHERE d.person = ab.person AND d.kostentraeger = ab.kostentraeger
+                  AND d.periode = ab.periode AND d.status = 'VORGEMERKT')::int
+              + CASE WHEN ab.kostentraeger = 'PKV' THEN
+                  (SELECT COUNT(*) FROM beihilfe_kuerzung_pkv_pruefung b
+                    WHERE b.person = ab.person AND b.kostentraeger = 'PKV'
+                      AND b.periode = ab.periode AND b.status = 'VORGEMERKT')::int
+                ELSE 0 END AS vorgemerkt_count
        FROM abrechnungsperiode_buch ab
        JOIN postbuch.mensch m ON m.kurzname = ab.person
        LEFT JOIN arztrechnung a ON a.behandelte_person = ab.person
-         AND a.bestritten_betrag > 0
          AND ((ab.kostentraeger = 'PKV' AND a.abrechnungsperiode_pkv = ab.periode)
            OR (ab.kostentraeger = 'Beihilfe' AND a.abrechnungsperiode_beihilfe = ab.periode))
        WHERE ab.status = 'COLLECTING'

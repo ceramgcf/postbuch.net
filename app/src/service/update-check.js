@@ -15,6 +15,7 @@ import db from '../db.js';
 import { appLog } from '../app-log.js';
 import { holeReleaseManifest, feedQuelleFingerprint, githubQuelle } from '../lib/postbuch-feed.js';
 import { validiereManifest, istNeuer } from '../lib/update-manifest.js';
+import { verlaufSeit } from '../lib/release-changelog.js';
 import { appVersion } from '../lib/app-version.js';
 import {
   pruefeSignatur, signaturKonfiguriert, signaturText, SIGNATUR_STATUS,
@@ -236,6 +237,9 @@ export async function pruefeUpdate() {
     sicherheitsrelevant: manifest.sicherheitsrelevant,
     mindestVersion: manifest.mindestVersion,
     changelog: manifest.changelog,
+    // Alle Versionen zwischen installierter und verfügbarer, neueste zuerst.
+    // Leer bei Manifesten ohne `verlauf`; die GUI fällt dann auf `changelog` zurück.
+    changelogVerlauf: verlaufSeit(manifest.verlauf, installiert, manifest.version),
     tarballSha256: manifest.tarball.sha256,
     tarballGroesse: manifest.tarball.groesse,
     // Ein Cache einer früheren Quelle darf nie als Grundlage für ein Update
