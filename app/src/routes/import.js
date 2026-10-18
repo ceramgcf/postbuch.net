@@ -8,9 +8,13 @@
  *               | 'flatbed/single' | 'flatbed/session/scan' | 'flatbed/session/finish' | 'flatbed/session/abort'
  *     Die ADF-Batch-Endpunkte liefern statt einem Dateinamen ein `files`-Array
  *     (ein PDF pro Blatt) — jede Datei durchläuft Cleaner/Pipeline unabhängig.
- *     Proxied an Scanner-Service (SCANNER_URL, default http://host.docker.internal:8080).
+ *     Proxied an Scanner-Service (SCANNER_URL, default http://scanner:8080), mit scanner_token.
  *     Rückgabe identisch zum Scanner-Service.
  *     Nach Erfolg landet die PDF in /data/scans_pending und wird vom Cleaner aufgegriffen.
+ *
+ * Scan-Webhook-URL:
+ *   GET  /api/import/scanner-webhook           – { token } (nicht für lesezugriff)
+ *   POST /api/import/scanner-webhook/erneuern  – neuer Token (nur admin)
  *
  * Upload-Einzel (Batch-Modus):
  *   POST /api/import/upload
@@ -41,11 +45,10 @@ import * as tracker from '../jobs/tracker.js';
 import { loadDynamicSettings } from '../config.js';
 import { quelleAusCapabilities, quelleFuerEndpunkt } from '../lib/scanner-capabilities.js';
 import { requireAdmin } from '../middleware/auth.js';
+import { scannerFetch, getScannerToken, erneuereScannerToken } from '../lib/scanner-dienst.js';
 
 const router = Router();
 
-// Scanner läuft im Host-Netzwerk; aus dem app-Container über host.docker.internal erreichbar
-const SCANNER_URL = process.env.SCANNER_URL || 'http://host.docker.internal:8080';
 
 // Uploads gehen direkt an processDocument() — exakt derselbe Pipeline-Einstieg
 // wie der Scanner-Webhook (scan-complete), nur ohne vorgelagerte OCR-Stufe.
@@ -150,7 +153,7 @@ async function proxyScannerCall(req, res) {
   }
 
   const qs = params.toString();
-  const url = `${SCANNER_URL}/scan/${endpoint}${qs ? '?' + qs : ''}`;
+  const pfad = `/scan/${endpoint}${qs ? '?' + qs : ''}`;
 
   // Scans können bis ~90s dauern (Flachbett) oder länger (ADF mit vielen Seiten).
   // Wir warten bis zu 300s — danach bleibt der Scanner intern weiter tätig.
@@ -159,7 +162,7 @@ async function proxyScannerCall(req, res) {
 
   let response;
   try {
-    response = await fetch(url, { signal: controller.signal });
+    response = await scannerFetch(pfad, { signal: controller.signal });
   } catch (err) {
     if (err.name === 'AbortError') {
       res.status(504).json({ error: 'Scanner-Timeout nach 5 Minuten' });
@@ -202,6 +205,31 @@ const PIPELINE_SCAN_ENDPOINTS = new Set([
   'adf/simplex', 'adf/duplex', 'adf/batch/simplex', 'adf/batch/duplex',
   'flatbed/single', 'flatbed/session/finish',
 ]);
+
+// GET /api/import/scanner-webhook — Token für die kopierbare Scan-Webhook-URL.
+// Wer die URL hat, kann scannen (Schreibwirkung) – daher nicht für lesezugriff.
+router.get('/scanner-webhook', async (req, res) => {
+  if (req.session?.role === 'lesezugriff') return res.status(403).json({ error: 'Keine Berechtigung' });
+  try {
+    res.json({ token: await getScannerToken() });
+  } catch (err) {
+    console.error('GET /api/import/scanner-webhook error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// POST /api/import/scanner-webhook/erneuern — neuer Token, alte URLs werden ungültig.
+// Der Scanner übernimmt ihn mit dem nächsten Config-Abruf (spätestens 30 s).
+router.post('/scanner-webhook/erneuern', requireAdmin, async (req, res) => {
+  try {
+    const token = await erneuereScannerToken();
+    appLog('INFO', 'import', 'Scanner-Token erneuert; bisherige Scan-Webhook-URLs sind ungültig.');
+    res.json({ token });
+  } catch (err) {
+    console.error('POST /api/import/scanner-webhook/erneuern error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
 
 router.post('/scan', async (req, res) => {
   const { endpoint, hinweis } = req.body || {};

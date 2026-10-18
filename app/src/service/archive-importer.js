@@ -188,9 +188,9 @@ export const DETAIL_COLUMNS = Object.freeze({
   arztrechnung: ['typ','re_nr','rechnungsdatum','faelligkeit','bezahlt_am','name_arzt',
     'behandelte_person','leistung','gesamtbetrag','iban','verwendungszweck','kontoinhaber',
     'pkv_satz_override','beihilfe_satz_override','bezahlt_am_manuell','bestritten_betrag',
-    'einreichung_seite_von','einreichung_seite_bis'],
+    'einreichung_seite_von','einreichung_seite_bis','bre_unbeachtlich'],
   arztrechnung_einzelposition: ['subid','behandlungs_datum','goa_goz_gebueh_pzn','leistung',
-    'begruendung','faktor','betrag','ist_differenz'],
+    'begruendung','faktor','betrag'],
   handwerkerrechnung: ['re_nr','rechnungsdatum','leistungsdatum','leistungsjahr','faelligkeit','bezahlt_am',
     'name_unternehmen','leistung','gesamtbetrag','lohnkosten','iban','verwendungszweck','bezahlt_am_manuell','bestritten_betrag',
     'estg35a_irrelevant'],
@@ -206,6 +206,11 @@ export const DETAIL_COLUMNS = Object.freeze({
     'kuerzungsbetrag','behandelte_person','kostenart','bezugsdatum'],
   erstattungsbescheid_kuerzung: ['eb_subid','arz_postid','arz_subid','kuerzungsbetrag','begruendung'],
 });
+
+// Archive aus 2.11.x enthalten gespeicherte Differenzzeilen (ist_differenz).
+// Der Import folgt derselben Regel wie der Rückbau in base_schema.sql: ohne
+// Kürzungsbezug entfallen sie, mit Bezug werden sie zur gewöhnlichen Position.
+const DIFFERENZ_ALTZEILE_LEISTUNG = 'Differenzbetrag zum Rechnungsbetrag (früher automatisch ermittelt)';
 
 function pick(obj, cols) {
   const out = {};
@@ -462,6 +467,7 @@ export async function importArchive(zipPath, {
     const plan = [];
     let geprueft = 0;
     const sourceIds = new Set();
+    const kuerzungsBezuege = new Set(); // `${arz_postid}\u0000${arz_subid}` aus dem Paket
     const errors = [];
     for (const entry of docEntries) {
       let doc;
@@ -479,6 +485,11 @@ export async function importArchive(zipPath, {
         if (!personen.has(name)) personen.set(name, { name, familienmitglied: 0, behandelt: 0 });
         const key = `${name}\u0000${rolle}`;
         if (!rollenImDokument.has(key)) { rollenImDokument.add(key); personen.get(name)[rolle]++; }
+      }
+      for (const ku of doc.detail?.kuerzungen || []) {
+        if (ku?.arz_postid != null && ku?.arz_subid != null) {
+          kuerzungsBezuege.add(`${ku.arz_postid}\u0000${ku.arz_subid}`);
+        }
       }
       const pb = doc.postbuch || {};
       const orig = pb.postid;
@@ -807,7 +818,12 @@ export async function importArchive(zipPath, {
             [finalPostid],
           );
           for (const ep of detail.einzelpositionen || []) {
-            await insertRow(client, 'postbuch.arztrechnung_einzelposition', { postid: finalPostid, ...pick(ep, DETAIL_COLUMNS.arztrechnung_einzelposition) });
+            const row = pick(ep, DETAIL_COLUMNS.arztrechnung_einzelposition);
+            if (ep.ist_differenz === true) {
+              if (!kuerzungsBezuege.has(`${item.sourcePostid}\u0000${ep.subid}`)) continue;
+              row.leistung = DIFFERENZ_ALTZEILE_LEISTUNG;
+            }
+            await insertRow(client, 'postbuch.arztrechnung_einzelposition', { postid: finalPostid, ...row });
           }
         } else if (detail?.type === 'handwerkerrechnung') {
           await insertRow(client, 'postbuch.handwerkerrechnung', { postid: finalPostid, ...pick(detail.fields, DETAIL_COLUMNS.handwerkerrechnung) });

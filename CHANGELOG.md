@@ -19,6 +19,34 @@ angezeigt. Sie sind an Endnutzer gerichtet, nicht an Entwickler.
 
 ---
 
+## 2.12.0 – 2026-10-18
+
+- Neu: Beitragsrückerstattung (BRE) überwachen. PKV-Rechnungen eines Behandlungsjahres werden zurückgehalten, solange die Rückerstattung voraussichtlich höher ist.
+- Zurückgehaltene Perioden tragen Jahr und Schwelle, ein Ring zeigt den Stand. Der Abrechnungs-Assistent rechnet vor, welche BRE-Jahre sich aufzugeben lohnen.
+- Rechnungen lassen sich als BRE-unbeachtlich kennzeichnen, etwa Vorsorge.
+- Periodenseite: Aktionen stehen eingeklappt nur als Symbol, aufgeklappt mit Beschriftung. In schmalen Spalten zeigen zugeklappte Zeilen nur Nummer, Status und Beträge.
+- OneDrive: Neue Verbindungen nutzen nur den App-Ordner, die Ablage liegt direkt darin. Bestehende Verbindungen lassen sich in den Einstellungen umstellen.
+- KI: Vorlage für Mistral AI.
+- KI: Neue Instanzen analysieren jedes Dokument mit einem Modell, ohne Voranalyse, mit Prompt-Caching. Die Staffelung nach Schwierigkeit bleibt wählbar; bestehende Instanzen behalten sie.
+- KI: Bei der Dokumentanalyse denken Modelle nur noch wenig nach, Modelle mit nachweislich besseren Ergebnissen gar nicht. Das spart Zeit und Ausgabe-Token. Im Chat bleibt Nachdenken frei.
+- Import: Mehrere PDFs werden standardmäßig einzeln verarbeitet. Das Zusammenführen zu einer Datei bleibt als Sammlung wählbar.
+- Sicherheit: Der Scanner-Dienst nimmt Scans nur mit Token an. Webhooks ohne Token werden abgewiesen; Token und URL stehen auf der Import-Seite.
+- Sicherheit: Unverschlüsselte Backups enthalten keine Zugangsdaten mehr. Die Freigabe von Scanner und Weboberfläche im Heimnetz ist in den Einstellungen schaltbar.
+- Arztrechnungen: Die Abweichung zwischen Positionssumme und Rechnungsbetrag wird nur noch berechnet und nicht mehr als eigene Position gespeichert.
+- Ist der Server kurz nicht erreichbar, erscheint eine verständliche Meldung statt einer rohen Fehlerseite.
+- Behoben: „Auslassen rückgängig“ wirkte auch auf Perioden, die nicht ausgelassen waren.
+- Behoben: Ein fehlgeschlagener Aufbau des Einreichungspakets konnte die App beenden.
+- Behoben: Eine Neuinstallation in ein leeres Verzeichnis scheiterte, wenn dort zuvor schon eine Instanz mit Update-Agent lief.
+- Behoben: Ein hochgeladenes Dokument konnte vom Abgleich des Eingangsordners übernommen werden. Der Import galt dann ohne Ergebnis als fertig.
+- Behoben: PDF-Seiten mit JPEG-2000-Bildern blieben in der Ansicht leer.
+- Behoben: Abbrechen des Abrechnungsassistenten während der PDF-Erstellung ließ die Perioden gesperrt.
+- Behoben: Eine Prüfvormerkung, deren Rechnung schon vorne eingereicht wird, hing zusätzlich als Anlage an.
+- Behoben: Gemerkte Filter der Handwerker- und Gesundheitskosten kamen beim Seitenwechsel innerhalb der App nicht zurück.
+- Behoben: Scan-Wiederholungen ohne gepufferte Datei standen tagelang als „Scans warten auf Upload“ im Dashboard.
+- Behoben: Nextcloud/WebDAV: Erneutes Verarbeiten benannte die Datei in „Name (2)“ um, obwohl der Ablageort gleich blieb.
+- Basis-Images und Abhängigkeiten aktualisiert: Node.js 24, PostgreSQL 18, Python 3.15 im Scanner, Vite 8, pdf.js 6. Der Web-Build braucht weniger Arbeitsspeicher.
+- Datenbank: Bestehende Instanzen ziehen nach dem Update einmalig auf PostgreSQL 18 um, vorher wird gesichert. Ohne Update-Agent zeigt die App den Befehl dafür.
+
 ## 2.11.1 – 2026-10-13
 
 - Behoben: Neue Arzt- und Laborrechnungen mit mehreren Einzelpositionen, deren Summe vom Rechnungsbetrag abweicht, scheiterten beim Speichern und landeten in _failed.

@@ -29,6 +29,7 @@ import { startBackupJob, starteManuellesBackup, manuellerBackupStatus, userBacku
 import { appVersion } from '../lib/app-version.js';
 import { istNeuer } from '../lib/postbuch-feed.js';
 import { atomicPgRestore, adminRestoreCleanupSql } from '../lib/pg-restore.js';
+import { geheimeSettingsDerInstanz } from '../lib/geheime-settings.js';
 import { isEncryptedBackup } from '../lib/backup-crypto.js';
 import {
   verschluesselungsStatus, aktiviere, setzePasswort, deaktiviere,
@@ -478,7 +479,7 @@ router.post('/restore', async (req, res) => {
     const dbName = process.env.POSTGRES_DB   || 'postbuch';
     const pgEnv  = { ...process.env, PGPASSWORD: process.env.POSTGRES_PASSWORD };
 
-    await atomicPgRestore(tempDumpPath, dbHost, dbPort, dbUser, dbName, pgEnv, adminRestoreCleanupSql(verschluesselungFuerRestore(settings)));
+    await atomicPgRestore(tempDumpPath, dbHost, dbPort, dbUser, dbName, pgEnv, adminRestoreCleanupSql(verschluesselungFuerRestore(settings), await geheimeSettingsDerInstanz()));
 
     appLog('INFO', 'backup', `Restore erfolgreich: ${targetFile.name}`, {
       entity: 'backup',
@@ -595,7 +596,7 @@ router.post('/restore-upload',
       const dbName = process.env.POSTGRES_DB   || 'postbuch';
       const pgEnv  = { ...process.env, PGPASSWORD: process.env.POSTGRES_PASSWORD };
 
-      await atomicPgRestore(tempDumpPath, dbHost, dbPort, dbUser, dbName, pgEnv, adminRestoreCleanupSql(verschluesselungFuerRestore(settings)));
+      await atomicPgRestore(tempDumpPath, dbHost, dbPort, dbUser, dbName, pgEnv, adminRestoreCleanupSql(verschluesselungFuerRestore(settings), await geheimeSettingsDerInstanz()));
 
       appLog('INFO', 'backup', `Upload-Restore erfolgreich: ${filename}`, {
         entity: 'backup',

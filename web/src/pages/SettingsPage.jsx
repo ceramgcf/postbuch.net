@@ -35,14 +35,17 @@ import EmbeddingCard from '@/components/settings/EmbeddingCard';
 import CloudfreiCard from '@/components/settings/CloudfreiCard';
 import PushInstanzCard from '@/components/settings/PushInstanzCard';
 import UpdateCard from '@/components/settings/UpdateCard';
+import { ScannerFreigabe, ErreichbarkeitCard } from '@/components/settings/FreigabeSchalter';
 import EmpfehlungenCard from '@/components/settings/EmpfehlungenCard';
 import ModelSelector from '@/components/settings/ModelSelector';
+import { WurzelordnerFeld, useAppOrdner, standardWurzel, wurzelLabel } from '@/components/settings/WurzelordnerFeld';
 import ScannerDiscoveryCard from '@/components/settings/ScannerDiscoveryCard';
 import OneDriveSection from '@/components/settings/OneDriveSection';
 import { SetupGuideCard, SetupStepList } from '@/components/settings/SetupGuide';
 import MenschenCard from '@/components/settings/MenschenCard';
 import KostentraegerProfilCard from '@/components/settings/KostentraegerProfilCard';
-import { MODEL_CLASSES } from '@/components/settings/modelClasses';
+import { MODEL_CLASSES, modellwahlAus, klassenFuer } from '@/components/settings/modelClasses';
+import { ModellwahlAuswahl } from '@/components/settings/ModellwahlAuswahl';
 import { renderLabelCanvas } from '@/lib/labelRenderer';
 import { gleichesModell } from '@/lib/modellId';
 import {
@@ -399,7 +402,8 @@ function BackupTab() {
   function deaktiviereVerschluesselung() {
     const bestaetigung = window.prompt(
       'Backup-Verschlüsselung wirklich abschalten?\n\n'
-      + 'Künftige Backups werden dann unverschlüsselt abgelegt. Bereits vorhandene '
+      + 'Künftige Backups werden dann unverschlüsselt abgelegt, ohne Zugangsdaten wie '
+      + 'OneDrive-Anmeldung, KI-Schlüssel und Tokens. Bereits vorhandene '
       + 'verschlüsselte Backups bleiben verschlüsselt. Diese Instanz öffnet sie weiterhin '
       + 'ohne Passworteingabe; Schlüssel und Passwort bleiben erhalten und gelten auch '
       + 'beim späteren Wiedereinschalten.\n\n'
@@ -534,6 +538,7 @@ function BackupTab() {
           </CardTitle>
           <CardDescription className="text-xs">
             Verschlüsselt künftige Backups mit einem Passwort, bevor sie in die Dateiablage (OneDrive/Nextcloud) hochgeladen werden.
+            Nur verschlüsselte Backups enthalten auch die Zugangsdaten (OneDrive-Anmeldung, KI-Schlüssel, Tokens).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -544,7 +549,7 @@ function BackupTab() {
                 {encryption.enabled
                   ? 'Neue Backups werden verschlüsselt abgelegt.'
                   : encryption.entschieden
-                    ? 'Bewusst ohne Verschlüsselung – jederzeit nachträglich aktivierbar.'
+                    ? 'Bewusst ohne Verschlüsselung – Backups enthalten keine Zugangsdaten. Jederzeit nachträglich aktivierbar.'
                     : 'Noch nicht entschieden.'}
               </p>
             </div>
@@ -859,6 +864,7 @@ function SetupWizardCard({ onDone, backend }) {
   // Der Root-Pfad wird NICHT geraten. Er kommt aus der Instanz; 'postbuch' ist
   // nur die Vorgabe, solange dort noch nichts eingerichtet ist.
   const wurzelQuery = useQuery({ queryKey: ['ablage-wurzel'], queryFn: () => api.onedrive.folderRoot(), retry: false });
+  const appOrdner = useAppOrdner(backend);
   // Ist bereits ein Wurzelordner eingerichtet, legt diese Karte keine neue
   // Struktur mehr an, sondern verschiebt eine bestehende – das erfordert auf
   // jedem Weg (Einrichtungsassistent, Installer) ohnehin schon der Pflichtschritt
@@ -875,8 +881,8 @@ function SetupWizardCard({ onDone, backend }) {
   const running = !!ordnerJobId || !!umzugJobId;
   useEffect(() => {
     const w = wurzelQuery.data;
-    if (w) setRootPath((alt) => alt || w.rootPath || 'postbuch');
-  }, [wurzelQuery.data]);
+    if (w && appOrdner.bereit) setRootPath((alt) => alt || w.rootPath || standardWurzel(appOrdner));
+  }, [wurzelQuery.data, appOrdner.bereit, appOrdner.aktiv]);
   // Läuft bereits ein Setup-/Umzugs-Job im Hintergrund (z. B. nach einem
   // Seiten-Reload während eines laufenden Umzugs), Fortschrittsbalken und
   // Sperre sofort wiederherstellen statt den Button fälschlich freizugeben.
@@ -893,7 +899,7 @@ function SetupWizardCard({ onDone, backend }) {
     return () => { abgebrochen = true; };
   }, []);
   async function runWizard(bestaetigt = false) {
-    if (!rootPath.trim()) { setError('Root-Pfad darf nicht leer sein.'); return; }
+    if (!rootPath.trim()) { setError('Wurzelordner darf nicht leer sein.'); return; }
     setError(''); setWarnung(null); setResults(null); setUmzugFehler(''); setUmzugFehlerListe(null);
     try {
       const res = await api.onedrive.setupWizard(rootPath.trim(), bestaetigt, true);
@@ -933,17 +939,27 @@ function SetupWizardCard({ onDone, backend }) {
         </div>
         <CardDescription className="text-xs pt-1">
           {eingerichtet
-            ? `Verschiebt den gesamten Dokumentenbestand unter einen anderen Root-Pfad in ${backendLabel}. Bereits vorhandene Ordner am Ziel werden nie überschrieben, nur gefunden; der bisherige Ordner bleibt unangetastet.`
-            : `Erstellt alle benötigten Ordner unter einem Root-Pfad in ${backendLabel} und speichert die IDs. Bereits vorhandene Ordner werden nie überschrieben, nur gefunden.`}
+            ? `Verschiebt den gesamten Dokumentenbestand unter einen anderen Wurzelordner in ${backendLabel}. Bereits vorhandene Ordner am Ziel werden nie überschrieben, nur gefunden; der bisherige Ordner bleibt unangetastet.`
+            : `Erstellt alle benötigten Ordner unter dem Wurzelordner in ${backendLabel} und speichert die IDs. Bereits vorhandene Ordner werden nie überschrieben, nur gefunden.`}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex gap-2 items-end">
+        <div className="flex gap-2 items-start">
           <div className="flex-1 space-y-1">
-            <label className="text-xs font-medium text-muted-foreground">Root-Pfad (relativ zum {backend === 'nextcloud' ? 'WebDAV-Stammverzeichnis' : 'Drive-Root'})</label>
-            <Input value={rootPath} onChange={(e) => { setRootPath(e.target.value); setWarnung(null); }} placeholder={wurzelQuery.isPending ? 'wird gelesen…' : 'postbuch'} className="h-8 text-sm font-mono" onKeyDown={(e) => { if (e.key === 'Enter') runWizard(); }} />
+            <label className="text-xs font-medium text-muted-foreground">
+              {appOrdner.aktiv ? 'Wurzelordner' : `Wurzelordner (relativ zum ${backend === 'nextcloud' ? 'WebDAV-Stammverzeichnis' : 'OneDrive-Stammverzeichnis'})`}
+            </label>
+            <WurzelordnerFeld
+              appOrdner={appOrdner}
+              value={rootPath}
+              onChange={(v) => { setRootPath(v); setWarnung(null); }}
+              placeholder={wurzelQuery.isPending ? 'wird gelesen…' : undefined}
+              className="h-8 text-sm"
+              onEnter={() => runWizard()}
+              disabled={running}
+            />
           </div>
-          <Button size="sm" onClick={() => runWizard()} disabled={running || wurzelQuery.isPending} className="h-8">
+          <Button size="sm" onClick={() => runWizard()} disabled={running || wurzelQuery.isPending || !appOrdner.bereit} className="h-8 mt-5">
             {running
               ? <><Spinner className="h-3.5 w-3.5 mr-1.5" />Läuft…</>
               : eingerichtet
@@ -962,7 +978,7 @@ function SetupWizardCard({ onDone, backend }) {
             <p className="text-sm font-medium">Sollen die Daten wirklich dorthin umgezogen werden?</p>
             <div className="flex gap-2">
               <Button size="sm" className="h-7 text-xs" onClick={() => runWizard(true)} disabled={running}>Ja, Dateiablage umziehen</Button>
-              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setRootPath(warnung.bisher); setWarnung(null); }}>Abbrechen, bei „{warnung.bisher}“ bleiben</Button>
+              <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => { setRootPath(warnung.bisher); setWarnung(null); }}>Abbrechen, bei „{wurzelLabel(warnung.bisher, appOrdner)}“ bleiben</Button>
             </div>
           </div>
         )}
@@ -1538,7 +1554,7 @@ function PersonQuelleAuswahl({ wert, onChange, disabled }) {
             key={id} type="button" role="radio" aria-checked={wert === id}
             disabled={disabled}
             onClick={() => onChange(id)}
-            className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60 ${wert === id ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'}`}
+            className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60 ${wert === id ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}
           >
             <span className="text-sm font-medium">{q.titel}</span>
             <p className="mt-0.5 text-[11px] text-muted-foreground">{q.text}</p>
@@ -1705,7 +1721,7 @@ function AblageStrukturCard({ backendLabel, onDone }) {
                 disabled={starten.isPending || isPending}
                 onClick={() => waehle(id)}
                 aria-expanded={id === 'benutzerdefiniert' ? !!entwurf : undefined}
-                className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60 ${markiert ? 'border-primary bg-primary/5' : 'hover:bg-muted/50'}`}
+                className={`rounded-lg border px-3 py-2 text-left transition-colors disabled:opacity-60 ${markiert ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-medium">{s.titel}</span>
@@ -1799,7 +1815,7 @@ function AktiveAblageCard({ backend, onUmziehen }) {
   const aktivLabel = ABLAGE_ANZEIGE[istOneDrive ? 'onedrive' : 'nextcloud'];
   const AktivIcon = istOneDrive ? Cloud : Server;
   return (
-    <Card className="border-primary/30 bg-gradient-to-br from-primary/[0.07] to-transparent">
+    <Card className="border-primary/30 bg-linear-to-br from-primary/[0.07] to-transparent">
       <CardHeader className="pb-3">
         <div className="flex items-start gap-3">
           <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-primary/10">
@@ -2151,6 +2167,8 @@ function KITab() {
   });
 
   const hasChanges = Object.keys(modelValues).length > 0 || Object.keys(costValues).length > 0;
+  const modellwahl = modellwahlAus(settings);
+  const sichtbareKlassen = klassenFuer(modellwahl);
 
   function renderSelector(cls) {
     return (
@@ -2201,13 +2219,18 @@ function KITab() {
             {!healthLoading && <Button variant="ghost" size="icon" className="h-7 w-7 ml-auto" onClick={() => refetchHealth()} title="Status neu prüfen"><RefreshCw className="h-3.5 w-3.5" /></Button>}
           </div>
           <CardDescription className="text-xs pt-1">
-            Primärmodell pro Dokumentklasse. Bei Fehlern greift eine Fallback-Kette.
+            {modellwahl === 'einfach'
+              ? 'Ein Modell analysiert jedes Dokument. Scheitert es, springt der letzte Fallback ein.'
+              : 'Primärmodell pro Dokumentklasse. Bei Fehlern greift eine Fallback-Kette.'}
           </CardDescription>
         </CardHeader>
         <CardContent className="pt-0">
           {settingsLoading ? <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground"><Spinner className="h-4 w-4" />Lade…</div> : (
             <>
-              {MODEL_CLASSES.filter((c) => !c.group).map(renderSelector)}
+              <div className="mb-4">
+                <ModellwahlAuswahl wert={modellwahl} onGespeichert={() => refetchHealth()} />
+              </div>
+              {sichtbareKlassen.filter((c) => !c.group).map(renderSelector)}
               <div className="mt-5 mb-2 pt-4 border-t border-border">
                 <p className="text-sm font-semibold">Büroassistent und Akten</p>
                 <p className="text-xs text-muted-foreground">Eigene Modellwahl, unabhängig von den Dokumentklassen. Der Büroassistent braucht ein Modell, das Tool-Calling beherrscht.</p>
@@ -2228,7 +2251,7 @@ function KITab() {
       <EmbeddingCard providers={providers} />
 
       {/* Cache-Mode */}
-      <CacheModeOptionCard settings={settings} settingsLoading={settingsLoading} />
+      {modellwahl === 'gestaffelt' && <CacheModeOptionCard settings={settings} settingsLoading={settingsLoading} />}
       {/* Duplikat-Erkennung */}
       <DuplicateDetectionCard settings={settings} settingsLoading={settingsLoading} />
       {/* Eigene Klassifikations-Hinweise */}
@@ -2802,6 +2825,8 @@ function AllgemeinTab() {
           Aussagen über die Instanz als Ganzes, nicht über eine Funktion. */}
       <UpdateCard />
 
+      <ErreichbarkeitCard />
+
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center gap-2"><Globe className="h-5 w-5 text-primary" /><CardTitle className="text-base">Instanz</CardTitle></div>
@@ -3156,6 +3181,8 @@ function ScannerTab() {
               )}
             </div>
           )}
+
+          <ScannerFreigabe />
 
           <Dialog open={profilAusFrage} onOpenChange={(o) => { if (!o && !profilSchalten.isPending) setProfilAusFrage(false); }}>
             <DialogTitle className="flex items-center gap-2">

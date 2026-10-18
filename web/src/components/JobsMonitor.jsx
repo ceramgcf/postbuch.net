@@ -260,7 +260,7 @@ function SuspendedJobCard({ job, onDecide }) {
     : null;
 
   return (
-    <div className="rounded-xl border border-violet-500/40 bg-gradient-to-br from-violet-500/5 via-background to-background p-4 shadow-sm space-y-3">
+    <div className="rounded-xl border border-violet-500/40 bg-linear-to-br from-violet-500/5 via-background to-background p-4 shadow-sm space-y-3">
       {/* Header */}
       <div className="flex items-start gap-3">
         <PauseCircle className="h-4 w-4 text-violet-400 shrink-0 mt-0.5" />
@@ -430,7 +430,7 @@ function ActiveJobCard({ job, onCancel }) {
   const progress = job.totalSteps ? Math.min(100, Math.round((job.step / job.totalSteps) * 100)) : 0;
 
   return (
-    <div className="rounded-xl border border-sky-500/30 bg-gradient-to-br from-sky-500/5 via-background to-background p-4 shadow-sm">
+    <div className="rounded-xl border border-sky-500/30 bg-linear-to-br from-sky-500/5 via-background to-background p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3 mb-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">

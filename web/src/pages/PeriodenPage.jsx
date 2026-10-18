@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useId } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePerioden, usePeriodenRechnungen, usePeriodenPins, useKuerzungen, useEntfernePkvPruefung, useUnpinDokument } from '@/hooks/usePostbuch';
 import { useUndoHistory } from '@/hooks/useUndoHistory';
@@ -16,8 +16,8 @@ import { PageLoader, EmptyState } from '@/components/ui/spinner';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import {
   CalendarRange, ChevronDown, ChevronRight, Loader2,
-  RotateCcw, Trash2, SkipForward, CheckCircle2, AlertTriangle, Combine, FileText,
-  Users, PawPrint, Archive, ClipboardCheck, BookmarkX, Split, Pin, PinOff,
+  RotateCcw, Trash2, SkipForward, AlertTriangle, Combine, FileText,
+  Users, PawPrint, Archive, ClipboardCheck, BookmarkX, Split, Pin, PinOff, Pencil, Send,
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router';
 import AbrechnungWizardCard from '@/components/AbrechnungWizardCard';
@@ -196,12 +196,29 @@ function RechnungenList({ person, kostentraeger, periode, backPath }) {
   );
 }
 
+// Periodenaktion: eingeklappt nur das Symbol (Bedeutung im Tooltip),
+// aufgeklappt mit sichtbarer Beschriftung – die Zeile hat dann ohnehin Platz.
+function PeriodeAktion({ icon: Icon, label, title, onClick, expanded, iconClassName = '' }) {
+  return (
+    <button
+      className={`inline-flex items-center justify-center gap-1 h-7 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground ${expanded ? 'px-2 text-xs' : 'w-7'}`}
+      onClick={onClick}
+      title={title}
+      aria-label={label}
+    >
+      <Icon className={`h-3.5 w-3.5 ${iconClassName}`} />
+      {expanded && label}
+    </button>
+  );
+}
+
 // ─── PeriodeActions ───────────────────────────────────────────────────────────
 // Inline-Buttons in der Perioden-Überschrift, je nach Status.
-function PeriodeActions({ p, person, kostentraeger, collectingCount, highestCollectingPeriode, onRequestRemove, onConfirmOmit, onConfirmMergeOmitted }) {
+function PeriodeActions({ p, expanded, person, kostentraeger, collectingCount, highestCollectingPeriode, onRequestRemove, onConfirmOmit, onConfirmMergeOmitted, onEdit }) {
   const qc = useQueryClient();
   const { pushAction } = useUndoHistory();
   const { launchWithSelection } = useAbrechnungLauncher();
+  const { canWrite } = useAuth();
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['analyse', 'perioden'] });
 
@@ -264,41 +281,70 @@ function PeriodeActions({ p, person, kostentraeger, collectingCount, highestColl
     onRequestRemove?.();
   };
 
-  const btnCls = 'inline-flex items-center justify-center h-7 w-7 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground';
+  const handleEdit = (e) => {
+    e.stopPropagation();
+    onEdit?.({
+      id: Date.now(),
+      person,
+      kostentraeger,
+      periode: p.periode,
+      status: p.status,
+      satz: p.periode_satz,
+      breJahr: p.bre_jahr,
+      breSchwelle: p.bre_schwelle,
+      breAbschlag: p.person_bre_abschlag,
+    });
+  };
+
+  // BRE-Periode einreichen: öffnet den Assistenten mit dieser Person, PKV und
+  // dem Jahr der Periode angehakt (service/bre.js entscheidet beim Start neu).
+  const handleBreEinreichen = (e) => {
+    e.stopPropagation();
+    launchWithSelection({ person, kostentraeger: 'PKV', periode: p.periode, breJahr: p.bre_jahr });
+  };
+
+  const editButton = canWrite && (
+    <PeriodeAktion
+      expanded={expanded}
+      icon={Pencil}
+      label="Bearbeiten"
+      onClick={handleEdit}
+      title={p.status === 'WITHHELD' ? 'Bearbeiten (Erstattungssatz, BRE-Schwelle)' : 'Bearbeiten (Erstattungssatz)'}
+    />
+  );
+
+  // ZURÜCKGEHALTEN: keine der übrigen Periodenaktionen. Rückweg ist nur das
+  // Einreichen über den Assistenten bzw. „BRE-unbeachtlich“ je Rechnung.
+  if (p.status === 'WITHHELD') {
+    return (
+      <div className="flex items-center gap-0.5">
+        {canWrite && (
+          <PeriodeAktion
+            expanded={expanded}
+            icon={Send}
+            label="Einreichen"
+            onClick={handleBreEinreichen}
+            iconClassName="text-primary"
+            title={`BRE ${p.bre_jahr ?? ''} aufgeben und diese Rechnungen im Abrechnungsassistenten einreichen`}
+          />
+        )}
+        {editButton}
+      </div>
+    );
+  }
 
   if (p.status === 'SUBMITTED') {
-    return (
-      <button className={btnCls} onClick={handleRevert} title="Zurückstufen auf SAMMELT">
-        <RotateCcw className="h-3.5 w-3.5" />
-      </button>
-    );
+    return <PeriodeAktion expanded={expanded} icon={RotateCcw} label="Zurückstufen" onClick={handleRevert} title="Zurückstufen auf SAMMELT" />;
   }
 
   if (p.status === 'COLLECTING') {
     return (
       <div className="flex items-center gap-0.5">
-        <button
-          className={btnCls}
-          onClick={handleClose}
-          title="Periode abschließen (Wizard)"
-        >
-          <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
-        </button>
-        <button
-          className={btnCls}
-          onClick={handleOmitClick}
-          title="Auf Abrechnung verzichten (AUSGELASSEN)"
-        >
-          <SkipForward className="h-3.5 w-3.5" />
-        </button>
+        <PeriodeAktion expanded={expanded} icon={Send} label="Einreichen" onClick={handleClose} iconClassName="text-primary" title="Periode einreichen (Abrechnungsassistent)" />
+        {editButton}
+        <PeriodeAktion expanded={expanded} icon={SkipForward} label="Auslassen" onClick={handleOmitClick} title="Auf Abrechnung verzichten (AUSGELASSEN)" />
         {collectingCount >= 2 && (
-          <button
-            className={btnCls}
-            onClick={handleRemove}
-            title="Periode löschen…"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          <PeriodeAktion expanded={expanded} icon={Trash2} label="Löschen" onClick={handleRemove} title="Periode löschen…" />
         )}
       </div>
     );
@@ -307,21 +353,15 @@ function PeriodeActions({ p, person, kostentraeger, collectingCount, highestColl
   if (p.status === 'OMITTED') {
     return (
       <div className="flex items-center gap-0.5">
-        <button
-          className={btnCls}
-          onClick={handleUndoOmit}
-          title="Auf SAMMELT zurücksetzen (Verzicht aufheben)"
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-        </button>
+        <PeriodeAktion expanded={expanded} icon={RotateCcw} label="Verzicht aufheben" onClick={handleUndoOmit} title="Auf SAMMELT zurücksetzen (Verzicht aufheben)" />
         {Number.isInteger(highestCollectingPeriode) && (
-          <button
-            className={btnCls}
+          <PeriodeAktion
+            expanded={expanded}
+            icon={Combine}
+            label={`In #${highestCollectingPeriode} mergen`}
             onClick={handleMergeOmittedClick}
             title={`In SAMMELT-Periode #${highestCollectingPeriode} mergen`}
-          >
-            <Combine className="h-3.5 w-3.5" />
-          </button>
+          />
         )}
       </div>
     );
@@ -456,8 +496,70 @@ function PinsSection({ person, kostentraeger, periode, backPath }) {
   );
 }
 
+const ganzeEuro = new Intl.NumberFormat('de-DE', { maximumFractionDigits: 0 });
+
+// ─── BreRing ──────────────────────────────────────────────────────────────────
+// Fortschritt einer zurückhaltenden Periode (Beitragsrückerstattung) gegen
+// ihre Schwelle. Voll = Rechnungen, deren offene Behandlungsjahre nur dieses
+// Jahr sind; schraffiert = mehrjährige Rechnungen mit diesem Jahr unter ihren
+// offenen Jahren (zählen nur, wenn alle ihre Jahre aufgegeben werden). Die
+// Farbe richtet sich allein nach dem vollen Anteil. Daten: service/bre.js
+// (breRingDaten) über GET /api/analyse/perioden.
+function BreRing({ ring, mitBetraegen }) {
+  const musterId = useId();
+  const schwelle = Number(ring.schwelle) || 0;
+  const voll = Number(ring.voll) || 0;
+  const schraffiert = Number(ring.schraffiert) || 0;
+  const erreicht = voll >= schwelle;
+  const anteilVoll = schwelle > 0 ? Math.min(voll / schwelle, 1) : 1;
+  const anteilSchraffiert = schwelle > 0 ? Math.min(schraffiert / schwelle, 1 - anteilVoll) : 0;
+
+  const r = 9;
+  const umfang = 2 * Math.PI * r;
+  const farbe = ring.verwirkt ? '#94a3b8' : erreicht ? '#16a34a' : '#ea580c';
+  const titel = [
+    `BRE ${ring.jahr}: erwartete Erstattung ${formatCurrency(voll)} von ${formatCurrency(schwelle)} Schwelle`
+      + (ring.verwirkt ? ' (für dieses Jahr ist bereits etwas eingereicht – die BRE gilt als verwirkt)' : ''),
+    schraffiert > 0
+      ? `Schraffiert: ${formatCurrency(schraffiert)} aus Rechnungen über mehrere Behandlungsjahre. Sie zählen nur, wenn alle ihre Jahre aufgegeben werden.`
+      : null,
+    'Verbindlich ist der Vorschlag im Abrechnungsassistenten.',
+  ].filter(Boolean).join('\n');
+
+  return (
+    <span className="flex items-center gap-1.5" title={titel}>
+      <svg width="24" height="24" viewBox="0 0 24 24" className="-rotate-90 flex-shrink-0" aria-hidden="true">
+        <defs>
+          <pattern id={musterId} width="3" height="3" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width="1.5" height="3" fill={farbe} />
+          </pattern>
+        </defs>
+        <circle cx="12" cy="12" r={r} fill="none" stroke="currentColor" strokeOpacity="0.15" strokeWidth="4" />
+        {anteilSchraffiert > 0 && (
+          <circle
+            cx="12" cy="12" r={r} fill="none" stroke={`url(#${musterId})`} strokeWidth="4"
+            strokeDasharray={`${anteilSchraffiert * umfang} ${umfang}`}
+            strokeDashoffset={-anteilVoll * umfang}
+          />
+        )}
+        {anteilVoll > 0 && (
+          <circle
+            cx="12" cy="12" r={r} fill="none" stroke={farbe} strokeWidth="4"
+            strokeDasharray={`${anteilVoll * umfang} ${umfang}`}
+          />
+        )}
+      </svg>
+      {mitBetraegen && (
+        <span className="text-[10px] leading-tight text-muted-foreground whitespace-nowrap">
+          {ganzeEuro.format(voll)} / {ganzeEuro.format(schwelle)} €
+        </span>
+      )}
+    </span>
+  );
+}
+
 // ─── PeriodeRow ───────────────────────────────────────────────────────────────
-function PeriodeRow({ p, person, kostentraeger, backPath, onOpen, onClose, isHighestCollecting, collectingCount, highestCollectingPeriode, ableitung, onRequestRemove, onConfirmOmit, onConfirmMergeOmitted }) {
+function PeriodeRow({ p, person, kostentraeger, backPath, onOpen, onClose, isHighestCollecting, collectingCount, highestCollectingPeriode, ableitung, onRequestRemove, onConfirmOmit, onConfirmMergeOmitted, onEdit }) {
   const [open, setOpen] = useState(false);
   const kette = ableitung || [];
   const restperioden = kette.filter((k) => k.ursprungsperiode === p.periode);
@@ -471,21 +573,30 @@ function PeriodeRow({ p, person, kostentraeger, backPath, onOpen, onClose, isHig
   };
 
   return (
-    <div className="border rounded-lg overflow-hidden">
+    <div className="@container border rounded-lg overflow-hidden">
       <div className="flex items-center gap-2 p-2.5 hover:bg-muted/30 transition-colors">
         <button
-          className="flex items-center gap-2 min-w-0 flex-1 text-left"
+          className="flex items-center gap-2 min-w-0 flex-1 text-left overflow-hidden"
           onClick={toggle}
         >
           {open
             ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
             : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />}
           <div className="flex flex-col min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span className="font-mono font-bold">#{p.periode}</span>
               <Badge className={`${STATUS_STYLES[p.status] || ''} text-[10px] px-1.5 py-0`} variant="outline">
                 {periodenStatusLabel(p.status)}
               </Badge>
+              {p.status === 'WITHHELD' && p.bre_jahr != null && (
+                <Badge
+                  className="text-[10px] px-1.5 py-0 text-violet-700 bg-violet-50 border-violet-200"
+                  variant="outline"
+                  title={`Für die Beitragsrückerstattung ${p.bre_jahr} zurückgehalten`}
+                >
+                  BRE {p.bre_jahr}
+                </Badge>
+              )}
               {Number.isInteger(p.ursprungsperiode) && (
                 <Badge
                   className="text-[10px] px-1.5 py-0 text-violet-700 bg-violet-50 border-violet-200"
@@ -524,16 +635,20 @@ function PeriodeRow({ p, person, kostentraeger, backPath, onOpen, onClose, isHig
               )}
             </div>
             {p.referenz_datum && (
-              <span className="text-[10px] text-muted-foreground leading-tight mt-0.5">
+              <span className="text-[10px] text-muted-foreground leading-tight mt-0.5 whitespace-nowrap">
                 {p.status === 'COMPLETED' ? 'Bescheid: ' : 'Letzte Rg.: '}
                 {formatDate(p.referenz_datum)}
               </span>
             )}
           </div>
         </button>
-        <div className="flex items-center flex-shrink-0 mr-3">
+        {/* Schmale Zeile (Nachbarspalte einer aufgeklappten Periode, mobil):
+            zugeklappt nur Nummer, Status und Beträge – Aktionen und Anzahl
+            gibt es nach dem Aufklappen. */}
+        <div className={`${open ? 'flex' : 'hidden @min-[380px]:flex'} items-center flex-shrink-0 mr-3`}>
           <PeriodeActions
             p={p}
+            expanded={open}
             person={person}
             kostentraeger={kostentraeger}
             collectingCount={collectingCount}
@@ -541,10 +656,12 @@ function PeriodeRow({ p, person, kostentraeger, backPath, onOpen, onClose, isHig
             onRequestRemove={onRequestRemove}
             onConfirmOmit={onConfirmOmit}
             onConfirmMergeOmitted={onConfirmMergeOmitted}
+            onEdit={onEdit}
           />
         </div>
         <div className="flex items-center gap-3 text-xs text-right flex-shrink-0">
-          <span className="text-muted-foreground"><span className="font-medium text-foreground">{p.anzahl_rechnungen}</span> Rg.</span>
+          {p.status === 'WITHHELD' && p.bre_ring && <BreRing ring={p.bre_ring} mitBetraegen={open} />}
+          <span className={`${open ? '' : 'hidden @min-[380px]:inline'} text-muted-foreground`}><span className="font-medium text-foreground">{p.anzahl_rechnungen}</span> Rg.</span>
           {p.hat_satz && parseFloat(p.summe_erwartet) > 0
             ? (
               <span className="flex flex-col items-end leading-tight">
@@ -588,7 +705,7 @@ function PeriodeRow({ p, person, kostentraeger, backPath, onOpen, onClose, isHig
 }
 
 // ─── PersonSection ────────────────────────────────────────────────────────────
-function PersonSection({ person, kostentraeger, perioden, backPath, onOpen, onClose, onRequestRemove, onConfirmOmit, onConfirmMergeOmitted }) {
+function PersonSection({ person, kostentraeger, perioden, backPath, onOpen, onClose, onRequestRemove, onConfirmOmit, onConfirmMergeOmitted, onEdit }) {
   const [showOldClosed, setShowOldClosed] = useState(false);
 
   const sorted = [...perioden].sort((a, b) => b.periode - a.periode);
@@ -630,6 +747,7 @@ function PersonSection({ person, kostentraeger, perioden, backPath, onOpen, onCl
       })}
       onConfirmOmit={onConfirmOmit}
       onConfirmMergeOmitted={onConfirmMergeOmitted}
+      onEdit={onEdit}
     />
   );
 
@@ -661,7 +779,7 @@ function PersonSection({ person, kostentraeger, perioden, backPath, onOpen, onCl
 }
 
 // ─── KostentraegerColumn ──────────────────────────────────────────────────────
-function KostentraegerColumn({ label, persons, byPerson, backPath, onOpen, onClose, onRequestRemove, onConfirmOmit, onConfirmMergeOmitted }) {
+function KostentraegerColumn({ label, persons, byPerson, backPath, onOpen, onClose, onRequestRemove, onConfirmOmit, onConfirmMergeOmitted, onEdit }) {
   const hasSomething = persons.some((p) => (byPerson[p]?.[label]?.length ?? 0) > 0);
 
   return (
@@ -686,6 +804,7 @@ function KostentraegerColumn({ label, persons, byPerson, backPath, onOpen, onClo
                   onRequestRemove={onRequestRemove}
                   onConfirmOmit={onConfirmOmit}
                   onConfirmMergeOmitted={onConfirmMergeOmitted}
+                  onEdit={onEdit}
                 />
               );
             })
@@ -904,6 +1023,162 @@ function RemoveCollectingDialog({ open, request, onClose }) {
   );
 }
 
+// ─── PeriodeBearbeitenDialog ──────────────────────────────────────────────────
+// Erstattungssatz einer SAMMELT- oder ZURÜCKGEHALTEN-Periode und bei
+// ZURÜCKGEHALTEN die BRE-Schwelle ändern (POST /periode/bearbeiten).
+// Leerer Satz = Satz der Person gilt.
+function zahlAusEingabe(text) {
+  const t = String(text ?? '').trim().replace(',', '.');
+  if (t === '') return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function alsEingabe(wert) {
+  if (wert == null || wert === '') return '';
+  return String(Number(wert)).replace('.', ',');
+}
+
+function PeriodeBearbeitenDialog({ open, request, onClose }) {
+  const qc = useQueryClient();
+  const { pushAction } = useUndoHistory();
+  const [satzText, setSatzText] = useState(alsEingabe(request?.satz));
+  const [schwelleText, setSchwelleText] = useState(alsEingabe(request?.breSchwelle));
+  const [breText, setBreText] = useState('');
+  const [fehler, setFehler] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  if (!request) return null;
+  const { person, kostentraeger, periode, status, breJahr } = request;
+  const istWithheld = status === 'WITHHELD';
+  const abschlag = request.breAbschlag != null ? Number(request.breAbschlag) : 0;
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['analyse', 'perioden'] });
+
+  const ausBreBerechnen = () => {
+    const bre = zahlAusEingabe(breText);
+    if (bre == null || Number.isNaN(bre) || bre < 0) {
+      setFehler('Bitte einen BRE-Betrag ab 0 eingeben.');
+      return;
+    }
+    setFehler(null);
+    setSchwelleText(alsEingabe(Math.round(bre * (1 - abschlag / 100) * 100) / 100));
+  };
+
+  const handleSave = async () => {
+    const satz = zahlAusEingabe(satzText);
+    if (Number.isNaN(satz) || (satz != null && (satz < 0 || satz > 100))) {
+      setFehler('Der Erstattungssatz muss zwischen 0 und 100 % liegen.');
+      return;
+    }
+    const schwelle = istWithheld ? zahlAusEingabe(schwelleText) : undefined;
+    if (istWithheld && (schwelle == null || Number.isNaN(schwelle) || schwelle < 0)) {
+      setFehler('Die BRE-Schwelle muss ein Betrag ab 0 sein.');
+      return;
+    }
+    const alterSatz = request.satz != null ? Number(request.satz) : null;
+    const alteSchwelle = request.breSchwelle != null ? Number(request.breSchwelle) : null;
+    const neu = {};
+    const alt = {};
+    if (satz !== alterSatz) { neu.satz = satz; alt.satz = alterSatz; }
+    if (istWithheld && schwelle !== alteSchwelle) { neu.breSchwelle = schwelle; alt.breSchwelle = alteSchwelle; }
+    if (Object.keys(neu).length === 0) { onClose(); return; }
+
+    setBusy(true);
+    setFehler(null);
+    try {
+      await api.abrechnungsperiode.bearbeiten(person, kostentraeger, periode, neu);
+      invalidate();
+      pushAction(
+        `Periode ${person}/${kostentraeger}/#${periode} bearbeitet`,
+        async () => {
+          await api.abrechnungsperiode.bearbeiten(person, kostentraeger, periode, alt);
+          invalidate();
+        },
+        async () => {
+          await api.abrechnungsperiode.bearbeiten(person, kostentraeger, periode, neu);
+          invalidate();
+        },
+      );
+      onClose();
+    } catch (err) {
+      setFehler(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const feldCls = 'w-full rounded-md border bg-background px-2.5 py-1.5 text-sm';
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogTitle>Periode #{periode} bearbeiten</DialogTitle>
+      <DialogDescription>
+        Person: <strong>{person}</strong>, Kostenträger: <strong>{kostentraeger}</strong>
+        {istWithheld && breJahr != null && <>, BRE <strong>{breJahr}</strong></>}
+      </DialogDescription>
+
+      <div className="mt-3 space-y-4 text-sm">
+        <label className="block space-y-1">
+          <span className="font-medium">Erstattungssatz (%)</span>
+          <input
+            className={feldCls}
+            inputMode="decimal"
+            value={satzText}
+            onChange={(e) => setSatzText(e.target.value)}
+            placeholder="leer = Satz der Person"
+          />
+          <span className="block text-xs text-muted-foreground">
+            Gilt für die erwartete Erstattung aller Rechnungen dieser Periode, soweit eine Rechnung keinen eigenen Satz hat.
+          </span>
+        </label>
+
+        {istWithheld && (
+          <div className="space-y-2">
+            <label className="block space-y-1">
+              <span className="font-medium">BRE-Schwelle (€)</span>
+              <input
+                className={feldCls}
+                inputMode="decimal"
+                value={schwelleText}
+                onChange={(e) => setSchwelleText(e.target.value)}
+              />
+              <span className="block text-xs text-muted-foreground">
+                Ab dieser erwarteten Erstattung schlägt der Abrechnungsassistent vor, die Beitragsrückerstattung {breJahr ?? ''} aufzugeben.
+              </span>
+            </label>
+            <div className="rounded-md border bg-muted/30 p-2.5 space-y-1.5">
+              <span className="block text-xs font-medium">Aus BRE berechnen</span>
+              <div className="flex items-center gap-2">
+                <input
+                  className={feldCls}
+                  inputMode="decimal"
+                  value={breText}
+                  onChange={(e) => setBreText(e.target.value)}
+                  placeholder="Beitragsrückerstattung (€)"
+                />
+                <Button type="button" variant="outline" size="sm" onClick={ausBreBerechnen}>Berechnen</Button>
+              </div>
+              <span className="block text-xs text-muted-foreground">
+                Schwelle = BRE × (1 − {alsEingabe(abschlag)} % Sicherheitsabschlag der Person)
+              </span>
+            </div>
+          </div>
+        )}
+
+        {fehler && <p className="text-sm text-destructive">{fehler}</p>}
+      </div>
+
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose} disabled={busy}>Abbrechen</Button>
+        <Button onClick={handleSave} disabled={busy}>
+          {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+          Speichern
+        </Button>
+      </DialogFooter>
+    </Dialog>
+  );
+}
+
 // ─── ConfirmOmitDialog ────────────────────────────────────────────────────────
 // Bestätigung bevor eine COLLECTING-Periode auf OMITTED gesetzt wird.
 // Erklärt, was OMITTED bedeutet ("Auf Abrechnung verzichten").
@@ -1046,6 +1321,7 @@ export default function PeriodenPage() {
   const [removeRequest, setRemoveRequest] = useState(null);
   const [omitRequest, setOmitRequest] = useState(null);
   const [mergeOmittedRequest, setMergeOmittedRequest] = useState(null);
+  const [editRequest, setEditRequest] = useState(null);
   const [tierTab, setTierTab] = useState(false);
 
   const handleOpen = useCallback((col) => {
@@ -1142,6 +1418,7 @@ export default function PeriodenPage() {
             onRequestRemove={setRemoveRequest}
             onConfirmOmit={setOmitRequest}
             onConfirmMergeOmitted={setMergeOmittedRequest}
+            onEdit={setEditRequest}
           />
         </div>
 
@@ -1156,6 +1433,7 @@ export default function PeriodenPage() {
             onRequestRemove={setRemoveRequest}
             onConfirmOmit={setOmitRequest}
             onConfirmMergeOmitted={setMergeOmittedRequest}
+            onEdit={setEditRequest}
           />
         </div>}
       </div>
@@ -1174,6 +1452,12 @@ export default function PeriodenPage() {
         open={!!mergeOmittedRequest}
         request={mergeOmittedRequest}
         onClose={() => setMergeOmittedRequest(null)}
+      />
+      <PeriodeBearbeitenDialog
+        key={editRequest ? `${editRequest.person}|${editRequest.kostentraeger}|${editRequest.periode}|${editRequest.id}` : 'leer'}
+        open={!!editRequest}
+        request={editRequest}
+        onClose={() => setEditRequest(null)}
       />
     </div>
   );

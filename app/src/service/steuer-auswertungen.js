@@ -150,7 +150,8 @@ async function ladeGesundheitsZeilen() {
               WHERE ep.arz_postid = a.postid
            ), 0) AS erstattet,
            array_remove(ARRAY[
-             CASE WHEN abp.status IN ('COLLECTING', 'SUBMITTED') THEN 'PKV' END,
+             -- ZURÜCKGEHALTEN (Beitragsrückerstattung) kann noch eingereicht werden.
+             CASE WHEN abp.status IN ('COLLECTING', 'SUBMITTED', 'WITHHELD') THEN 'PKV' END,
              CASE WHEN abb.status IN ('COLLECTING', 'SUBMITTED') THEN 'Beihilfe' END
            ], NULL) AS erstattung_ausstehend
       FROM postbuch.arztrechnung a

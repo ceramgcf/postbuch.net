@@ -112,7 +112,12 @@ fi
 
 # ── Heartbeat ────────────────────────────────────────────────────────────────
 schreibbar_pruefen() {
-    mkdir -p "$UPDATE_DIR" 2>/dev/null || true
+    # Fehlt data/, etwa während einer Neuinstallation in dieses Verzeichnis,
+    # legt der Agent nichts an: Ein root-eigenes data/ ließe den Installer scheitern.
+    [[ -d "$INSTALL_DIR/data" ]] || { echo "false"; return; }
+    if [[ ! -d "$UPDATE_DIR" ]] && mkdir "$UPDATE_DIR" 2>/dev/null; then
+        installationsbesitz_setzen "$UPDATE_DIR" || true
+    fi
     local probe
     probe=$(mktemp "$UPDATE_DIR/.schreibprobe.XXXXXX" 2>/dev/null) || { echo "false"; return; }
     rm -f -- "$probe"
@@ -167,8 +172,29 @@ lan_json() {
     printf '{ "ip": "%s", "prefix": %s }' "$addr" "$prefix"
 }
 
+# Freigabe eines Ports aus der .env im festen Vokabular lan|lokal|anders.
+bind_lesen() { # $1 Key (SCANNER_BIND|WEB_BIND)
+    local wert
+    wert=$(grep "^$1=" "$INSTALL_DIR/.env" 2>/dev/null | tail -n1 | cut -d= -f2- || true)
+    case "$wert" in
+        ''|0.0.0.0|'::') echo lan ;;
+        127.0.0.1|localhost|'::1') echo lokal ;;
+        *) echo anders ;;
+    esac
+}
+
+# Offene Bestätigung nach „Oberfläche nur über HTTPS“: Epoch-Sekunden oder leer.
+WEB_BESTAETIGUNG="$STATE_DIR/web-bestaetigung"
+web_bestaetigung_bis() {
+    [[ -f "$WEB_BESTAETIGUNG" ]] || return 0
+    local k v
+    while IFS='=' read -r k v; do
+        [[ "$k" == bis && "$v" =~ ^[0-9]{1,12}$ ]] && { echo "$v"; return 0; }
+    done < "$WEB_BESTAETIGUNG"
+}
+
 heartbeat() {
-    local schreibbar lan scanner_profil=false
+    local schreibbar lan scanner_profil=false bis bestaetigung=null
     schreibbar=$(schreibbar_pruefen)
     [[ "$schreibbar" == "true" ]] || return 0
     lan=$(lan_json)
@@ -176,17 +202,21 @@ heartbeat() {
       && grep -Eq '^COMPOSE_PROFILES=([^,]*,)*scanner(,|$)' "$INSTALL_DIR/.env" 2>/dev/null; then
         scanner_profil=true
     fi
+    bis=$(web_bestaetigung_bis)
+    [[ -n "$bis" ]] && bestaetigung="\"$(date -u -d "@$bis" '+%Y-%m-%dT%H:%M:%SZ')\""
     atomar_schreiben "$AGENT_JSON" <<EOF
 {
   "version": $PROTOKOLL,
-  "agentVersion": "2.2",
-  "capabilities": ["update", "zielversion", "netzwerk", "module", "port"],
+  "agentVersion": "2.3",
+  "capabilities": ["update", "zielversion", "netzwerk", "module", "port", "freigabe", "postgres-umzug"],
   "modus": "$AGENT_MODE",
   "docker": "${DOCKER_ART:-null}",
   "letzterLaufAm": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
   "schreibbar": $schreibbar,
   "scannerProfilAktiv": $scanner_profil,
-  "lan": $lan
+  "lan": $lan,
+  "freigaben": { "scanner": "$(bind_lesen SCANNER_BIND)", "web": "$(bind_lesen WEB_BIND)" },
+  "webBestaetigungBis": $bestaetigung
 }
 EOF
 }
@@ -229,7 +259,7 @@ lies_anforderung() {   # $1 = sichere private Kopie
     while IFS='=' read -r k v; do
         case "$k" in
             protokoll)        [[ "$v" =~ ^[0-9]{1,3}$ ]]                  && A_PROTOKOLL="$v" ;;
-            typ)              [[ "$v" =~ ^(update|netzwerk|module|port|duckdns)$ ]] && A_TYP="$v" ;;
+            typ)              [[ "$v" =~ ^(update|netzwerk|module|port|duckdns|freigabe)$ ]] && A_TYP="$v" ;;
             nonce)            [[ "$v" =~ ^[0-9a-f]{32}$ ]]                && A_NONCE="$v" ;;
             zielVersion)      [[ "$v" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){2}$ ]] && A_ZIEL="$v" ;;
             angefordertAm)    [[ "$v" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && A_AM="$v" ;;
@@ -247,11 +277,109 @@ lies_anforderung() {   # $1 = sichere private Kopie
     fi
 }
 
+# ── Bestätigung „Oberfläche nur über HTTPS“ ─────────────────────────────────
+# Nach web:lokal muss die Person binnen zwei Minuten über HTTPS bestätigen,
+# dass sie noch hineinkommt. Die App legt dazu bestaetigung.kv mit der Nonce
+# des Auftrags ab. Ohne Bestätigung öffnet der Agent die Oberfläche wieder für
+# das Heimnetz. Die Merkdatei liegt im privaten STATE_DIR, die App kann sie
+# weder anlegen noch verlängern.
+web_bestaetigung_pruefen() {
+    [[ -f "$WEB_BESTAETIGUNG" ]] || return 0
+    local k v nonce='' bis='' quittung="$UPDATE_DIR/bestaetigung.kv"
+    while IFS='=' read -r k v; do
+        case "$k" in
+            nonce) [[ "$v" =~ ^[0-9a-f]{32}$ ]] && nonce="$v" ;;
+            bis)   [[ "$v" =~ ^[0-9]{1,12}$ ]] && bis="$v" ;;
+        esac
+    done < "$WEB_BESTAETIGUNG"
+    if [[ -z "$nonce" || -z "$bis" ]]; then
+        rm -f -- "$WEB_BESTAETIGUNG"
+        return 0
+    fi
+    if [[ -f "$quittung" && ! -L "$quittung" ]] && grep -qxF "nonce=$nonce" "$quittung" 2>/dev/null; then
+        rm -f -- "$WEB_BESTAETIGUNG" "$quittung"
+        log "Oberfläche nur über HTTPS bestätigt (nonce=$nonce)."
+        heartbeat
+        return 0
+    fi
+    (( $(date -u '+%s') > bis )) || return 0
+    rm -f -- "$WEB_BESTAETIGUNG" "$quittung"
+    log "Keine Bestätigung binnen zwei Minuten (nonce=$nonce) — Oberfläche wird wieder für das Heimnetz geöffnet."
+    local hostconfig="$AGENT_LIB/postbuch-hostconfig.sh"
+    if [[ -r "$hostconfig" ]]; then
+        # shellcheck source=postbuch-hostconfig.sh
+        source "$hostconfig"
+        if ( cd "$INSTALL_DIR" && hostconfig_env_setzen "$INSTALL_DIR/.env" WEB_BIND '' && hostconfig_web_neu_erstellen ); then
+            rm -f -- "$INSTALL_DIR/.env.hostconfig.bak"
+            hostdateien_besitz_reparieren || true
+            status_schreiben "$nonce" "fehlgeschlagen" "zurueckgenommen" 1 \
+                "Nicht bestätigt – die Oberfläche ist wieder im Heimnetz erreichbar." "freigabe"
+            heartbeat
+            return 0
+        fi
+    fi
+    hostdateien_besitz_reparieren || true
+    log "Wiederöffnen fehlgeschlagen — bitte scripts/zugang-heimnetz-oeffnen.sh auf dem Host ausführen."
+    status_schreiben "$nonce" "fehlgeschlagen" "zurueckgenommen" 1 \
+        "Nicht bestätigt, Wiederöffnen fehlgeschlagen. Notausgang: scripts/zugang-heimnetz-oeffnen.sh auf dem Host." "freigabe"
+    heartbeat
+}
+
+# ── PostgreSQL-Umzug ohne Auftrag ────────────────────────────────────────────
+# Installer bis 2.11 bringen 2.12 hoch, lassen aber PostgreSQL 16 weiterlaufen
+# und tauschen danach diesen Agenten aus. Der neue Agent holt den Umzug beim
+# nächsten Tick einmalig je installierter Version nach. Schlägt er fehl, bleibt
+# PostgreSQL 16 in Betrieb; die App zeigt dann den Befehl für einen neuen Versuch.
+postgres_umzug_automatisch() {
+    [[ "$AGENT_MODE" == "normal" ]] || return 0
+    local pgdir="$INSTALL_DIR/data/postgres" skript="$INSTALL_DIR/scripts/postgres-umzug.sh"
+    [[ -x "$skript" && -x "$AGENT_LIB/install.sh" ]] || return 0
+    [[ -f "$pgdir/PG_VERSION" || -d "$pgdir/umzug" ]] || return 0
+    local version marker nonce exitcode
+    version=$(tr -d '[:space:]' < "$INSTALL_DIR/VERSION" 2>/dev/null || true)
+    [[ "$version" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){2}(-[A-Za-z0-9.]+)?$ ]] || return 0
+    marker="$STATE_DIR/postgres-umzug-$version"
+    [[ -e "$marker" ]] && return 0
+    date -u '+%Y-%m-%dT%H:%M:%SZ' > "$marker"
+    nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+    BEGONNEN_AM="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    : > "$LOGFILE"
+    chmod 600 "$LOGFILE" 2>/dev/null || true
+    log "Datenbank von PostgreSQL $(tr -d '[:space:]' < "$pgdir/PG_VERSION" 2>/dev/null || echo '?') umziehen (Version $version, nonce=$nonce)"
+    status_schreiben "$nonce" "laeuft" "datenbank" "" "Datenbank wird umgezogen." "update"
+    "$AGENT_LIB/install.sh" --postgres-umzug --yes --non-interactive "--install-dir=$INSTALL_DIR" 2>&1 \
+        | while IFS= read -r zeile; do
+            printf '%s\n' "$zeile" >> "$LOGFILE"
+            log_veroeffentlichen
+            if [[ "$zeile" == *"##PHASE:"* ]]; then
+                phase="${zeile##*##PHASE:}"
+                phase="${phase%%[^a-z]*}"
+                [[ -n "$phase" ]] && status_schreiben "$nonce" "laeuft" "$phase" "" "Datenbank wird umgezogen." "update"
+            fi
+        done
+    exitcode=${PIPESTATUS[0]}
+    if [[ "$exitcode" -eq 0 ]]; then
+        log "Datenbank-Umzug abgeschlossen."
+        status_schreiben "$nonce" "erfolgreich" "fertig" 0 "Datenbank auf PostgreSQL 18 umgezogen." "update"
+    else
+        log "Datenbank-Umzug fehlgeschlagen (Exit $exitcode)."
+        status_schreiben "$nonce" "fehlgeschlagen" "fehler" "$exitcode" \
+            "Der Datenbank-Umzug ist fehlgeschlagen (Exit $exitcode). Details stehen im Protokoll." "update"
+    fi
+    mkdir -p "$VERLAUF/$nonce" 2>/dev/null || true
+    cp -f "$STATUS_JSON" "$VERLAUF/$nonce/status.json" 2>/dev/null || true
+    cp -f "$LOGFILE"     "$VERLAUF/$nonce/update.log"  2>/dev/null || true
+    heartbeat
+    exit "$exitcode"
+}
+
 # ── Hauptlauf ────────────────────────────────────────────────────────────────
 
 heartbeat
+[[ "${POSTBUCH_AGENT_EXEC_KOPIE:-0}" == "1" ]] || web_bestaetigung_pruefen
 
 if [[ "${POSTBUCH_AGENT_EXEC_KOPIE:-0}" != "1" ]]; then
+postgres_umzug_automatisch
 [[ -f "$ANFORDERUNG" ]] || exit 0
 
 INFLIGHT="$UPDATE_DIR/.anforderung.inflight.$$"
@@ -331,8 +459,15 @@ if [[ "$A_TYP" != "update" ]]; then
     # Die Bibliothek enthält ausschließlich feste Funktionen; Fremdwerte
     # werden dort nochmals je Auftragstyp validiert und niemals geloggt.
     source "$HOSTCONFIG"
+    # Jeder neue Auftrag zur Oberfläche ersetzt eine offene Bestätigung.
+    [[ "$A_TYP" == freigabe && "$A_WERT" == web:* ]] && rm -f -- "$WEB_BESTAETIGUNG" "$UPDATE_DIR/bestaetigung.kv"
     if hostconfig_anwenden "$INSTALL_DIR" "$A_TYP" "$A_WERT" "$A_SECRET"; then
         hostdateien_besitz_reparieren || true
+        if [[ "$A_TYP" == freigabe && "$A_WERT" == web:lokal ]]; then
+            printf 'nonce=%s\nbis=%s\n' "$A_NONCE" "$(( $(date -u '+%s') + 120 ))" > "$WEB_BESTAETIGUNG"
+            chmod 600 "$WEB_BESTAETIGUNG" 2>/dev/null || true
+            log "Oberfläche nur über HTTPS erreichbar; Bestätigung binnen zwei Minuten erwartet."
+        fi
         status_schreiben "$A_NONCE" "erfolgreich" "fertig" 0 "Host-Konfiguration abgeschlossen." "$A_TYP"
         cp -f "$STATUS_JSON" "$VERLAUF/$A_NONCE/status.json" 2>/dev/null || true
         heartbeat

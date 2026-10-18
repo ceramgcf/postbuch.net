@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Dialog, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { formatDate, formatCurrency, formatIban, cn } from '@/lib/utils';
 import { Pencil, Check, X, Trash2, Plus } from 'lucide-react';
-import { useCollectingPerioden, useSetArztrechnungAP, useSetArztrechnungSatz, useUpdateArztrechnung, useSetErstattungZuordnung } from '@/hooks/usePostbuch';
+import { useCollectingPerioden, useSetArztrechnungAP, useSetArztrechnungSatz, useSetArztrechnungBre, useUpdateArztrechnung, useSetErstattungZuordnung } from '@/hooks/usePostbuch';
 import { useUndoHistory } from '@/hooks/useUndoHistory';
 import { CopyableField } from './CopyableField';
 import { GiroCode } from './GiroCode';
@@ -248,6 +248,64 @@ function APField({ label, kostentraeger, periode, status, versichert, person, co
             <Plus className="h-3.5 w-3.5" />
           </button>
         )}
+      </dd>
+    </div>
+  );
+}
+
+/**
+ * Beitragsrückerstattung: Behandlungsjahr(e) der Rechnung und das Häkchen
+ * „BRE-unbeachtlich“. Bewusst auch an eingereichten Perioden änderbar (Kulanz
+ * der PKV). Liegt die Rechnung in einer ZURÜCKGEHALTEN-Periode, zieht sie beim
+ * Anhaken sofort in die aktuelle PKV-Sammelperiode.
+ */
+function BreField({ postid, unbeachtlich, jahre, geschaetzt, imZurueckhalten, ueberwacht }) {
+  const { mutate, mutateAsync, isPending, error } = useSetArztrechnungBre();
+  const { pushAction } = useUndoHistory();
+  const { canWrite } = useAuth();
+  const jahrText = Array.isArray(jahre) && jahre.length > 0 ? jahre.join('/') : null;
+
+  function umschalten(wert) {
+    if (wert && imZurueckhalten && !window.confirm(
+      'Die Rechnung liegt in einer ZURÜCKGEHALTEN-Periode und wird dabei in die aktuelle PKV-Sammelperiode verschoben. Fortfahren?'
+    )) return;
+    mutate({ postid, bre_unbeachtlich: wert }, {
+      onSuccess: (antwort) => {
+        // Rückgängig nur ohne Periodenwechsel: eine verschobene Rechnung
+        // kehrt nicht von selbst in die ZURÜCKGEHALTEN-Periode zurück.
+        if (antwort?.verschobenNach == null) {
+          pushAction(
+            wert ? 'BRE-unbeachtlich gesetzt' : 'BRE-unbeachtlich entfernt',
+            () => mutateAsync({ postid, bre_unbeachtlich: !wert }),
+            () => mutateAsync({ postid, bre_unbeachtlich: wert }),
+          );
+        }
+      },
+    });
+  }
+
+  return (
+    <div>
+      <dt className="text-muted-foreground">Beitragsrückerstattung</dt>
+      <dd className="space-y-1">
+        <div className="text-sm">
+          {jahrText
+            ? <>Behandlungsjahr {jahrText}{geschaetzt && <span className="text-muted-foreground" title="Ohne Behandlungsdatum in den Positionen gilt das Jahr des Rechnungsdatums."> (geschätzt)</span>}</>
+            : <span className="text-muted-foreground">Behandlungsjahr unbekannt</span>}
+        </div>
+        <label className={cn('flex items-center gap-2 text-sm', !canWrite && 'opacity-60')}>
+          <input
+            type="checkbox"
+            checked={!!unbeachtlich}
+            disabled={!canWrite || isPending}
+            onChange={(e) => umschalten(e.target.checked)}
+          />
+          BRE-unbeachtlich (z. B. Vorsorge)
+        </label>
+        {!ueberwacht && !unbeachtlich && (
+          <p className="text-[11px] text-muted-foreground">Die Beitragsrückerstattung dieser Person wird nicht überwacht.</p>
+        )}
+        {error && <p className="text-xs text-destructive">{error.message}</p>}
       </dd>
     </div>
   );
@@ -650,6 +708,16 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
                 postid={data.postid}
               />
             )}
+            {!istTier && (pkvRelevant || data.bre_unbeachtlich) && (
+              <BreField
+                postid={data.postid}
+                unbeachtlich={data.bre_unbeachtlich}
+                jahre={data.bre_jahre}
+                geschaetzt={data.bre_jahr_geschaetzt}
+                imZurueckhalten={data.abrechnungsperiode_pkv_status === 'WITHHELD'}
+                ueberwacht={data.personen_bre_ueberwachen === true}
+              />
+            )}
             {!istTier && (data.abrechnungsperiode_beihilfe != null || data.beihilfe_satz_override != null || data.personen_beihilfe_satz != null) && (
               <SatzOverrideField
                 label="Beihilfe-Satz"
@@ -714,6 +782,7 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
       <ArztPositionenCard
         postid={data.postid}
         positionen={data.einzelpositionen || []}
+        abweichung={data.positionen_abweichung}
         istTier={istTier}
         affectedSubids={affectedSubids}
       />

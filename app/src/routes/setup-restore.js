@@ -19,6 +19,7 @@ import { writeFile, access, rm, mkdtemp } from 'fs/promises';
 import { constants } from 'fs';
 import { gunzip } from 'zlib';
 import { atomicPgRestore, setupRestoreCleanupSql } from '../lib/pg-restore.js';
+import { geheimeSettingsDerInstanz } from '../lib/geheime-settings.js';
 import { getClient } from '../db.js';
 import {
   isEncryptedBackup, mitPasswortEntschluesseln, sidecarEintraege, BackupPasswortFalschError,
@@ -690,7 +691,7 @@ router.post('/restore',
         process.env.POSTGRES_USER || 'postbuch',
         process.env.POSTGRES_DB   || 'postbuch',
         pgEnv,
-        setupRestoreCleanupSql({ zusatzDeks }),
+        setupRestoreCleanupSql({ zusatzDeks, geheimnisse: await geheimeSettingsDerInstanz() }),
       );
 
       await rm(FLAG_FILE, { force: true });

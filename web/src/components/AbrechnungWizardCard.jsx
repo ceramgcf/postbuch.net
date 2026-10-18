@@ -2,6 +2,7 @@
  * AbrechnungWizardCard – 4-Schritte-Assistent für Abrechnungsperioden-Abschluss
  *
  * Schritt 1: Personen + Kostenträger auswählen → Abrechnung starten
+ *            (bei überwachter Beitragsrückerstattung mit BRE-Vorschau, siehe BreAuswahl)
  * Schritt 2: Gemergtes PDF pro Gruppe prüfen + herunterladen
  * Schritt 3: PDFs extern bei PKV/Beihilfe einreichen
  * Schritt 4: Zusammenfassung bestätigen oder gesamte Abrechnung verwerfen
@@ -11,20 +12,20 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { useKuerzungen } from '@/hooks/usePostbuch';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Loader2, Play, Check, X, Download, ChevronLeft, ChevronRight, FileText, Clock, AlertTriangle, ExternalLink, ClipboardCheck } from 'lucide-react';
+import { Loader2, Play, Check, X, Download, ChevronLeft, ChevronRight, ChevronDown, FileText, Clock, AlertTriangle, ExternalLink, ClipboardCheck } from 'lucide-react';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { lockLandscape, unlockOrientation, useIsPortrait } from '@/hooks/useOrientationLock';
 import { useAllowPortrait } from '@/hooks/usePortraitAllowed';
 import { useAbrechnungLauncher } from '@/hooks/useAbrechnungLauncher';
 import { MobilePdfOverlay } from '@/components/layout/MobilePdfOverlay';
 import { PdfInlineViewer } from '@/components/ui/pdf-inline-viewer';
-import { cn } from '@/lib/utils';
+import { cn, formatCurrency } from '@/lib/utils';
 
 // ─── Hilfsfunktion: Bytes lesbar formatieren ─────────────────────────────────
 function fmtBytes(bytes) {
@@ -107,8 +108,149 @@ function SelectToggle({ label, selected, onToggle, disabled }) {
   );
 }
 
+// ─── Beitragsrückerstattung im Schritt 1 ─────────────────────────────────────
+// Zeigt je PKV-Person mit überwachter BRE bzw. zurückgehaltenen Perioden, was
+// zurückgehalten wird und welche BRE-Jahre sich aufzugeben lohnen. Alle
+// Zahlen und Folgen kommen fertig aus GET /api/analyse/bre-vorschau
+// (service/bre.js); hier wird nur die passende Kombination nachgeschlagen.
+// Verbindlich rechnet das Backend beim Start unter der Periodensperre neu.
+
+function findeKombination(vorschau, aufgeben) {
+  const soll = [...new Set(aufgeben)].sort((a, b) => a - b).join(',');
+  return (vorschau?.kombinationen ?? []).find((k) => k.aufgeben.join(',') === soll) || null;
+}
+
+function anzahlRechnungen(n) {
+  return `${n} Rechnung${n !== 1 ? 'en' : ''}`;
+}
+
+function vorzeichenBetrag(wert) {
+  const n = Number(wert) || 0;
+  return `${n >= 0 ? '+' : '−'}${formatCurrency(Math.abs(n))}`;
+}
+
+function BreAuswahl({ person, query, gewaehlt, onChange, detailsOffen }) {
+  const [offen, setOffen] = useState(!!detailsOffen);
+  if (query.isLoading) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Beitragsrückerstattung {person} wird geprüft…
+      </div>
+    );
+  }
+  if (query.isError) {
+    return (
+      <div className="flex items-start gap-2 rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2 text-sm text-red-700">
+        <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+        <span>Beitragsrückerstattung {person}: {query.error?.message}</span>
+      </div>
+    );
+  }
+  const v = query.data;
+  if (!v?.relevant) return null;
+  const jahre = v.entscheidungsjahre ?? [];
+  const ohneJahr = (v.ohneJahr ?? []).filter((o) => !o.istWithheld);
+  if (jahre.length === 0 && ohneJahr.length === 0) return null;
+
+  const auswahl = gewaehlt ?? v.vorschlag ?? [];
+  const kombi = findeKombination(v, auswahl);
+  const kombiVorschlag = findeKombination(v, v.vorschlag ?? []);
+  const kombiLeer = findeKombination(v, []);
+  const toggle = (jahr) => {
+    const next = auswahl.includes(jahr) ? auswahl.filter((j) => j !== jahr) : [...auswahl, jahr];
+    onChange(next.sort((a, b) => a - b));
+  };
+
+  return (
+    <div className="rounded-lg border border-violet-200 bg-violet-50/60 p-3 text-sm space-y-2 dark:border-violet-900 dark:bg-violet-950/30">
+      <p className="text-xs font-semibold text-violet-800 dark:text-violet-200 uppercase tracking-wider">
+        Beitragsrückerstattung {person}
+      </p>
+      {!v.ueberwachen && (
+        <p className="text-xs text-muted-foreground">
+          Die Überwachung ist ausgeschaltet. Es wird nichts Neues zurückgehalten; zurückgehaltene Perioden lassen sich unten mit einreichen.
+        </p>
+      )}
+
+      {/* Vorschlag: je Jahr ein vorausgewähltes Häkchen */}
+      {(v.vorschlag ?? []).map((jahr) => {
+        const a = kombiVorschlag?.aufgegeben?.find((x) => x.jahr === jahr);
+        const n = a?.anzahlZurueckgehalten ?? 0;
+        return (
+          <label key={jahr} className="flex items-start gap-2 cursor-pointer">
+            <input type="checkbox" checked={auswahl.includes(jahr)} onChange={() => toggle(jahr)} className="mt-0.5 accent-violet-600" />
+            <span>
+              <span className="font-medium">
+                BRE {jahr} aufgeben{n > 0 && <> und {n} zurückgehaltene Rechnung{n !== 1 ? 'en' : ''} mit einreichen</>}
+              </span>
+              {v.vorschlag.length === 1 && kombiVorschlag && (
+                <span className="text-muted-foreground"> ({vorzeichenBetrag(kombiVorschlag.wert)})</span>
+              )}
+            </span>
+          </label>
+        );
+      })}
+
+      {/* Infozeilen: was mit der aktuellen Wahl zurückgehalten wird */}
+      {(kombi?.haltejahre ?? []).map((h) => (
+        <p key={h.jahr} className="text-xs text-violet-900 dark:text-violet-100">
+          {anzahlRechnungen(h.anzahl)} {h.anzahl !== 1 ? 'werden' : 'wird'} für die BRE {h.jahr} zurückgehalten
+          {h.anzahlNeu > 0 && h.anzahlNeu < h.anzahl ? ` (davon ${h.anzahlNeu} neu)` : ''}
+          {' – '}erwartete Erstattung {formatCurrency(h.summe)} von {formatCurrency(h.schwelle)} Schwelle.
+        </p>
+      ))}
+      {ohneJahr.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {anzahlRechnungen(ohneJahr.length)} ohne bekanntes Behandlungsjahr {ohneJahr.length !== 1 ? 'werden' : 'wird'} eingereicht
+          ({ohneJahr.map((o) => o.postid).join(', ')}).
+        </p>
+      )}
+
+      {/* Details: alle offenen Jahre frei wählbar */}
+      {jahre.length > 0 && (
+        <div>
+          <button
+            type="button"
+            onClick={() => setOffen((o) => !o)}
+            className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            {offen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            Details
+          </button>
+          {offen && (
+            <div className="mt-1.5 space-y-1.5 pl-1">
+              {jahre.map((jahr) => {
+                const gehalten = kombiLeer?.haltejahre?.find((h) => h.jahr === jahr);
+                return (
+                  <label key={jahr} className="flex items-start gap-2 text-xs cursor-pointer">
+                    <input type="checkbox" checked={auswahl.includes(jahr)} onChange={() => toggle(jahr)} className="mt-0.5 accent-violet-600" />
+                    <span>
+                      <span className="font-medium">BRE {jahr} aufgeben</span>
+                      <span className="text-muted-foreground">
+                        {' · '}Schwelle {formatCurrency(v.schwellen?.[jahr] ?? 0)}
+                        {' · '}ohne Aufgeben zurückgehalten {formatCurrency(gehalten?.summe ?? 0)}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+              {kombi && (
+                <p className="text-xs text-muted-foreground">
+                  Gewählte Kombination: zusätzlich eingereicht {formatCurrency(kombi.summe)}, abzüglich der Schwellen der aufgegebenen Jahre
+                  {' = '}<span className={cn('font-medium', kombi.wert >= 0 ? 'text-green-700' : 'text-orange-700')}>{vorzeichenBetrag(kombi.wert)}</span>
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Schritt 1: Auswahl ───────────────────────────────────────────────────────
-function Step1Selection({ onStart, onCancel, istTier }) {
+function Step1Selection({ onStart, onCancel, istTier, vorauswahl }) {
   const { data, isLoading } = useQuery({
     queryKey: ['analyse', 'perioden', 'collecting'],
     queryFn: () => api.analyse.collectingPerioden(),
@@ -123,8 +265,10 @@ function Step1Selection({ onStart, onCancel, istTier }) {
   const availablePersons = [...new Set(collectingRows.map((r) => r.person))].sort();
   const availableKT = [...new Set(collectingRows.map((r) => r.kostentraeger))].sort();
 
-  const [selectedPersons, setSelectedPersons] = useState(new Set(availablePersons));
-  const [selectedKT, setSelectedKT] = useState(new Set(availableKT));
+  const [selectedPersons, setSelectedPersons] = useState(new Set(vorauswahl?.persons ?? availablePersons));
+  const [selectedKT, setSelectedKT] = useState(new Set(vorauswahl?.kostentraeger ?? availableKT));
+  // Gewählte BRE-Jahre je Person; fehlt eine Person, gilt der Vorschlag.
+  const [breWahl, setBreWahl] = useState(vorauswahl?.breAufgeben ?? {});
   const [bestrittenAck, setBestrittenAck] = useState(false);
 
   // Personen/KT initialisieren sobald Daten da sind
@@ -153,6 +297,19 @@ function Step1Selection({ onStart, onCancel, istTier }) {
   const relevantRows = collectingRows.filter(
     (r) => selectedPersons.has(r.person) && selectedKT.has(r.kostentraeger)
   );
+
+  // Beitragsrückerstattung: Vorschau je ausgewählter PKV-Person (nur Menschen).
+  const brePersonen = !istTier && selectedKT.has('PKV')
+    ? [...new Set(relevantRows.filter((r) => r.kostentraeger === 'PKV').map((r) => r.person))].sort()
+    : [];
+  const breQueries = useQueries({
+    queries: brePersonen.map((person) => ({
+      queryKey: ['analyse', 'bre-vorschau', person],
+      queryFn: () => api.analyse.breVorschau(person),
+      staleTime: 30_000,
+      retry: false,
+    })),
+  });
 
   // Bestrittene Rechnungen in der Auswahl: werden nie mit eingereicht, sondern
   // laufen automatisch in die neue Sammelperiode weiter (siehe Backend).
@@ -212,6 +369,18 @@ function Step1Selection({ onStart, onCancel, istTier }) {
         </div>
       </div>
 
+      {/* Beitragsrückerstattung je PKV-Person */}
+      {brePersonen.map((person, i) => (
+        <BreAuswahl
+          key={person}
+          person={person}
+          query={breQueries[i]}
+          gewaehlt={breWahl[person]}
+          onChange={(jahre) => setBreWahl((prev) => ({ ...prev, [person]: jahre }))}
+          detailsOffen={!!vorauswahl?.breAufgeben?.[person]}
+        />
+      ))}
+
       {/* Hinweis: bestrittene Rechnungen werden übersprungen */}
       {bestrittenCount > 0 && (
         <label className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 cursor-pointer dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
@@ -250,7 +419,18 @@ function Step1Selection({ onStart, onCancel, istTier }) {
           <Button variant="ghost" size="sm" onClick={onCancel}>
             Abbrechen
           </Button>
-          <Button size="sm" disabled={!canStart} onClick={() => onStart([...selectedPersons], [...selectedKT])}>
+          <Button size="sm" disabled={!canStart} onClick={() => {
+            // Nur Personen mit geladener Vorschau mitschicken; sonst gilt
+            // im Backend der Vorschlag.
+            const breAufgeben = {};
+            brePersonen.forEach((person, i) => {
+              const v = breQueries[i]?.data;
+              if (!v?.relevant || (v.entscheidungsjahre ?? []).length === 0) return;
+              breAufgeben[person] = (breWahl[person] ?? v.vorschlag ?? [])
+                .filter((j) => v.entscheidungsjahre.includes(j));
+            });
+            onStart([...selectedPersons], [...selectedKT], Object.keys(breAufgeben).length > 0 ? breAufgeben : undefined);
+          }}>
             <Play className="h-3.5 w-3.5" />
             Abrechnung starten
           </Button>
@@ -502,7 +682,7 @@ function Step3Submit({ session, onNext, onBack, onCancel, isRejecting }) {
 }
 
 // ─── Schritt 4: Bestätigen ──────────────────────────────────────────────────
-function Step4Confirm({ session, onConfirm, onReject, isConfirming, isRejecting }) {
+function Step4Confirm({ session, breEntscheidung, onConfirm, onReject, isConfirming, isRejecting }) {
   const groups = session?.groups ?? [];
   const [acknowledged, setAcknowledged] = useState(false);
 
@@ -533,6 +713,9 @@ function Step4Confirm({ session, onConfirm, onReject, isConfirming, isRejecting 
       <p className="text-xs text-muted-foreground">
         Nach der Bestätigung werden die Perioden auf EINGEREICHT gesetzt und neue SAMMELT-Perioden angelegt.
         Die temporären PDFs auf OneDrive werden automatisch gelöscht.
+        {breEntscheidung && Object.keys(breEntscheidung).length > 0 && (
+          <> Für die Beitragsrückerstattung zurückgehaltene Rechnungen wandern dabei in ZURÜCKGEHALTEN-Perioden.</>
+        )}
       </p>
       <label className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 cursor-pointer dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
         <input type="checkbox" checked={acknowledged} onChange={(e) => setAcknowledged(e.target.checked)} className="mt-0.5 accent-amber-600" />
@@ -568,6 +751,12 @@ export default function AbrechnungWizardCard({ istTier = false }) {
   // Hinweis nach dem Bestätigen, falls seit dem PDF-Bau etwas dazugekommen ist
   // und automatisch in die neue Periode verschoben wurde (siehe confirmAbrechnungsperiode).
   const [nachlaufHinweis, setNachlaufHinweis] = useState(null);
+  // Beitragsrückerstattung: Entscheidung aus /start (für Schritt 4) und
+  // Ergebnis des Bestätigens (Hinweis im geschlossenen Zustand).
+  const [breEntscheidung, setBreEntscheidung] = useState(null);
+  const [breHinweis, setBreHinweis] = useState(null);
+  // Vorauswahl für Schritt 1 (z. B. „Einreichen“ an einer BRE-Periode).
+  const [vorauswahl, setVorauswahl] = useState(null);
 
   // Offene Sessions beim Mounten prüfen
   const { data: pendingData } = useQuery({
@@ -582,12 +771,26 @@ export default function AbrechnungWizardCard({ istTier = false }) {
   const [startProgress, setStartProgress] = useState(null); // { done, total, label }
   const [startError, setStartError]       = useState(null);
   const esRef = useRef(null); // EventSource-Referenz für Cleanup
+  // Laufender Start: Session-ID aus der Startantwort (vor 'done' noch nicht in
+  // `session`) und ob der Nutzer inzwischen abgebrochen hat. Ohne beides
+  // bliebe eine abgebrochene Session auf dem Server liegen und sperrte die
+  // Perioden für den nächsten Start.
+  const startRef = useRef(null); // { sessionId, abgebrochen }
 
   const launchJob = useCallback((payload) => {
     setStartProgress({ done: 0, total: 0, label: 'Starte…' });
     setStartError(null);
 
-    api.abrechnungsperiode.start(payload).then(({ jobId }) => {
+    setBreEntscheidung(null);
+    const lauf = { sessionId: null, abgebrochen: false };
+    startRef.current = lauf;
+    api.abrechnungsperiode.start(payload).then(({ jobId, sessionId, bre }) => {
+      lauf.sessionId = sessionId;
+      if (lauf.abgebrochen) {
+        verwirfAbgebrocheneSession(sessionId);
+        return;
+      }
+      setBreEntscheidung(bre ?? null);
       const es = new EventSource(api.abrechnungsperiode.progressUrl(jobId));
       esRef.current = es;
       let settled = false;
@@ -598,6 +801,7 @@ export default function AbrechnungWizardCard({ istTier = false }) {
 
       es.addEventListener('done', (e) => {
         settled = true;
+        if (startRef.current === lauf) startRef.current = null;
         es.close();
         esRef.current = null;
         const data = JSON.parse(e.data);
@@ -630,11 +834,21 @@ export default function AbrechnungWizardCard({ istTier = false }) {
         setStep(1);
       };
     }).catch((err) => {
+      if (lauf.abgebrochen) return;
       setStartProgress(null);
       setStartError(err?.message ?? 'Unbekannter Fehler');
       setStep(1);
     });
   }, [qc]); // eslint-disable-line
+
+  // Eine noch im Aufbau befindliche Session verwerfen; der Server bricht den
+  // Aufbau dann ab und gibt die Perioden frei.
+  function verwirfAbgebrocheneSession(sessionId) {
+    if (!sessionId) return;
+    api.abrechnungsperiode.reject(sessionId)
+      .catch(() => {})
+      .finally(() => qc.invalidateQueries({ queryKey: ['abrechnungsperiode', 'sessions'] }));
+  }
 
   // Cleanup bei Unmount
   useEffect(() => () => { esRef.current?.close(); }, []);
@@ -652,7 +866,20 @@ export default function AbrechnungWizardCard({ istTier = false }) {
       setNachlaufHinweis(teile.length > 0
         ? `Nach der PDF-Erstellung sind noch dazugekommen und wurden automatisch in die neue Periode verschoben: ${teile.join(', ')}.`
         : null);
+      const breTeile = (result?.bre ?? []).map((b) => {
+        const t = [];
+        if (b.aufgeben?.length > 0) t.push(`BRE ${b.aufgeben.join(', ')} aufgegeben`);
+        if (b.zurueckgehalten?.length > 0) {
+          const jahre = [...new Set(b.zurueckgehalten.map((z) => z.jahr))].sort((x, y) => x - y);
+          t.push(`${anzahlRechnungen(b.zurueckgehalten.length)} für die BRE ${jahre.join(', ')} zurückgehalten`);
+        }
+        for (const n of b.neuePerioden ?? []) t.push(`neue ZURÜCKGEHALTEN-Periode #${n.periode} (BRE ${n.jahr})`);
+        return t.length > 0 ? `${b.person}: ${t.join(', ')}` : null;
+      }).filter(Boolean);
+      setBreHinweis(breTeile.length > 0 ? `Beitragsrückerstattung – ${breTeile.join('; ')}.` : null);
+      setBreEntscheidung(null);
       qc.invalidateQueries({ queryKey: ['analyse', 'perioden'] });
+      qc.invalidateQueries({ queryKey: ['analyse', 'bre-vorschau'] });
       qc.invalidateQueries({ queryKey: ['abrechnungsperiode', 'sessions'] });
     },
   });
@@ -667,9 +894,9 @@ export default function AbrechnungWizardCard({ istTier = false }) {
   });
 
   // ── Handlers ───────────────────────────────────────────────────────────────
-  function handleStart(persons, kostentraeger) {
+  function handleStart(persons, kostentraeger, breAufgeben) {
     setStep(1);
-    launchJob({ persons, kostentraeger });
+    launchJob(breAufgeben ? { persons, kostentraeger, bre_aufgeben: breAufgeben } : { persons, kostentraeger });
   }
 
   function handleResumeSession(s) {
@@ -684,8 +911,23 @@ export default function AbrechnungWizardCard({ istTier = false }) {
     if (pendingSessions.length > 0) return; // Wiederaufnahme hat Vorrang
     const sel = launchRequest.selection;
     if (!sel) return;
+    if (sel.breJahr != null) {
+      // „Einreichen“ an einer BRE-Periode: Auswahl mit diesem Jahr
+      // angehakt öffnen statt direkt zu starten – die Einreichung läuft über
+      // die PKV-Sammelperiode der Person, und der Nutzer sieht die Folgen.
+      setVorauswahl({
+        id: launchRequest.id,
+        persons: [sel.person],
+        kostentraeger: ['PKV'],
+        breAufgeben: { [sel.person]: [sel.breJahr] },
+      });
+      setStartError(null);
+      setStep(1);
+      consumeLaunch();
+      return;
+    }
     setStep(1);
-    launchJob({ selections: [sel] });
+    launchJob({ selections: [{ person: sel.person, kostentraeger: sel.kostentraeger, periode: sel.periode }] });
     consumeLaunch();
   }, [launchRequest, step, pendingSessions.length]); // eslint-disable-line
 
@@ -696,6 +938,11 @@ export default function AbrechnungWizardCard({ istTier = false }) {
     if (session) {
       rejectMutation.mutate();
     } else {
+      const lauf = startRef.current;
+      if (lauf && !lauf.abgebrochen) {
+        lauf.abgebrochen = true;
+        verwirfAbgebrocheneSession(lauf.sessionId); // ohne ID: erledigt der Start-Callback
+      }
       setStep(0);
     }
   }
@@ -712,6 +959,19 @@ export default function AbrechnungWizardCard({ istTier = false }) {
               <button
                 onClick={() => setNachlaufHinweis(null)}
                 className="text-amber-700 hover:text-amber-900 flex-shrink-0"
+                aria-label="Hinweis schließen"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+          {breHinweis && (
+            <div className="flex items-start gap-2 rounded-lg bg-violet-50 border border-violet-200 px-3 py-2 mb-3 dark:bg-violet-950/30 dark:border-violet-900">
+              <Check className="h-4 w-4 text-violet-700 flex-shrink-0 mt-0.5" />
+              <p className="text-sm text-violet-900 dark:text-violet-100 flex-1">{breHinweis}</p>
+              <button
+                onClick={() => setBreHinweis(null)}
+                className="text-violet-700 hover:text-violet-900 flex-shrink-0"
                 aria-label="Hinweis schließen"
               >
                 <X className="h-4 w-4" />
@@ -735,7 +995,7 @@ export default function AbrechnungWizardCard({ istTier = false }) {
                   Offene Abrechnung fortsetzen
                 </button>
               )}
-              <Button size="sm" onClick={() => setStep(1)}>
+              <Button size="sm" onClick={() => { setVorauswahl(null); setStep(1); }}>
                 <Play className="h-3.5 w-3.5" />
                 Starten
               </Button>
@@ -803,6 +1063,8 @@ export default function AbrechnungWizardCard({ istTier = false }) {
             </div>
           ) : (
             <Step1Selection
+              key={vorauswahl?.id ?? 'standard'}
+              vorauswahl={vorauswahl}
               onStart={handleStart}
               onCancel={() => { setStartError(null); setStep(0); }}
               istTier={istTier}
@@ -832,7 +1094,7 @@ export default function AbrechnungWizardCard({ istTier = false }) {
         )}
 
         {/* Schritt 4: Bestätigung */}
-        {step === 4 && <Step4Confirm session={session} onConfirm={() => confirmMutation.mutate()} onReject={handleCancel} isConfirming={confirmMutation.isPending} isRejecting={rejectMutation.isPending} />}
+        {step === 4 && <Step4Confirm session={session} breEntscheidung={breEntscheidung} onConfirm={() => confirmMutation.mutate()} onReject={handleCancel} isConfirming={confirmMutation.isPending} isRejecting={rejectMutation.isPending} />}
       </CardContent>
     </Card>
   );

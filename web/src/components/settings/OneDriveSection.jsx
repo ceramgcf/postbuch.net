@@ -11,7 +11,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle, AlertTriangle, CheckCircle, Cloud, CloudOff, Copy, ExternalLink,
-  Eye, EyeOff, Key, Link2, RefreshCw, Smartphone, Unlink2, XCircle,
+  Eye, EyeOff, FolderLock, Key, Link2, RefreshCw, Smartphone, Unlink2, XCircle,
 } from 'lucide-react';
 import { api } from '@/api/client';
 import { Button } from '@/components/ui/button';
@@ -23,7 +23,200 @@ import OneDriveVollzugriffWarnung from '@/components/OneDriveVollzugriffWarnung'
 import { SetupGuideCard, SetupStepList } from '@/components/settings/SetupGuide';
 import { schlankeHilfeUrl } from '@/lib/docs';
 
-function OneDriveConnectionCard({ mode = 'device' }) {
+/** Ein Satz unter dem Verbinden-Knopf: was die Zustimmung umfasst. */
+function UmfangHinweis({ modus, verb }) {
+  if (modus === 'appordner') {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Mit dem {verb} erteilst du postbuch.net Zugriff nur auf seinen eigenen App-Ordner unter <span className="font-mono">Apps/</span>.
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs text-amber-700 dark:text-amber-500">
+      Mit dem {verb} erteilst du postbuch.net Vollzugriff auf <span className="font-semibold">alle</span> Ordner dieses OneDrive – siehe Hinweis oben.
+    </p>
+  );
+}
+
+/** Schritt „API-Berechtigungen“ der Azure-Anleitung, passend zum Zugriffsumfang. */
+function ScopeSchritt({ modus }) {
+  const scope = modus === 'appordner' ? 'Files.ReadWrite.AppFolder' : 'Files.ReadWrite.All';
+  return (
+    <>
+      Unter <span className="font-semibold">API-Berechtigungen</span> (Microsoft Graph, delegiert){' '}
+      <span className="font-mono">{scope}</span>, <span className="font-mono">User.Read</span> und{' '}
+      <span className="font-mono">offline_access</span> hinzufügen.{' '}
+      {modus === 'appordner'
+        ? 'Andere Files-Berechtigungen nicht eintragen – postbuch.net braucht nur seinen App-Ordner.'
+        : <><span className="font-semibold">Achtung:</span> <span className="font-mono">Files.ReadWrite.All</span> ist Vollzugriff auf <span className="font-semibold">alle</span> Ordner des OneDrive, das sich damit anmeldet – siehe Warnung oben.</>}
+    </>
+  );
+}
+
+const KONSENT_URL = 'https://account.live.com/consent/Manage';
+
+/**
+ * Zugriffsumfang anzeigen und umstellen (App-Ordner ↔ Vollzugriff).
+ * Der Server verschiebt den Ablageordner, trennt die Anmeldung und prüft nach
+ * dem Neuverbinden selbst; diese Karte erklärt nur, was der Admin dazwischen
+ * bei Microsoft tun muss.
+ */
+function OneDriveZugriffCard({ zugriff, verbunden }) {
+  const qc = useQueryClient();
+  const [bestaetigen, setBestaetigen] = useState(false);
+  const modus = zugriff?.modus || 'appordner';
+  const umzug = zugriff?.umzug && !zugriff.umzug.quittiert ? zugriff.umzug : null;
+  const ziel = modus === 'appordner' ? 'vollzugriff' : 'appordner';
+  const aktualisiere = () => {
+    qc.invalidateQueries({ queryKey: ['onedrive-zugriff'] });
+    qc.invalidateQueries({ queryKey: ['onedrive-status'] });
+    qc.invalidateQueries({ queryKey: ['settings'] });
+  };
+  const umstellen = useMutation({
+    mutationFn: (z) => api.onedrive.zugriffUmstellen(z),
+    onSuccess: () => { setBestaetigen(false); aktualisiere(); },
+  });
+  const fortsetzen = useMutation({ mutationFn: () => api.onedrive.zugriffFortsetzen(), onSuccess: aktualisiere });
+  const quittieren = useMutation({ mutationFn: () => api.onedrive.zugriffQuittieren(), onSuccess: aktualisiere });
+  const fehlerText = umstellen.error?.message || fortsetzen.error?.message || quittieren.error?.message;
+  const pruefung = umzug?.pruefung;
+
+  const microsoftTrennen = (
+    <>Im Microsoft-Konto unter{' '}
+      <a href={KONSENT_URL} target="_blank" rel="noopener noreferrer" className="font-semibold underline inline-flex items-center gap-1">
+        Apps und Dienste<ExternalLink className="h-3 w-3" />
+      </a>{' '}
+      bei deiner App-Registrierung „Zugriff entfernen“ wählen. Erst danach fragt Microsoft beim Verbinden nur noch nach dem App-Ordner.
+    </>
+  );
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-2">
+          <FolderLock className="h-5 w-5 text-primary" />
+          <CardTitle className="text-base">Zugriffsumfang</CardTitle>
+          <Badge variant={modus === 'appordner' ? 'default' : 'secondary'} className="ml-auto text-xs">
+            {modus === 'appordner' ? 'Nur App-Ordner' : 'Gesamtes OneDrive'}
+          </Badge>
+        </div>
+        <CardDescription className="text-xs pt-1">
+          {modus === 'appordner'
+            ? 'postbuch.net arbeitet ausschließlich in seinem App-Ordner unter Apps/.'
+            : 'postbuch.net darf in allen Ordnern dieses OneDrive lesen und schreiben.'}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {umzug?.phase === 'warte_auf_verbindung' && (
+          <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-2">
+            <p className="font-medium">Umstellung läuft – jetzt neu verbinden</p>
+            <p className="text-xs text-muted-foreground">Die Verarbeitung neuer Dokumente pausiert, bis die Verbindung wieder steht.</p>
+            <SetupStepList
+              steps={umzug.ziel === 'appordner' ? [
+                <>Der Inhalt des Ablageordners liegt bereits im App-Ordner, die bisherige Anmeldung ist gelöscht.</>,
+                microsoftTrennen,
+                <>In der App-Registrierung unter <span className="font-semibold">API-Berechtigungen</span> <span className="font-mono">Files.ReadWrite.All</span> entfernen und <span className="font-mono">Files.ReadWrite.AppFolder</span> hinzufügen.</>,
+                <>Oben neu verbinden. postbuch.net prüft danach selbst, ob alle Ordner erreichbar sind und der Zugriff außerhalb gesperrt ist.</>,
+              ] : [
+                <>Die bisherige Anmeldung ist gelöscht.</>,
+                <>In der App-Registrierung unter <span className="font-semibold">API-Berechtigungen</span> <span className="font-mono">Files.ReadWrite.All</span> eintragen.</>,
+                <>Oben neu verbinden und dem Zugriff auf alle Dateien zustimmen. postbuch.net legt danach am früheren Ort wieder einen Ablageordner an, verschiebt den Inhalt des App-Ordners hinein und prüft ihn.</>,
+              ]}
+            />
+          </div>
+        )}
+
+        {umzug?.phase === 'warte_auf_widerruf' && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2 text-amber-900 dark:bg-amber-950/20 dark:text-amber-200">
+            <p className="font-medium flex items-center gap-2"><AlertTriangle className="h-4 w-4" />Microsoft erlaubt noch Zugriff außerhalb des App-Ordners</p>
+            <p className="text-xs">Die Ablage funktioniert, aber Microsoft hat deine frühere Zustimmung zum Vollzugriff behalten. {microsoftTrennen} Danach hier die Anmeldung zurücksetzen und neu verbinden.</p>
+            <Button size="sm" variant="outline" onClick={() => umstellen.mutate('appordner')} disabled={umstellen.isPending}>
+              {umstellen.isPending ? <Spinner className="h-3.5 w-3.5 mr-1.5" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}Anmeldung zurücksetzen
+            </Button>
+          </div>
+        )}
+
+        {umzug?.phase === 'fehler' && (
+          <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 space-y-2">
+            <p className="font-medium text-destructive flex items-center gap-2"><XCircle className="h-4 w-4" />Umstellung nicht abgeschlossen</p>
+            <p className="text-xs text-muted-foreground">{umzug.fehler}</p>
+            {pruefung?.ordnerFehlend?.length > 0 && (
+              <p className="text-xs text-muted-foreground">Nicht erreichbare Ordner: <span className="font-mono">{pruefung.ordnerFehlend.join(', ')}</span></p>
+            )}
+            {pruefung?.dokumenteFehlend > 0 && (
+              <p className="text-xs text-muted-foreground">{pruefung.dokumenteFehlend} von {pruefung.dokumenteGeprueft} geprüften Dokumenten nicht erreichbar.</p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              {umzug.unterbrochen && umzug.ziel === 'appordner' ? (
+                <Button size="sm" variant="outline" onClick={() => umstellen.mutate('appordner')} disabled={umstellen.isPending || !verbunden}>
+                  {umstellen.isPending ? <Spinner className="h-3.5 w-3.5 mr-1.5" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}Verschieben fortsetzen
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" onClick={() => fortsetzen.mutate()} disabled={fortsetzen.isPending || !verbunden}>
+                  {fortsetzen.isPending ? <Spinner className="h-3.5 w-3.5 mr-1.5" /> : <RefreshCw className="h-3.5 w-3.5 mr-1.5" />}Erneut prüfen
+                </Button>
+              )}
+              <Button size="sm" variant="outline" onClick={() => umstellen.mutate(umzug.ziel === 'appordner' ? 'vollzugriff' : 'appordner')} disabled={umstellen.isPending}>
+                {umzug.ziel === 'appordner' ? 'Zurück zum Vollzugriff' : 'Zurück zum App-Ordner'}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {umzug?.phase === 'abgeschlossen' && (
+          <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 space-y-1 text-emerald-900 dark:bg-emerald-950/20 dark:text-emerald-200">
+            <p className="font-medium flex items-center gap-2"><CheckCircle className="h-4 w-4" />Umstellung abgeschlossen</p>
+            {pruefung && (
+              <p className="text-xs">
+                {pruefung.ordnerGeprueft} Ordner und {pruefung.dokumenteGeprueft} Dokumente (Stichprobe) erreichbar.
+                {umzug.ziel === 'appordner' && ' Zugriff außerhalb des App-Ordners ist gesperrt.'}
+              </p>
+            )}
+            <Button size="sm" variant="outline" onClick={() => quittieren.mutate()} disabled={quittieren.isPending}>OK</Button>
+          </div>
+        )}
+
+        {(!umzug || umzug.phase === 'abgeschlossen') && !bestaetigen && (
+          <Button size="sm" variant="outline" onClick={() => setBestaetigen(true)}>
+            {ziel === 'appordner' ? 'Auf App-Ordner umstellen …' : 'Auf Vollzugriff umstellen …'}
+          </Button>
+        )}
+
+        {bestaetigen && (
+          <div className="rounded-lg border border-border p-3 space-y-2">
+            <p className="font-medium">{ziel === 'appordner' ? 'Auf App-Ordner umstellen' : 'Auf Vollzugriff umstellen'}</p>
+            <SetupStepList
+              steps={ziel === 'appordner' ? [
+                <>postbuch.net verschiebt den Inhalt deines Ablageordners direkt in den App-Ordner unter <span className="font-mono">Apps/</span>; der leere Ablageordner kommt in den OneDrive-Papierkorb. Dateien und Verknüpfungen bleiben erhalten. Der App-Ordner muss dafür leer sein.</>,
+                <>Die Verbindung wird getrennt, die Verarbeitung pausiert bis zur Neuverbindung.</>,
+                microsoftTrennen,
+                <>In der App-Registrierung <span className="font-mono">Files.ReadWrite.All</span> gegen <span className="font-mono">Files.ReadWrite.AppFolder</span> tauschen und hier neu verbinden. Die Prüfung läuft danach automatisch.</>,
+              ] : [
+                <>Die Verbindung wird getrennt, die Verarbeitung pausiert bis zur Neuverbindung.</>,
+                <>In der App-Registrierung <span className="font-mono">Files.ReadWrite.All</span> eintragen und hier neu verbinden.</>,
+                <>postbuch.net legt am früheren Ort deines Ablageordners – oder, falls es den nicht mehr gibt, auf der obersten Ebene deines OneDrive – wieder einen Ablageordner an, verschiebt den Inhalt des App-Ordners hinein und prüft ihn.</>,
+              ]}
+            />
+            {ziel === 'appordner' && !verbunden && (
+              <p className="text-xs text-amber-700 dark:text-amber-500">Für das Verschieben muss OneDrive verbunden sein.</p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => umstellen.mutate(ziel)} disabled={umstellen.isPending}>
+                {umstellen.isPending && <Spinner className="h-3.5 w-3.5 mr-1.5" />}Jetzt umstellen
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setBestaetigen(false)} disabled={umstellen.isPending}>Abbrechen</Button>
+            </div>
+          </div>
+        )}
+
+        {fehlerText && <p className="text-xs text-destructive">{fehlerText}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+function OneDriveConnectionCard({ mode = 'device', zugriffModus }) {
   const qc = useQueryClient();
   const { data: status, isLoading, refetch } = useQuery({ queryKey: ['onedrive-status'], queryFn: () => api.onedrive.status(), retry: false });
   // Fehler aus dem Microsoft-Popup (Legacy-Redirect-Flow). Der Status allein
@@ -100,11 +293,7 @@ function OneDriveConnectionCard({ mode = 'device' }) {
       <CardContent className="space-y-3">
         {isLoading && <div className="flex items-center gap-2 text-sm text-muted-foreground"><Spinner className="h-4 w-4" />Verbindungsstatus wird geprüft…</div>}
         {!isLoading && !status?.connected && <p className="text-sm text-muted-foreground">Kein Microsoft-Konto verbunden.</p>}
-        {!isLoading && !status?.connected && zeigeRedirectConnect && (
-          <p className="text-xs text-amber-700 dark:text-amber-500">
-            Mit dem Verbinden erteilst du postbuch.net Vollzugriff auf <span className="font-semibold">alle</span> Ordner dieses OneDrive – siehe Hinweis oben.
-          </p>
-        )}
+        {!isLoading && !status?.connected && zeigeRedirectConnect && <UmfangHinweis modus={zugriffModus} verb="Verbinden" />}
         {!isLoading && status?.connected && !status?.tokenValid && (
           <div className="flex items-start gap-2 text-sm text-amber-600 dark:text-amber-500">
             <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
@@ -160,7 +349,7 @@ function OneDriveConnectionCard({ mode = 'device' }) {
  * Polling bis success. Der verbundene Zustand wird von OneDriveConnectionCard
  * gezeigt; diese Karte tritt dann zurück.
  */
-function OneDriveDeviceCard({ clientIdVorhanden }) {
+function OneDriveDeviceCard({ clientIdVorhanden, zugriffModus }) {
   const qc = useQueryClient();
   const { data: status, isLoading: statusLoading } = useQuery({ queryKey: ['onedrive-status'], queryFn: () => api.onedrive.status(), retry: false });
   const [flow, setFlow] = useState(null);   // { flowId, userCode, verificationUri, expiresIn }
@@ -258,9 +447,7 @@ function OneDriveDeviceCard({ clientIdVorhanden }) {
               {startMutation.isPending ? <Spinner className="h-3.5 w-3.5 mr-1.5" /> : <Link2 className="h-3.5 w-3.5 mr-1.5" />}
               Mit Microsoft verbinden
             </Button>
-            <p className="text-xs text-amber-700 dark:text-amber-500">
-              Mit dem Bestätigen erteilst du postbuch.net Vollzugriff auf <span className="font-semibold">alle</span> Ordner dieses OneDrive – siehe Hinweis oben.
-            </p>
+            <UmfangHinweis modus={zugriffModus} verb="Bestätigen" />
             <p className="text-xs text-muted-foreground">
               Beim Bestätigen kann Microsoft einen Hinweis auf einen „nicht verifizierten Herausgeber" zeigen – bei einer eigenen, privaten App-Registrierung ist das normal und kein Fehler.
             </p>
@@ -383,7 +570,7 @@ function RedirectUriDisplay({ appHost }) {
     </div>
   );
 }
-function OneDriveCredentialsCard({ onSaved, appHost }) {
+function OneDriveCredentialsCard({ onSaved, appHost, zugriffModus }) {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ['onedrive-credentials'],
@@ -461,7 +648,7 @@ function OneDriveCredentialsCard({ onSaved, appHost }) {
                   <>Unter <span className="font-semibold">Umleitungs-URI</span> die Plattform <span className="font-semibold">Web</span> und exakt die unten angezeigte Redirect-URI eintragen.</>,
                   <>Nach dem Registrieren auf der Übersichtsseite die <span className="font-semibold">Anwendungs-ID</span> notieren. Genau dieser Wert gehört hier in das Feld <span className="font-mono">Client ID</span>.</>,
                   <>Unter <span className="font-semibold">Clientanmeldeinformationen</span> einen neuen geheimen Clientschlüssel anlegen, Beschreibung <span className="font-mono">postbuch_app</span> wählen und danach sofort den angezeigten <span className="font-semibold">Wert</span> kopieren. Die <span className="font-semibold">Geheime ID</span> ist nicht der richtige Wert.</>,
-                  <>Unter <span className="font-semibold">API-Berechtigungen</span> Microsoft Graph → <span className="font-semibold">Delegierte Berechtigungen</span> öffnen und <span className="font-mono">Files.ReadWrite.All</span>, <span className="font-mono">User.Read</span> sowie <span className="font-mono">offline_access</span> hinzufügen. <span className="font-semibold">Achtung:</span> <span className="font-mono">Files.ReadWrite.All</span> ist Vollzugriff auf <span className="font-semibold">alle</span> Ordner dieses OneDrive – siehe Warnung oben. Eine engere Berechtigung gibt es nicht, ohne die Dateien in einen abgeschotteten App-Ordner zu sperren.</>,
+                  <ScopeSchritt modus={zugriffModus} />,
                 ]}
               />
             </SetupGuideCard>
@@ -514,7 +701,7 @@ function OneDriveCredentialsCard({ onSaved, appHost }) {
  * Bewusst schlanker als OneDriveCredentialsCard: kein Secret, keine Redirect-URI.
  * Speichert über denselben credentials-Endpunkt (nur Client-ID + Tenant).
  */
-function OneDriveDeviceClientIdCard({ onSaved }) {
+function OneDriveDeviceClientIdCard({ onSaved, zugriffModus }) {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ['onedrive-credentials'],
@@ -575,7 +762,7 @@ function OneDriveDeviceClientIdCard({ onSaved }) {
                   <>Im Microsoft Azure Portal, <a className="font-semibold underline" href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener noreferrer">App-Registrierungen</a> auf <span className="font-semibold">Neue Registrierung</span>.</>,
                   <>Name z. B. <span className="font-mono">postbuch</span>. Für ein privates OneDrive den Kontotyp <span className="font-semibold">Persönliche Microsoft-Konten</span> wählen und unten <span className="font-mono">consumers</span> verwenden. Für Privat- und Organisationskonten gemeinsam den weitesten Kontotyp wählen und unten <span className="font-mono">common</span> eintragen. Umleitungs-URI <span className="font-semibold">leer lassen</span>.</>,
                   <>Unter <span className="font-semibold">Authentifizierung</span> → <span className="font-semibold">Öffentliche Clientflows zulassen</span> auf <span className="font-semibold">Ja</span> stellen und speichern.</>,
-                  <>Unter <span className="font-semibold">API-Berechtigungen</span> (Microsoft Graph, delegiert) <span className="font-mono">Files.ReadWrite.All</span>, <span className="font-mono">User.Read</span> und <span className="font-mono">offline_access</span> hinzufügen. <span className="font-semibold">Achtung:</span> <span className="font-mono">Files.ReadWrite.All</span> ist Vollzugriff auf <span className="font-semibold">alle</span> Ordner des OneDrive, das sich damit anmeldet – siehe Warnung oben.</>,
+                  <ScopeSchritt modus={zugriffModus} />,
                   <>Auf der Übersichtsseite die <span className="font-semibold">Anwendungs-ID (Client)</span> kopieren und unten eintragen. Kein Secret nötig.</>,
                 ]}
               />
@@ -618,6 +805,16 @@ export default function OneDriveSection({ settings, onSaved }) {
   // Verbindungen werden serverseitig beim Seed ausdrücklich auf legacy gesetzt.
   const mode = settings?.onedrive_auth_mode?.value === 'legacy' ? 'legacy' : 'device';
   const clientIdVorhanden = !!settings?.onedrive_client_id?.value;
+  // Läuft eine Umstellung, kommt ihr Ergebnis im Hintergrund nach dem
+  // Neuverbinden – solange nachfragen.
+  const { data: zugriff } = useQuery({
+    queryKey: ['onedrive-zugriff'],
+    queryFn: () => api.onedrive.zugriff(),
+    retry: false,
+    refetchInterval: (q) => (q.state.data?.umzug?.phase === 'warte_auf_verbindung' || q.state.data?.laeuft ? 3000 : false),
+  });
+  const { data: status } = useQuery({ queryKey: ['onedrive-status'], queryFn: () => api.onedrive.status(), retry: false });
+  const zugriffModus = zugriff?.modus || settings?.onedrive_zugriff?.value || 'appordner';
 
   const modeMutation = useMutation({
     mutationFn: (m) => api.onedrive.setAuthMode(m),
@@ -654,7 +851,7 @@ export default function OneDriveSection({ settings, onSaved }) {
         <h3 className="text-base font-semibold">OneDrive einrichten</h3>
       </div>
 
-      <OneDriveVollzugriffWarnung />
+      <OneDriveVollzugriffWarnung modus={zugriffModus} />
 
       <div className="space-y-2">
         <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">OneDrive-Verbindungsweg</p>
@@ -675,15 +872,19 @@ export default function OneDriveSection({ settings, onSaved }) {
 
       {mode === 'legacy' ? (
         <>
-          <OneDriveCredentialsCard onSaved={onSaved} appHost={settings?.app_host?.value} />
-          <OneDriveConnectionCard mode="legacy" />
+          <OneDriveCredentialsCard onSaved={onSaved} appHost={settings?.app_host?.value} zugriffModus={zugriffModus} />
+          <OneDriveConnectionCard mode="legacy" zugriffModus={zugriffModus} />
         </>
       ) : (
         <>
-          <OneDriveDeviceClientIdCard onSaved={onSaved} />
-          <OneDriveDeviceCard clientIdVorhanden={clientIdVorhanden} />
-          <OneDriveConnectionCard mode="device" />
+          <OneDriveDeviceClientIdCard onSaved={onSaved} zugriffModus={zugriffModus} />
+          <OneDriveDeviceCard clientIdVorhanden={clientIdVorhanden} zugriffModus={zugriffModus} />
+          <OneDriveConnectionCard mode="device" zugriffModus={zugriffModus} />
         </>
+      )}
+
+      {zugriff && (status?.connected || zugriff.umzug) && (
+        <OneDriveZugriffCard zugriff={zugriff} verbunden={!!status?.connected} />
       )}
     </div>
   );

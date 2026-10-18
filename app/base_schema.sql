@@ -68,6 +68,15 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 
+-- ZURÜCKGEHALTEN (Beitragsrückerstattung, service/bre.js). Bewusst eine eigene
+-- Anweisung außerhalb jedes DO-Blocks: Ein per ADD VALUE angelegter Wert darf
+-- erst nach dem COMMIT seiner Transaktion benutzt werden. Der Entrypoint führt
+-- diese Datei per `psql -f` ohne --single-transaction aus, jede Anweisung
+-- läuft also im Autocommit. Index und CHECK, die den Wert benutzen, stehen
+-- deshalb erst weiter unten als eigene Anweisungen. Der Wert hängt hinten an;
+-- kein Code darf `status` per < oder > vergleichen oder danach sortieren.
+ALTER TYPE postbuch.abrechnungsperiode_status ADD VALUE IF NOT EXISTS 'WITHHELD';
+
 -- ══════════════════════════════════════════════════════════════════
 -- LxD-TAXONOMIE
 -- ══════════════════════════════════════════════════════════════════
@@ -308,77 +317,6 @@ BEGIN
       HINT = 'Die Positionszuordnung zuerst im Erstattungsbescheid lösen.';
   END IF;
   RETURN OLD;
-END;
-$$;
-
--- Hält die automatische Differenzposition einer Arztrechnung aktuell:
--- vorhanden genau dann, wenn es reguläre Positionen gibt, ein Rechnungsbetrag
--- bekannt ist und beide Summen voneinander abweichen. Eine Differenzzeile, auf
--- die eine Kürzung verweist, wird nicht gelöscht, sondern auf 0 gesetzt.
-CREATE OR REPLACE FUNCTION postbuch.fn_arz_differenz_abgleichen(p_postid character varying) RETURNS void
-    LANGUAGE plpgsql
-    AS $$
-DECLARE
-  v_gesamt  numeric(12,2);
-  v_anzahl  integer;
-  v_summe   numeric(12,2);
-  v_diff    numeric(12,2);
-  v_subid   integer;
-  v_betrag  numeric(12,2);
-BEGIN
-  SELECT a.gesamtbetrag INTO v_gesamt
-    FROM postbuch.arztrechnung a WHERE a.postid = p_postid FOR UPDATE;
-  IF NOT FOUND THEN RETURN; END IF;
-
-  SELECT count(*), COALESCE(sum(e.betrag), 0) INTO v_anzahl, v_summe
-    FROM postbuch.arztrechnung_einzelposition e
-   WHERE e.postid = p_postid AND NOT e.ist_differenz;
-
-  v_diff := CASE WHEN v_gesamt IS NULL OR v_anzahl = 0 THEN 0 ELSE v_gesamt - v_summe END;
-
-  SELECT e.subid, e.betrag INTO v_subid, v_betrag
-    FROM postbuch.arztrechnung_einzelposition e
-   WHERE e.postid = p_postid AND e.ist_differenz;
-
-  IF v_diff = 0 THEN
-    IF v_subid IS NULL THEN RETURN; END IF;
-    IF EXISTS (SELECT 1 FROM postbuch.erstattungsbescheid_kuerzung k
-                WHERE k.arz_postid = p_postid AND k.arz_subid = v_subid) THEN
-      IF v_betrag IS DISTINCT FROM 0 THEN
-        UPDATE postbuch.arztrechnung_einzelposition SET betrag = 0
-         WHERE postid = p_postid AND subid = v_subid;
-      END IF;
-    ELSE
-      DELETE FROM postbuch.arztrechnung_einzelposition
-       WHERE postid = p_postid AND subid = v_subid;
-    END IF;
-    RETURN;
-  END IF;
-
-  IF v_subid IS NULL THEN
-    INSERT INTO postbuch.arztrechnung_einzelposition (postid, subid, leistung, betrag, ist_differenz)
-    SELECT p_postid, COALESCE(max(e.subid), 0) + 1, 'automatisch ermittelter Differenzbetrag', v_diff, true
-      FROM postbuch.arztrechnung_einzelposition e WHERE e.postid = p_postid;
-  ELSIF v_betrag IS DISTINCT FROM v_diff THEN
-    UPDATE postbuch.arztrechnung_einzelposition SET betrag = v_diff
-     WHERE postid = p_postid AND subid = v_subid;
-  END IF;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION postbuch.fn_tg_arz_differenz() RETURNS trigger
-    LANGUAGE plpgsql
-    AS $$
-BEGIN
-  IF TG_OP = 'DELETE' THEN
-    PERFORM postbuch.fn_arz_differenz_abgleichen(OLD.postid);
-  ELSE
-    PERFORM postbuch.fn_arz_differenz_abgleichen(NEW.postid);
-    IF TG_OP = 'UPDATE' AND OLD.postid IS DISTINCT FROM NEW.postid THEN
-      PERFORM postbuch.fn_arz_differenz_abgleichen(OLD.postid);
-    END IF;
-  END IF;
-  RETURN NULL;
 END;
 $$;
 
@@ -1049,18 +987,8 @@ CREATE TABLE IF NOT EXISTS postbuch.arztrechnung_einzelposition (
     begruendung text,
     faktor numeric(5,2),
     betrag numeric(12,2),
-    ist_differenz boolean NOT NULL DEFAULT false,
     PRIMARY KEY (postid, subid)
 );
-
--- Automatische Differenzposition: Weicht die Summe der Einzelpositionen vom
--- Rechnungsbetrag ab, führt fn_arz_differenz_abgleichen() genau eine Zeile
--- mit ist_differenz = true, die den Unterschied aufnimmt. Sie wird nur vom
--- Trigger gepflegt, nie von Hand bearbeitet.
-ALTER TABLE postbuch.arztrechnung_einzelposition
-    ADD COLUMN IF NOT EXISTS ist_differenz boolean NOT NULL DEFAULT false;
-CREATE UNIQUE INDEX IF NOT EXISTS arztrechnung_einzelposition_differenz_uq
-    ON postbuch.arztrechnung_einzelposition (postid) WHERE ist_differenz;
 
 -- Zahlungen zu Rechnungen (Arzt/Handwerker/generisch). Jede Zahlung wird mit
 -- Datum und Betrag geführt, auch eine gewöhnliche Vollzahlung; die Anzeige
@@ -1399,28 +1327,6 @@ CREATE OR REPLACE TRIGGER tg_block_arz_delete_with_eb
 CREATE OR REPLACE TRIGGER tg_block_arz_position_delete_with_eb
     BEFORE DELETE ON postbuch.arztrechnung_einzelposition
     FOR EACH ROW EXECUTE FUNCTION postbuch.fn_block_arz_position_delete_with_eb();
-
--- Differenzposition: zurückgestellt bis zum Commit, damit eine Transaktion
--- (KI-Insert, Archiv-Import, Wiederverarbeitung) alle Positionen fertig
--- schreiben kann, bevor die Differenz berechnet und eine freie subid vergeben
--- wird. Der Abgleich ist idempotent; seine eigene Schreibung löst ihn zwar
--- erneut aus, findet dann aber nichts mehr zu tun.
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'tg_arz_position_differenz'
-                   AND tgrelid = 'postbuch.arztrechnung_einzelposition'::regclass) THEN
-    CREATE CONSTRAINT TRIGGER tg_arz_position_differenz
-      AFTER INSERT OR UPDATE OR DELETE ON postbuch.arztrechnung_einzelposition
-      DEFERRABLE INITIALLY DEFERRED
-      FOR EACH ROW EXECUTE FUNCTION postbuch.fn_tg_arz_differenz();
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'tg_arz_gesamtbetrag_differenz'
-                   AND tgrelid = 'postbuch.arztrechnung'::regclass) THEN
-    CREATE CONSTRAINT TRIGGER tg_arz_gesamtbetrag_differenz
-      AFTER UPDATE OF gesamtbetrag ON postbuch.arztrechnung
-      DEFERRABLE INITIALLY DEFERRED
-      FOR EACH ROW EXECUTE FUNCTION postbuch.fn_tg_arz_differenz();
-  END IF;
-END $$;
 
 CREATE OR REPLACE TRIGGER tg_saldo_buchung_touch
     AFTER INSERT OR DELETE OR UPDATE ON postbuch.saldo_buchung_manuell
@@ -2533,11 +2439,31 @@ ALTER TABLE postbuch.postbuch ADD COLUMN IF NOT EXISTS qr_codes jsonb;
 -- bei CREATE TABLE postbuch.arztrechnung weiter oben (fachlich dort zuhause,
 -- da nur Arztrechnungen zusammengestellt und eingereicht werden).
 
--- Bestand an die Differenzregel angleichen. Idempotent: Rechnungen, deren
--- Positionen bereits stimmen bzw. deren Differenzzeile aktuell ist, bleiben
--- unberührt.
+-- Rückbau der gespeicherten Differenzposition (2.11.x): Die Abweichung
+-- zwischen Positionssumme und Rechnungsbetrag wird nur noch beim Lesen
+-- berechnet, nie gespeichert. Differenzzeilen ohne Kürzungsbezug entfallen;
+-- solche, auf die eine Kürzung verweist, bleiben als gewöhnliche Position mit
+-- sprechendem Namen stehen, damit die Kürzung ihren Bezug behält. Trigger
+-- zuerst, damit beim Löschen keine zurückgestellten Ereignisse anstehen.
+DROP TRIGGER IF EXISTS tg_arz_position_differenz ON postbuch.arztrechnung_einzelposition;
+DROP TRIGGER IF EXISTS tg_arz_gesamtbetrag_differenz ON postbuch.arztrechnung;
+DROP FUNCTION IF EXISTS postbuch.fn_tg_arz_differenz();
+DROP FUNCTION IF EXISTS postbuch.fn_arz_differenz_abgleichen(character varying);
 DO $$ BEGIN
-  PERFORM postbuch.fn_arz_differenz_abgleichen(a.postid) FROM postbuch.arztrechnung a;
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'postbuch' AND table_name = 'arztrechnung_einzelposition'
+                AND column_name = 'ist_differenz') THEN
+    EXECUTE $q$
+      DELETE FROM postbuch.arztrechnung_einzelposition e
+       WHERE e.ist_differenz
+         AND NOT EXISTS (SELECT 1 FROM postbuch.erstattungsbescheid_kuerzung k
+                          WHERE k.arz_postid = e.postid AND k.arz_subid = e.subid)$q$;
+    EXECUTE $q$
+      UPDATE postbuch.arztrechnung_einzelposition
+         SET leistung = 'Differenzbetrag zum Rechnungsbetrag (früher automatisch ermittelt)'
+       WHERE ist_differenz$q$;
+    ALTER TABLE postbuch.arztrechnung_einzelposition DROP COLUMN ist_differenz;
+  END IF;
 END $$;
 
 -- Zahlungen: Jede bezahlte Rechnung mit zu zahlendem Betrag führt mindestens
@@ -2558,3 +2484,120 @@ SELECT r.postid, r.bezahlt_am, r.gesamtbetrag - COALESCE(r.bestritten_betrag, 0)
    AND r.gesamtbetrag IS NOT NULL
    AND r.gesamtbetrag - COALESCE(r.bestritten_betrag, 0) > 0
    AND NOT EXISTS (SELECT 1 FROM postbuch.rechnung_zahlung z WHERE z.postid = r.postid);
+
+-- ============================================================================
+-- Beitragsrückerstattung (BRE) überwachen (service/bre.js)
+-- ============================================================================
+-- Für Menschen mit PKV lässt sich eine BRE-Überwachung einschalten. Beim
+-- Einreichen hält postbuch.net Arztrechnungen dann je Behandlungsjahr in einer
+-- eigenen PKV-Periode im Status WITHHELD zurück, solange sich das Einreichen
+-- nicht lohnt. Ob ein Jahr verwirkt ist, wird nie gespeichert, sondern immer
+-- aus den eingereichten Rechnungen abgeleitet.
+
+ALTER TABLE postbuch.mensch
+    ADD COLUMN IF NOT EXISTS bre_ueberwachen boolean NOT NULL DEFAULT false,
+    ADD COLUMN IF NOT EXISTS bre_betrag numeric(12,2),
+    ADD COLUMN IF NOT EXISTS bre_abschlag numeric(5,2);
+
+DO $$
+BEGIN
+  ALTER TABLE postbuch.mensch DROP CONSTRAINT IF EXISTS mensch_bre_betrag_ck;
+  ALTER TABLE postbuch.mensch ADD CONSTRAINT mensch_bre_betrag_ck CHECK (
+    bre_betrag IS NULL OR bre_betrag >= 0
+  );
+  ALTER TABLE postbuch.mensch DROP CONSTRAINT IF EXISTS mensch_bre_abschlag_ck;
+  ALTER TABLE postbuch.mensch ADD CONSTRAINT mensch_bre_abschlag_ck CHECK (
+    bre_abschlag IS NULL OR (bre_abschlag >= 0 AND bre_abschlag <= 100)
+  );
+  -- Überwachung nur für Menschen (keine Tiere) mit PKV und gesetztem Betrag.
+  -- routes/menschen.js schaltet sie beim Abwählen der PKV selbst mit ab.
+  ALTER TABLE postbuch.mensch DROP CONSTRAINT IF EXISTS mensch_bre_nur_pkv_ck;
+  ALTER TABLE postbuch.mensch ADD CONSTRAINT mensch_bre_nur_pkv_ck CHECK (
+    NOT bre_ueberwachen OR (pkv AND NOT ist_tier AND bre_betrag IS NOT NULL)
+  );
+END $$;
+
+-- Rechnung zählt nicht für die BRE (z. B. Vorsorge oder Kulanz der PKV). Auch
+-- an eingereichten Rechnungen änderbar; „verwirkt“ ist dann sofort neu bewertet.
+ALTER TABLE postbuch.arztrechnung
+    ADD COLUMN IF NOT EXISTS bre_unbeachtlich boolean NOT NULL DEFAULT false;
+
+-- BRE-Periode: PKV-Periode mit Behandlungsjahr und der beim Anlegen
+-- gespeicherten Schwelle. Beide bleiben nach dem Einreichen als Historie stehen.
+ALTER TABLE postbuch.abrechnungsperiode_buch
+    ADD COLUMN IF NOT EXISTS bre_jahr integer,
+    ADD COLUMN IF NOT EXISTS bre_schwelle numeric(12,2);
+
+-- Benutzt den Enum-Wert WITHHELD und steht deshalb bewusst hier, weit nach dem
+-- ALTER TYPE … ADD VALUE (eigene Transaktion, siehe oben).
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                  WHERE conname = 'ap_buch_bre_ck'
+                    AND conrelid = 'postbuch.abrechnungsperiode_buch'::regclass) THEN
+    ALTER TABLE postbuch.abrechnungsperiode_buch ADD CONSTRAINT ap_buch_bre_ck CHECK (
+      (bre_jahr IS NULL AND bre_schwelle IS NULL AND status <> 'WITHHELD')
+      OR (kostentraeger = 'PKV' AND bre_jahr BETWEEN 2000 AND 2999
+          AND bre_schwelle IS NOT NULL AND bre_schwelle >= 0)
+    );
+  END IF;
+END $$;
+
+-- Je Person und Jahr höchstens eine zurückhaltende Periode.
+CREATE UNIQUE INDEX IF NOT EXISTS ap_buch_bre_withheld_uq
+    ON postbuch.abrechnungsperiode_buch (person, kostentraeger, bre_jahr)
+    WHERE status = 'WITHHELD';
+
+-- Entscheidung einer Abrechnungssession, beim Start unter der Periodensperre
+-- berechnet und beim Bestätigen verbindlich:
+--   _abrechnung_session_ziel.bre_halten     { postid: zieljahr } je Ziel
+--   _abrechnung_sessions.bre_entscheidung   { person: { aufgeben: [..], wert } }
+ALTER TABLE postbuch._abrechnung_session_ziel
+    ADD COLUMN IF NOT EXISTS bre_halten jsonb;
+ALTER TABLE postbuch._abrechnung_sessions
+    ADD COLUMN IF NOT EXISTS bre_entscheidung jsonb;
+
+-- Behandlungsjahre einer Arztrechnung: die verschiedenen Jahre der
+-- Positionsdaten, ersatzweise das Jahr des Rechnungsdatums, sonst leer.
+-- Ob das Jahr geschätzt ist, ermittelt service/bre.js separat.
+CREATE OR REPLACE FUNCTION postbuch.arz_behandlungsjahre(p_postid character varying)
+RETURNS integer[]
+    LANGUAGE sql STABLE
+    AS $$
+  SELECT COALESCE(
+    (SELECT array_agg(j ORDER BY j)
+       FROM (SELECT DISTINCT EXTRACT(YEAR FROM e.behandlungs_datum)::integer AS j
+               FROM postbuch.arztrechnung_einzelposition e
+              WHERE e.postid = p_postid AND e.behandlungs_datum IS NOT NULL) jahre),
+    (SELECT ARRAY[EXTRACT(YEAR FROM a.rechnungsdatum)::integer]
+       FROM postbuch.arztrechnung a
+      WHERE a.postid = p_postid AND a.rechnungsdatum IS NOT NULL),
+    '{}'::integer[]
+  )
+$$;
+
+-- Unverschlüsselte Backups ohne Zugangsdaten (jobs/backup.js). pg_dump läuft
+-- dafür als Rolle postbuch_backup mit --enable-row-security und übergibt die
+-- erlaubten Setting-Schlüssel in postbuch.backup_keys. Die Policy ist
+-- fail-closed: Ohne diese Einstellung sieht die Rolle keine einzige Zeile.
+-- Die App selbst arbeitet als Superuser und ist davon nicht betroffen. Die
+-- Policy nennt keine Rolle, damit ein Dump nicht von postbuch_backup abhängt.
+DO $$ BEGIN
+  CREATE ROLE postbuch_backup NOLOGIN;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+GRANT USAGE ON SCHEMA postbuch TO postbuch_backup;
+GRANT SELECT ON ALL TABLES IN SCHEMA postbuch TO postbuch_backup;
+GRANT SELECT ON ALL SEQUENCES IN SCHEMA postbuch TO postbuch_backup;
+ALTER DEFAULT PRIVILEGES IN SCHEMA postbuch GRANT SELECT ON TABLES TO postbuch_backup;
+ALTER DEFAULT PRIVILEGES IN SCHEMA postbuch GRANT SELECT ON SEQUENCES TO postbuch_backup;
+ALTER TABLE postbuch._settings ENABLE ROW LEVEL SECURITY;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies
+                  WHERE schemaname = 'postbuch' AND tablename = '_settings'
+                    AND policyname = 'settings_backup_ohne_zugangsdaten') THEN
+    CREATE POLICY settings_backup_ohne_zugangsdaten ON postbuch._settings
+      FOR SELECT
+      USING (key = ANY (string_to_array(current_setting('postbuch.backup_keys', true), ',')));
+  END IF;
+END $$;

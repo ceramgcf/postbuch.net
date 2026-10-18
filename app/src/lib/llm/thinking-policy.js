@@ -153,3 +153,163 @@ export async function resolveReasoningEffort(prov, model, context, viaMcp, zweck
   if (state === 'full')        return { effort: policyReasoningEffort(viaMcp, zweck), probe: false };
   return { effort: policyReasoningEffort(viaMcp, zweck), probe: true };
 }
+
+// ── Extraktion: wenig Nachdenken ─────────────────────────────────────────────
+//
+// Alles, was über callModel() in lib/llm.js läuft (Voranalyse, Dokumentanalyse,
+// Parsing, Titel), ist Extraktion: Das Ergebnis steht im Dokument. Reasoning-
+// Modelle denken serverseitig per Default und bezahlen das aus demselben
+// max_tokens-Budget wie die Antwort; ist es aufgebraucht, kommt die Antwort
+// abgeschnitten oder leer zurück. Ganz ohne Nachdenken halten manche Modelle das
+// Schema aber nicht ein oder lesen schlechter. Deshalb gilt für die Extraktion
+// niedriger Effort ('low') als Standard und „aus“ nur für Modelle, bei denen
+// eine Messung das als besser belegt (EXTRAKTION_OHNE_NACHDENKEN). Ausnahme
+// bleibt der benannte Batch-Zweck 'profilierung'; der Chat läuft über
+// service/chat-agent.js und ist davon nicht betroffen.
+//
+// Welche Felder ein Modell annimmt, unterscheidet sich je Modell und ändert sich
+// mit jeder Generation. Statt einer Feldliste je Modell probiert die Extraktion
+// eine feste Stufenleiter und merkt sich je (Provider, Modell, Modus), was
+// angenommen wurde. Eine abgelehnte Stufe kostet einen HTTP-400 ohne Token-
+// Verbrauch; gemerkt wird nur im Prozess, nach einem Neustart wird einmal neu
+// ausgehandelt. Getrennt von llm_reasoning_capability, weil der Chat dort für
+// denselben Kontext andere Zielwerte lernt.
+
+/** Zwecke, die bewusst nachdenken dürfen. Alles andere ist Extraktion. */
+export function istExtraktion(zweck) {
+  return zweck !== 'profilierung';
+}
+
+/**
+ * Modelle, die bei der Extraktion ohne Nachdenken nachweislich besser sind.
+ * Nur mit Messung eintragen (Quelle und Datum im Kommentar), nie auf Verdacht:
+ * Ein schlechter gelesener Wert ist so gültig wie ein guter, die App kann das
+ * nicht selbst lernen.
+ */
+const EXTRAKTION_OHNE_NACHDENKEN = [
+  // Rezept-Extraktion 24 Scans, 2026-10 (internaldocs/testablaeufe/TESTPLAN-2.12.0.md, B13):
+  // aus 67 % / Ø 23 s, Standard 64 % mit Abbrüchen, weil das Nachdenken das
+  // max_tokens-Budget aufbraucht.
+  /^mistral-large-4(-|$)/,
+];
+
+export function ohneNachdenkenBesser(model) {
+  return EXTRAKTION_OHNE_NACHDENKEN.some((re) => re.test(String(model || '')));
+}
+
+/**
+ * Liefert ein Modell aus der Liste ohne Nachdenken keine schemagültige Antwort,
+ * wiederholt analyzeDocument mit diesem Zweck ('low') und merkt sich das Modell.
+ */
+export const ZWECK_EXTRAKTION_NACHDENKEN = 'extraktion-nachdenken';
+const nachdenkenNoetigGemerkt = new Set(); // 'providerId model'
+
+function schluessel(providerId, model) {
+  return `${providerId ?? ''} ${model}`;
+}
+
+export function nachdenkenNoetig(providerId, model) {
+  return nachdenkenNoetigGemerkt.has(schluessel(providerId, model));
+}
+
+export function merkeNachdenkenNoetig(providerId, model) {
+  nachdenkenNoetigGemerkt.add(schluessel(providerId, model));
+}
+
+/** Modus eines Extraktionsaufrufs: 'aus' oder 'low'. */
+export function extraktionsModus(providerId, model, zweck) {
+  if (zweck === ZWECK_EXTRAKTION_NACHDENKEN) return 'low';
+  return ohneNachdenkenBesser(model) && !nachdenkenNoetig(providerId, model) ? 'aus' : 'low';
+}
+
+/**
+ * Anthropic-Stufenleiter (Messages API, gemessen 2026-10 an Haiku/Sonnet/Opus 5.5):
+ *   disabled       – ältere Modelle und Haiku 5.5
+ *   between_tools  – Modelle, die `disabled` mit Verweis darauf ablehnen (Sonnet 5.5);
+ *                    ohne Werkzeuge denkt das Modell dann gar nicht
+ *   minimal        – adaptiv mit niedrigem Effort; Start im Modus 'low' und für
+ *                    nicht abschaltbare Modelle (Opus 5.5, Fable)
+ *   ohne           – Modell kennt keine Thinking-Felder
+ */
+const ANTHROPIC_STUFEN = ['disabled', 'between_tools', 'minimal', 'ohne'];
+const anthropicStufeGemerkt = new Map(); // 'modus providerId model' -> Stufenindex
+
+/** Body-Felder einer Stufe. */
+export function anthropicExtraktionsFelder(stufe) {
+  switch (ANTHROPIC_STUFEN[stufe]) {
+    case 'disabled':      return { thinking: { type: 'disabled' } };
+    case 'between_tools': return { thinking: { type: 'between_tools' } };
+    case 'minimal':       return { thinking: { type: 'adaptive' }, output_config: { effort: MINIMAL_EFFORT } };
+    default:              return {};
+  }
+}
+
+/** Beginnt die Aushandlung: Stufe, mit der der erste Versuch läuft. */
+export function anthropicExtraktionsStufe(providerId, model, modus = 'low') {
+  const gemerkt = anthropicStufeGemerkt.get(`${modus} ${schluessel(providerId, model)}`);
+  if (gemerkt != null) return gemerkt;
+  return modus === 'aus' && thinkingAbschaltbar(model) ? 0 : ANTHROPIC_STUFEN.indexOf('minimal');
+}
+
+/**
+ * Nach einem HTTP-400: Lag es an den Thinking-Feldern, liefert die Funktion die
+ * nächste Stufe (und merkt sie), sonst null. Nennt die Fehlermeldung
+ * `between_tools` ausdrücklich, springt sie direkt dorthin.
+ */
+export function anthropicNaechsteStufe(providerId, model, modus, stufe, status, text) {
+  const t = String(text || '');
+  if (status !== 400 || !/thinking|effort/i.test(t)) return null;
+  if (stufe >= ANTHROPIC_STUFEN.length - 1) return null;
+  const bt = ANTHROPIC_STUFEN.indexOf('between_tools');
+  const naechste = /between_tools/i.test(t) && stufe < bt && !/between_tools.{0,40}not supported/i.test(t)
+    ? bt
+    : stufe + 1;
+  anthropicStufeGemerkt.set(`${modus} ${schluessel(providerId, model)}`, naechste);
+  return naechste;
+}
+
+/** Erfolgreiche Stufe festhalten (spart beim nächsten Aufruf die Aushandlung). */
+export function anthropicStufeBestaetigt(providerId, model, modus, stufe) {
+  anthropicStufeGemerkt.set(`${modus} ${schluessel(providerId, model)}`, stufe);
+}
+
+// OpenAI-kompatibel: Modus 'low' sendet `reasoning_effort: "low"`, Modus 'aus'
+// `"none"`. Lehnt das Modell den Wert ab, nennen OpenAI und Mistral in der
+// 400-Antwort die erlaubten Werte. 'aus' nimmt den niedrigsten davon bis
+// höchstens 'low', 'low' den höchsten darunter (z. B. Mistral: nur none/high
+// → none). Passt nichts oder fehlt eine verwertbare Liste, wird der Parameter
+// weggelassen (Modellstandard).
+const EFFORT_REIHENFOLGE = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const openaiEffortGemerkt = new Map(); // 'modus providerId model' -> Wert | null (= weglassen)
+
+/** Wert für den nächsten Extraktionsaufruf; undefined = Parameter weglassen. */
+export function openaiExtraktionsEffort(providerId, model, modus = 'low') {
+  const k = `${modus} ${schluessel(providerId, model)}`;
+  if (!openaiEffortGemerkt.has(k)) return modus === 'aus' ? 'none' : MINIMAL_EFFORT;
+  return openaiEffortGemerkt.get(k) ?? undefined;
+}
+
+/**
+ * Nach einem HTTP-400 wegen reasoning_effort: lernt den passenden erlaubten
+ * Wert aus der Fehlermeldung (oder „weglassen“) und liefert ihn zurück.
+ */
+export function openaiEffortAbgelehnt(providerId, model, modus, abgelehnt, text) {
+  const t = String(text || '');
+  const genannt = new Set();
+  for (const m of t.matchAll(/['"`]([a-z]+)['"`]/gi)) genannt.add(m[1].toLowerCase());
+  const ab = EFFORT_REIHENFOLGE.indexOf(abgelehnt);
+  const obergrenze = EFFORT_REIHENFOLGE.indexOf(MINIMAL_EFFORT);
+  const kandidaten = EFFORT_REIHENFOLGE.filter((w, i) => i !== ab && i <= obergrenze && genannt.has(w));
+  const wert = (modus === 'aus'
+    ? kandidaten.find((w) => EFFORT_REIHENFOLGE.indexOf(w) > ab)
+    : kandidaten.filter((w) => EFFORT_REIHENFOLGE.indexOf(w) < ab).pop()) ?? null;
+  openaiEffortGemerkt.set(`${modus} ${schluessel(providerId, model)}`, wert);
+  return wert ?? undefined;
+}
+
+/** Nur für Tests: gelernte Extraktionszustände verwerfen. */
+export function _resetExtraktionsZustand() {
+  anthropicStufeGemerkt.clear();
+  openaiEffortGemerkt.clear();
+  nachdenkenNoetigGemerkt.clear();
+}

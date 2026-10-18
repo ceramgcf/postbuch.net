@@ -14,15 +14,17 @@
  */
 
 export const MODEL_CLASSES = [
-  { key: 'preanalysis', settingKey: 'llm_model_preanalysis', label: 'Voranalyse',
+  { key: 'analyse', modus: 'einfach', settingKey: 'llm_model_analyse', label: 'Analysemodell',
+    desc: 'Analysiert jedes Dokument, egal wie lang oder schwierig' },
+  { key: 'preanalysis', modus: 'gestaffelt', settingKey: 'llm_model_preanalysis', label: 'Voranalyse',
     desc: 'Schwierigkeitseinschätzung – Kette: Voranalyse → Leicht → Letzter Fallback' },
-  { key: 'large', settingKey: 'llm_model_large', label: 'Langes Dokument',
+  { key: 'large', modus: 'gestaffelt', settingKey: 'llm_model_large', label: 'Langes Dokument',
     desc: 'Dokumente mit mehr als 10 Seiten' },
-  { key: 'leicht', settingKey: 'llm_model_leicht', label: 'Leicht',
+  { key: 'leicht', modus: 'gestaffelt', settingKey: 'llm_model_leicht', label: 'Leicht',
     desc: 'Einfache Dokumente (difficulty ≤ 0.25)' },
-  { key: 'mittel', settingKey: 'llm_model_mittel', label: 'Mittel',
+  { key: 'mittel', modus: 'gestaffelt', settingKey: 'llm_model_mittel', label: 'Mittel',
     desc: 'Mittelschwere Dokumente (difficulty 0.25–0.5) – fällt auf Leicht zurück' },
-  { key: 'schwierig', settingKey: 'llm_model_schwierig', label: 'Schwierig',
+  { key: 'schwierig', modus: 'gestaffelt', settingKey: 'llm_model_schwierig', label: 'Schwierig',
     desc: 'Komplexe Dokumente (difficulty ≥ 0.5) – fällt auf Mittel → Leicht zurück' },
   { key: 'fallback', settingKey: 'llm_model_fallback', label: 'Letzter Fallback',
     desc: 'Notfallmodell am Ende jeder Kette, wenn alle anderen Modelle fehlschlagen' },
@@ -36,3 +38,17 @@ export const MODEL_CLASSES = [
   { key: 'akte_vorschlag', group: 'chat', settingKey: 'akte_model_vorschlag', label: 'Akte: Metadaten-Vorschlag',
     desc: 'Schlägt Betreff, Beschreibung und Schlagwörter einer Akte vor (JSON-Antwort)' },
 ];
+
+/**
+ * Modellwahl der Dokumentanalyse, Gegenstück zu `modellwahl()` in
+ * `app/src/lib/llm/model-classes.js`. Ohne gespeicherten Wert bleibt es wie
+ * im Backend bei der Staffelung.
+ */
+export function modellwahlAus(settings) {
+  return settings?.llm_modellwahl?.value === 'einfach' ? 'einfach' : 'gestaffelt';
+}
+
+/** Klassen, die in der gegebenen Modellwahl benutzt werden. */
+export function klassenFuer(modellwahl) {
+  return MODEL_CLASSES.filter((c) => !c.modus || c.modus === modellwahl);
+}

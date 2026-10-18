@@ -38,6 +38,8 @@
 
 import { Router } from 'express';
 import * as migration from '../service/storage-migration.js';
+import { pruefeWurzel } from '../service/storage-setup.js';
+import { BACKENDS } from '../lib/storage/index.js';
 
 const router = Router();
 
@@ -81,10 +83,9 @@ router.get('/aktuell', async (_req, res) => {
 router.post('/ziel-vorbereiten', async (req, res) => {
   try {
     const { backend, rootPath } = req.body || {};
-    const p = String(rootPath || 'postbuch').trim();
-    if (p.length > 200 || p.includes('..')) {
-      return res.status(400).json({ error: 'Ungültiger Stammpfad' });
-    }
+    if (!BACKENDS.includes(backend)) return res.status(400).json({ error: 'Unbekanntes Ablage-Backend' });
+    if (String(rootPath || '').length > 200) return res.status(400).json({ error: 'Ungültiger Stammpfad' });
+    const p = await pruefeWurzel(rootPath || 'postbuch', backend);
     res.json(await migration.bereiteZielVor(backend, p));
   } catch (err) { fehler(res, err, 'ziel-vorbereiten'); }
 });

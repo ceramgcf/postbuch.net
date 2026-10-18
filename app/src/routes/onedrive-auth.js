@@ -22,6 +22,7 @@ import db from '../db.js';
 import { loadDynamicSettings } from '../config.js';
 import { startPolling as startOnedrivePolling } from '../service/onedrive-watcher.js';
 import { requireAuth, requireAdmin } from '../middleware/auth.js';
+import * as zugriff from '../service/onedrive-zugriff.js';
 
 const router = Router();
 const adminOnly = [requireAuth, requireAdmin];
@@ -195,6 +196,9 @@ async function afterOnedriveConnected(mode) {
   // Poller sofort anwenden (ohne App-Neustart).
   await startOnedrivePolling();
 
+  // Eine offene Umstellung des Zugriffsumfangs wartet genau auf diese
+  // Anmeldung. Läuft im Hintergrund; das Ergebnis steht im Umzugszustand.
+  zugriff.setzeFort().catch(err => console.error('[onedrive-auth] Zugriffsumstellung:', err.message));
 }
 
 async function configuredRedirectUri() {
@@ -430,6 +434,48 @@ router.post('/disconnect', ...adminOnly, async (req, res) => {
   }
 });
 
+// ── Zugriffsumfang (App-Ordner ↔ Vollzugriff) ─────────────────────────────────
+// Ablauf und Zustände: service/onedrive-zugriff.js.
+
+function sendeZugriffsFehler(res, err, ort) {
+  const status = err.statusCode || err.status;
+  if (status && status < 500) return res.status(status === 401 || status === 403 ? 409 : status).json({ error: err.message });
+  console.error(`[onedrive-auth] ${ort} Fehler:`, err);
+  return res.status(500).json({ error: err.message });
+}
+
+router.get('/zugriff', ...adminOnly, async (_req, res) => {
+  try {
+    res.json(await zugriff.getStatus());
+  } catch (err) {
+    sendeZugriffsFehler(res, err, '/zugriff');
+  }
+});
+
+router.post('/zugriff/umstellen', ...adminOnly, async (req, res) => {
+  try {
+    res.json(await zugriff.starteUmstellung(req.body?.ziel));
+  } catch (err) {
+    sendeZugriffsFehler(res, err, '/zugriff/umstellen');
+  }
+});
+
+router.post('/zugriff/fortsetzen', ...adminOnly, async (_req, res) => {
+  try {
+    res.json(await zugriff.setzeFort());
+  } catch (err) {
+    sendeZugriffsFehler(res, err, '/zugriff/fortsetzen');
+  }
+});
+
+router.post('/zugriff/quittieren', ...adminOnly, async (_req, res) => {
+  try {
+    res.json(await zugriff.quittiere());
+  } catch (err) {
+    sendeZugriffsFehler(res, err, '/zugriff/quittieren');
+  }
+});
+
 // ── Device-Code-Flow (eigene Public-Client-App) ───────────────────────────────
 //
 // Kein WebSocket vorhanden → dasselbe Muster wie jobs/tracker.js: kurzlebiger
@@ -482,42 +528,43 @@ router.post('/device/start', ...adminOnly, async (req, res) => {
     activeDeviceFlowId = flowId;
 
     // Promise, die resolved, sobald MSAL den User-Code liefert (erster Callback).
-    const codeReady = new Promise((resolve, reject) => {
-      const request = onedrive.createDeviceCodeRequest((info) => {
-        flow.userCode = info.userCode;
-        flow.verificationUri = info.verificationUri;
-        // Ablauf an Microsofts expiresIn koppeln (typ. 15 Min), Fallback 15 Min.
-        const ttlSec = Number.isFinite(info.expiresIn) && info.expiresIn > 0 ? info.expiresIn : 900;
-        flow.expiresAt = Date.now() + ttlSec * 1000;
-        resolve(info);
-      });
-      flow.request = request;
-
-      // Hintergrund-Token-Erwerb — NICHT awaiten, bevor geantwortet wird.
-      onedrive.acquireTokenByDeviceCode(request)
-        .then(async (result) => {
-          // Flow könnte zwischenzeitlich verworfen worden sein.
-          if (!deviceFlows.has(flowId)) return;
-          try {
-            await afterOnedriveConnected('device');
-            flow.account = result?.account?.username || result?.account?.homeAccountId || null;
-            flow.status = 'success';
-            console.log(`[onedrive-auth] ✅ Device-Code-Flow abgeschlossen. Account: ${flow.account || 'Unbekannt'}`);
-          } catch (e) {
-            flow.status = 'error';
-            flow.error = e.message;
-            console.error('[onedrive-auth] /device Folgeaktionen fehlgeschlagen:', e);
-          }
-        })
-        .catch((err) => {
-          if (deviceFlows.has(flowId)) {
-            flow.status = 'error';
-            flow.error = err.message;
-          }
-          console.error('[onedrive-auth] /device/start Token-Erwerb Fehler:', err.message);
-          reject(err); // greift nur, wenn der Fehler VOR dem ersten Callback kam
-        });
+    let codeResolve;
+    let codeReject;
+    const codeReady = new Promise((resolve, reject) => { codeResolve = resolve; codeReject = reject; });
+    const request = await onedrive.createDeviceCodeRequest((info) => {
+      flow.userCode = info.userCode;
+      flow.verificationUri = info.verificationUri;
+      // Ablauf an Microsofts expiresIn koppeln (typ. 15 Min), Fallback 15 Min.
+      const ttlSec = Number.isFinite(info.expiresIn) && info.expiresIn > 0 ? info.expiresIn : 900;
+      flow.expiresAt = Date.now() + ttlSec * 1000;
+      codeResolve(info);
     });
+    flow.request = request;
+
+    // Hintergrund-Token-Erwerb — NICHT awaiten, bevor geantwortet wird.
+    onedrive.acquireTokenByDeviceCode(request)
+      .then(async (result) => {
+        // Flow könnte zwischenzeitlich verworfen worden sein.
+        if (!deviceFlows.has(flowId)) return;
+        try {
+          await afterOnedriveConnected('device');
+          flow.account = result?.account?.username || result?.account?.homeAccountId || null;
+          flow.status = 'success';
+          console.log(`[onedrive-auth] ✅ Device-Code-Flow abgeschlossen. Account: ${flow.account || 'Unbekannt'}`);
+        } catch (e) {
+          flow.status = 'error';
+          flow.error = e.message;
+          console.error('[onedrive-auth] /device Folgeaktionen fehlgeschlagen:', e);
+        }
+      })
+      .catch((err) => {
+        if (deviceFlows.has(flowId)) {
+          flow.status = 'error';
+          flow.error = err.message;
+        }
+        console.error('[onedrive-auth] /device/start Token-Erwerb Fehler:', err.message);
+        codeReject(err); // greift nur, wenn der Fehler VOR dem ersten Callback kam
+      });
 
     const info = await codeReady;
     res.json({

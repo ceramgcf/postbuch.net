@@ -23,6 +23,11 @@ export const CAP_KEYS = ['pdf', 'vision', 'tools', 'streaming', 'promptCache', '
 
 export const PROVIDER_TYPES = ['anthropic', 'bedrock', 'subscription', 'openai-compatible'];
 
+// Wire-Format-Abweichungen innerhalb von 'openai-compatible', ausgewertet in
+// providers/openai.js (applyDialect, bildBlock, antwortText) und im
+// Chat-Agenten. Einzige Quelle für die Whitelist in Lese- und Schreibpfad.
+export const DIALEKTE = ['openai', 'ollama', 'anthropic', 'lmstudio', 'mistral'];
+
 const CAPS_BY_TYPE = {
   anthropic:           { pdf: true,  vision: true,  tools: true, streaming: true, promptCache: true,  embeddings: false },
   bedrock:             { pdf: true,  vision: true,  tools: true, streaming: true, promptCache: true,  embeddings: false },
@@ -210,6 +215,14 @@ export const PROVIDER_PRESETS = [
   // geprüft hat, dass sein LM-Studio-Modell Bilder tatsächlich entgegennimmt.
   { key: 'lmstudio',   label: 'LM Studio',     typ: 'openai-compatible', baseUrl: 'http://host.docker.internal:1234/v1', dialekt: 'lmstudio',
     caps: { pdf: false, vision: false, tools: true, streaming: true, promptCache: false, embeddings: true }, kostenNull: true },
+  // Mistral: EU-Endpunkt als Vorgabe (Inferenz nur in EU/EFTA-Rechenzentren,
+  // laut Mistral 10 % Aufpreis; global wäre https://api.mistral.ai/v1).
+  // pdf bewusst false: Mistrals `document_url`-Block ist OCR vor dem LLM, im
+  // Chat nur per öffentlicher URL oder Files-API dokumentiert, und die
+  // Files-API fällt nicht unter Zero Data Retention. Stattdessen sehen die
+  // Vision-Modelle (Small, Medium, Large, Ministral) die gerasterten Seiten.
+  { key: 'mistral',    label: 'Mistral AI',    typ: 'openai-compatible', baseUrl: 'https://api.eu.mistral.ai/v1',    dialekt: 'mistral',
+    caps: { pdf: false, vision: true, tools: true, streaming: true, promptCache: true, embeddings: true } },
   { key: 'openrouter', label: 'OpenRouter',    typ: 'openai-compatible', baseUrl: 'https://openrouter.ai/api/v1',     dialekt: 'openai' },
   { key: 'custom',     label: 'Benutzerdefiniert', typ: 'openai-compatible', baseUrl: '',                             dialekt: 'openai' },
 ];
@@ -262,7 +275,7 @@ export function listProviders(settings) {
       typ,
       label: typeof raw.label === 'string' && raw.label.trim() ? raw.label.trim() : (vorhanden?.label || id),
       baseUrl: typeof raw.baseUrl === 'string' && raw.baseUrl.trim() ? raw.baseUrl.trim() : (vorhanden?.baseUrl ?? null),
-      dialekt: ['openai', 'ollama', 'anthropic', 'lmstudio'].includes(raw.dialekt)
+      dialekt: DIALEKTE.includes(raw.dialekt)
         ? raw.dialekt
         : (vorhanden?.dialekt || (typ === 'openai-compatible' ? 'openai' : typ)),
       aktiv: raw.aktiv !== false,

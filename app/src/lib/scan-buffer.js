@@ -19,3 +19,13 @@ export async function readScanBuffer(jobId) {
   const filePath = path.join(SCAN_BUFFER_DIR, `${jobId}.pdf`);
   return fs.readFile(filePath);
 }
+
+/** true, wenn für den Job noch eine gepufferte Scan-Datei existiert. */
+export async function scanBufferVorhanden(jobId) {
+  try {
+    await fs.access(path.join(SCAN_BUFFER_DIR, `${jobId}.pdf`));
+    return true;
+  } catch {
+    return false;
+  }
+}

@@ -43,10 +43,9 @@ function safeEqual(a, b) {
 /**
  * Prüft den X-Webhook-Token-Header gegen _settings.webhook_token.
  *
- * Der Token wird beim ersten Start von seed-settings.js erzeugt. Fehlt er in der
- * DB (sehr alte Installation, in der der Seed nie lief), wird durchgelassen und
- * gewarnt — sonst risse ein Update die Scan-Pipeline einer Fremdinstanz ab. Der
- * nginx-Block greift in dem Fall weiterhin.
+ * Der Token wird bei jedem App-Start von seed-settings.js erzeugt, falls er fehlt.
+ * Fehlt er trotzdem, wird abgewiesen (503), nie ungeprüft durchgelassen. Der
+ * Cleaner behält die Eingabedatei bei Nicht-2xx und versucht es erneut.
  */
 async function requireWebhookToken(req, res, next) {
   let expected = null;
@@ -59,8 +58,8 @@ async function requireWebhookToken(req, res, next) {
   }
 
   if (!expected) {
-    console.warn('[webhooks] Kein webhook_token in _settings — Aufruf ungeprüft durchgelassen.');
-    return next();
+    appLog('ERROR', 'webhooks', `Kein webhook_token in _settings – Aufruf abgewiesen: ${req.method} ${req.originalUrl}`);
+    return res.status(503).json({ error: 'Webhook-Token nicht eingerichtet' });
   }
 
   const provided = req.headers['x-webhook-token'];

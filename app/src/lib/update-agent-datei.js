@@ -13,6 +13,7 @@
  *     anforderung.kv    ← App → Agent: key=value, Agent löscht sie nach Abholung
  *     status.json       ← Agent → App: Zustand des laufenden/letzten Laufs
  *     update.log        ← Agent → App: Klartext, App liest nur den Schwanz
+ *     bestaetigung.kv   ← App → Agent: Quittung „Oberfläche nur über HTTPS“
  *     verlauf/<nonce>/  ← Agent: abgeschlossene Läufe (zugleich Nonce-Sperre)
  *
  * **`anforderung.kv` ist bewusst `key=value`, kein JSON.** Der Agent ist ein
@@ -52,6 +53,7 @@ const P = {
   agent:       () => path.join(UPDATE_DIR, 'agent.json'),
   anforderung: () => path.join(UPDATE_DIR, 'anforderung.kv'),
   status:      () => path.join(UPDATE_DIR, 'status.json'),
+  bestaetigung: () => path.join(UPDATE_DIR, 'bestaetigung.kv'),
   log:         () => path.join(UPDATE_DIR, 'update.log'),
 };
 
@@ -68,7 +70,7 @@ async function altesLogEntfernen() {
 
 const STATUS_WERTE = ['laeuft', 'erfolgreich', 'fehlgeschlagen', 'abgelehnt'];
 /** Läuft-Typen: eine echte Software-Version oder ein reiner Host-Konfigurationsauftrag. */
-const LAUF_TYP_WERTE = ['update', 'netzwerk', 'module', 'port', 'duckdns'];
+const LAUF_TYP_WERTE = ['update', 'netzwerk', 'module', 'port', 'duckdns', 'freigabe'];
 const MODI = ['normal', 'dry-run'];
 const DOCKER_ARTEN = ['direkt', 'sudo'];
 
@@ -97,7 +99,7 @@ async function leseJson(pfad) {
  *                    schreibbar:boolean, letzterLaufAm:string|null, version:number|null}>}
  */
 export async function leseAgentStatus() {
-  const leer = { vorhanden: false, modus: null, docker: null, schreibbar: false, letzterLaufAm: null, version: null, capabilities: [], lan: null, scannerProfilAktiv: null };
+  const leer = { vorhanden: false, modus: null, docker: null, schreibbar: false, letzterLaufAm: null, version: null, capabilities: [], lan: null, scannerProfilAktiv: null, freigaben: null, webBestaetigungBis: null };
   const o = await leseJson(P.agent());
   if (!o) return leer;
 
@@ -124,7 +126,7 @@ export async function leseAgentStatus() {
     capabilities: version === 1
       ? ['update']
       : (Array.isArray(o.capabilities)
-        ? o.capabilities.filter((c) => ['update', 'zielversion', 'netzwerk', 'module', 'port'].includes(c))
+        ? o.capabilities.filter((c) => ['update', 'zielversion', 'netzwerk', 'module', 'port', 'freigabe'].includes(c))
         : []),
     // Primäre LAN-Schnittstelle des Hosts (Interface der Default-Route). Nur
     // der Host-Agent kennt die echte Subnetzmaske; die App liest sie hier
@@ -133,6 +135,21 @@ export async function leseAgentStatus() {
     // von außerhalb des app-Containers kommt.
     lan: leseLan(o.lan),
     scannerProfilAktiv: typeof o.scannerProfilAktiv === 'boolean' ? o.scannerProfilAktiv : null,
+    // Port-Freigaben aus der .env des Hosts (SCANNER_BIND/WEB_BIND): lan,
+    // lokal oder anders (von Hand gesetzte Adresse).
+    freigaben: leseFreigaben(o.freigaben),
+    // Offene Bestätigung nach „Oberfläche nur über HTTPS“ (ISO-Zeitpunkt).
+    webBestaetigungBis: typeof o.webBestaetigungBis === 'string'
+      && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(o.webBestaetigungBis) ? o.webBestaetigungBis : null,
+  };
+}
+
+const FREIGABE_WERTE = ['lan', 'lokal', 'anders'];
+function leseFreigaben(f) {
+  if (!f || typeof f !== 'object' || Array.isArray(f)) return null;
+  return {
+    scanner: FREIGABE_WERTE.includes(f.scanner) ? f.scanner : null,
+    web: FREIGABE_WERTE.includes(f.web) ? f.web : null,
   };
 }
 
@@ -197,7 +214,7 @@ export async function schreibeAnforderung({ zielVersion, erwarteterSha256, angef
 }
 
 export async function schreibeHostAnforderung({ typ, wert, secret = '', angefordertVon }) {
-  const erlaubte = new Set(['netzwerk', 'module', 'port', 'duckdns']);
+  const erlaubte = new Set(['netzwerk', 'module', 'port', 'duckdns', 'freigabe']);
   if (!erlaubte.has(typ)) throw new Error('Unbekannter Hostauftrag.');
   const sauber = String(wert || '');
   const geheim = String(secret || '');
@@ -220,6 +237,20 @@ export async function schreibeHostAnforderung({ typ, wert, secret = '', angeford
   await fs.writeFile(tmp, inhalt, { mode: 0o600, flag: 'wx' });
   await fs.rename(tmp, P.anforderung());
   return nonce;
+}
+
+/**
+ * Quittiert „Oberfläche nur über HTTPS“. Der Agent vergleicht die Nonce mit
+ * seiner privaten Merkdatei; eine Quittung ohne offene Bestätigung bleibt
+ * wirkungslos.
+ */
+export async function schreibeWebBestaetigung(nonce) {
+  if (!/^[0-9a-f]{32}$/.test(String(nonce || ''))) throw new Error('Ungültige Nonce.');
+  await fs.mkdir(UPDATE_DIR, { recursive: true });
+  const tmp = `${P.bestaetigung()}.tmp`;
+  await fs.rm(tmp, { force: true });
+  await fs.writeFile(tmp, `nonce=${nonce}\n`, { mode: 0o600, flag: 'wx' });
+  await fs.rename(tmp, P.bestaetigung());
 }
 
 /**

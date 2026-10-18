@@ -19,7 +19,7 @@ import * as tracker from '../jobs/tracker.js';
 import { SYSTEM_FOLDERS } from '../service/storage-setup.js';
 import { getAktiveTaxonomie } from '../lib/taxonomie.js';
 import { appLog } from '../app-log.js';
-import { MODEL_CLASSES } from '../lib/llm/model-classes.js';
+import { MODEL_CLASSES, aktiveModellklassen, modellwahl } from '../lib/llm/model-classes.js';
 import { resolveModelConfig } from '../lib/llm.js';
 import { listProviders } from '../lib/llm/registry.js';
 import { backupEntscheidungGespeichert, backupVerschluesselungEntschieden } from '../lib/backup-config.js';
@@ -169,6 +169,7 @@ async function getStabileFolderKeys() {
 
 function kiModellSignatur(settings) {
   return createHash('sha256').update(JSON.stringify({
+    modellwahl: modellwahl(settings),
     modelle: MODEL_CLASSES.map((cls) => [
       cls.key,
       resolveModelConfig(settings[cls.settingKey], cls.provider, cls.model),
@@ -178,7 +179,9 @@ function kiModellSignatur(settings) {
 }
 
 export function pruefeModellklassen(settings, workingProviders, healthModels = null) {
-  return MODEL_CLASSES.map((cls) => {
+  // Nur Klassen der aktuellen Modellwahl sind Pflicht; die ausgeblendeten
+  // Stufen der anderen Wahl werden nie aufgerufen.
+  return aktiveModellklassen(settings).map((cls) => {
     const cfg = resolveModelConfig(settings[cls.settingKey], cls.provider, cls.model);
     const providerOk = workingProviders.includes(cfg.providerId);
     const modellVerfuegbar = healthModels === null

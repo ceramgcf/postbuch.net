@@ -21,8 +21,18 @@ function leererMensch() {
     kurzname: '', anzeigename: '', email: '', farbe: null,
     ist_tier: false, pkv: false, beihilfe: false, pkv_satz: '', beihilfe_satz: '',
     loginfaehig: false, anmeldename: '', rolle: 'lesezugriff', lesebereich: 'alle', password: '',
+    bre_ueberwachen: false, bre_betrag: '', bre_abschlag: '',
   };
 }
+
+/** Schwelle wie im Backend (service/bre.js): BRE × (1 − Abschlag/100). */
+function breSchwelle(betrag, abschlag) {
+  if (betrag === '' || betrag == null || !Number.isFinite(Number(betrag))) return null;
+  const a = abschlag === '' || abschlag == null ? 0 : Number(abschlag);
+  return Math.round(Number(betrag) * (1 - (Number.isFinite(a) ? a : 0) / 100) * 100) / 100;
+}
+
+const euro = (wert) => Number(wert).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
 
 function alsForm(mensch) {
   if (!mensch) return leererMensch();
@@ -41,6 +51,9 @@ function alsForm(mensch) {
     rolle: mensch.rolle || 'lesezugriff',
     lesebereich: mensch.lesebereich || 'alle',
     password: '',
+    bre_ueberwachen: !!mensch.bre_ueberwachen,
+    bre_betrag: mensch.bre_betrag ?? '',
+    bre_abschlag: mensch.bre_abschlag ?? '',
   };
 }
 
@@ -93,6 +106,11 @@ export function MenschDialog({ mensch, open, onOpenChange, vorlage = null, onGes
       setError('Für den Zugang ist ein Anmeldename erforderlich.');
       return;
     }
+    const breMoeglich = form.pkv && !form.ist_tier;
+    if (breMoeglich && form.bre_ueberwachen && form.bre_betrag === '') {
+      setError('Zum Überwachen der Beitragsrückerstattung ist ihre Höhe erforderlich.');
+      return;
+    }
     if (form.loginfaehig && !mensch?.anmeldename && form.password.length < 6) {
       setError('Für einen neuen Zugang ist ein Passwort mit mindestens 6 Zeichen erforderlich.');
       return;
@@ -111,6 +129,9 @@ export function MenschDialog({ mensch, open, onOpenChange, vorlage = null, onGes
       anmeldename: (form.anmeldename || form.kurzname).trim(),
       rolle: form.rolle,
       lesebereich: form.rolle === 'lesezugriff' ? form.lesebereich : 'alle',
+      bre_ueberwachen: breMoeglich ? form.bre_ueberwachen : false,
+      bre_betrag: form.bre_betrag !== '' ? Number(form.bre_betrag) : null,
+      bre_abschlag: form.bre_abschlag !== '' ? Number(form.bre_abschlag) : null,
     };
     if (form.password) payload.password = form.password;
     speichern.mutate(payload);
@@ -146,6 +167,37 @@ export function MenschDialog({ mensch, open, onOpenChange, vorlage = null, onGes
             {!form.ist_tier && <><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.beihilfe} onChange={(e) => set('beihilfe', e.target.checked)} />Beihilfe</label>
             {form.beihilfe && <Input type="number" min="0" max="100" step="0.01" value={form.beihilfe_satz} onChange={(e) => set('beihilfe_satz', e.target.value)} placeholder="Beihilfe-Satz in %" />}</>}
           </div>
+          {form.pkv && !form.ist_tier && (
+            <div className="space-y-2 border-t pt-3">
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={form.bre_ueberwachen} onChange={(e) => set('bre_ueberwachen', e.target.checked)} />
+                Beitragsrückerstattung überwachen
+              </label>
+              {form.bre_ueberwachen && (
+                <>
+                  <div className="grid items-end gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-medium whitespace-nowrap">Erwartete BRE (€)</label>
+                      <Input type="number" min="0" step="0.01" value={form.bre_betrag} onChange={(e) => set('bre_betrag', e.target.value)} placeholder="z. B. 600" />
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium whitespace-nowrap">Sicherheitsabschlag (%)</label>
+                      <Input type="number" min="0" max="100" step="0.01" value={form.bre_abschlag} onChange={(e) => set('bre_abschlag', e.target.value)} placeholder="z. B. 50" />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {breSchwelle(form.bre_betrag, form.bre_abschlag) != null
+                      ? <>Schwelle: <strong>{euro(breSchwelle(form.bre_betrag, form.bre_abschlag))}</strong> – gilt für neue Zurückhalte-Perioden. </>
+                      : null}
+                    Rechnungen werden im Abrechnungsassistenten je Behandlungsjahr zurückgehalten, solange ihre erwartete Erstattung unter der Schwelle bleibt.
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Der Abschlag berücksichtigt steuerliche Effekte: Die BRE mindert die als Sonderausgaben absetzbaren Beiträge und ist netto weniger wert – Einreichen lohnt sich meist schon deutlich unterhalb der BRE.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
         </div>
 
         {!form.ist_tier && <div className="rounded-lg border p-3 space-y-3">
@@ -219,6 +271,7 @@ function MenschZeile({ mensch }) {
             <ZugangBadge mensch={mensch} />
             {mensch.archiviert && <Badge variant="secondary">Archiviert</Badge>}
             {mensch.pkv && <Badge variant="outline">PKV{mensch.pkv_satz != null ? ` ${mensch.pkv_satz} %` : ''}</Badge>}
+            {mensch.pkv && !mensch.ist_tier && mensch.bre_ueberwachen && <Badge variant="outline" title="Beitragsrückerstattung wird überwacht">BRE</Badge>}
             {mensch.beihilfe && <Badge variant="outline">Beihilfe{mensch.beihilfe_satz != null ? ` ${mensch.beihilfe_satz} %` : ''}</Badge>}
           </div>
           <p className="mt-1 text-xs text-muted-foreground">

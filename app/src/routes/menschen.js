@@ -93,13 +93,32 @@ function normalisiere(body, alt = null) {
   const beihilfe = body.beihilfe ?? alt?.beihilfe ?? false;
   if (istTier && beihilfe) throw new Error('Für Tiere ist nur Tier-PKV möglich, keine Beihilfe.');
   if (istTier && loginfaehig) throw new Error('Ein Tier kann keinen App-Zugang erhalten.');
+  const pkv = body.pkv ?? alt?.pkv ?? false;
+  // Beitragsrückerstattung (BRE): nur für PKV-versicherte Menschen. Ohne PKV
+  // oder bei Tieren wird der Schalter stillschweigend abgeschaltet; Betrag
+  // und Abschlag bleiben als Vorbelegung stehen (CHECK mensch_bre_nur_pkv_ck).
+  const breBetragRoh = body.bre_betrag === undefined ? alt?.bre_betrag : body.bre_betrag;
+  let breBetrag = null;
+  if (breBetragRoh != null && breBetragRoh !== '') {
+    breBetrag = Number(breBetragRoh);
+    if (!Number.isFinite(breBetrag) || breBetrag < 0 || breBetrag > 9999999999) {
+      throw new Error('Beitragsrückerstattung muss ein Betrag ab 0 sein.');
+    }
+    breBetrag = Math.round(breBetrag * 100) / 100;
+  }
+  const breAbschlag = prozentsatz(body.bre_abschlag === undefined ? alt?.bre_abschlag : body.bre_abschlag, 'Abschlag');
+  const breUeberwachen = Boolean(body.bre_ueberwachen ?? alt?.bre_ueberwachen ?? false)
+    && Boolean(pkv) && !istTier;
+  if (breUeberwachen && breBetrag == null) {
+    throw new Error('Zum Überwachen der Beitragsrückerstattung ist ihre Höhe erforderlich.');
+  }
   return {
     kurzname,
     anzeigename,
     email: body.email === undefined ? alt?.email ?? null : (String(body.email || '').trim() || null),
     aktiv: body.aktiv ?? alt?.aktiv ?? true,
     archiviert: body.archiviert ?? alt?.archiviert ?? false,
-    pkv: body.pkv ?? alt?.pkv ?? false,
+    pkv,
     beihilfe,
     istTier,
     pkvSatz: prozentsatz(body.pkv_satz === undefined ? alt?.pkv_satz : body.pkv_satz, 'PKV-Satz'),
@@ -109,6 +128,9 @@ function normalisiere(body, alt = null) {
     anmeldename: loginfaehig ? anmeldename : (alt?.anmeldename ?? null),
     rolle: gespeicherteRolle,
     lesebereich,
+    breUeberwachen,
+    breBetrag,
+    breAbschlag,
   };
 }
 
@@ -118,6 +140,7 @@ router.get('/', async (_req, res) => {
       SELECT m.id, m.kurzname, m.anmeldename, m.anzeigename, m.email,
              m.loginfaehig, m.rolle, m.lesebereich, m.aktiv, m.archiviert, m.ist_tier, m.pkv, m.beihilfe,
              m.pkv_satz, m.beihilfe_satz, m.farbe, m.created_at, m.updated_at,
+             m.bre_ueberwachen, m.bre_betrag, m.bre_abschlag,
              (SELECT count(*)::int FROM postbuch.arztrechnung WHERE behandelte_person=m.kurzname) AS arz_count,
              (SELECT count(*)::int FROM postbuch.arztbericht WHERE behandelte_person=m.kurzname) AS ab_count,
              (SELECT count(*)::int FROM postbuch.erstattungsbescheid_einzelposition WHERE behandelte_person=m.kurzname) AS eb_count,
@@ -170,14 +193,16 @@ router.post('/', async (req, res) => {
     const m = await client.query(
       `INSERT INTO postbuch.mensch
         (kurzname, anmeldename, anzeigename, email, loginfaehig, password_hash, rolle,
-         aktiv, archiviert, ist_tier, pkv, beihilfe, pkv_satz, beihilfe_satz, farbe, lesebereich)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+         aktiv, archiviert, ist_tier, pkv, beihilfe, pkv_satz, beihilfe_satz, farbe, lesebereich,
+         bre_ueberwachen, bre_betrag, bre_abschlag)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
        RETURNING id`,
       [daten.kurzname, daten.loginfaehig ? daten.anmeldename : null, daten.anzeigename,
         daten.email, daten.loginfaehig, passwordHash, daten.loginfaehig ? daten.rolle : null,
         daten.aktiv, daten.archiviert, daten.istTier, daten.pkv, daten.beihilfe,
         daten.pkvSatz, daten.beihilfeSatz, daten.farbe,
-        daten.loginfaehig ? daten.lesebereich : 'alle'],
+        daten.loginfaehig ? daten.lesebereich : 'alle',
+        daten.breUeberwachen, daten.breBetrag, daten.breAbschlag],
     );
     const id = m.rows[0].id;
     await ensureMenschCollectingPeriods(client.query.bind(client), {
@@ -256,13 +281,15 @@ router.patch('/:id', async (req, res) => {
       `UPDATE postbuch.mensch SET kurzname=$2,anzeigename=$3,email=$4,aktiv=$5,
        archiviert=$6,ist_tier=$7,pkv=$8,beihilfe=$9,pkv_satz=$10,beihilfe_satz=$11,farbe=$12,
        loginfaehig=$13,anmeldename=$14,password_hash=$15,rolle=$16,lesebereich=$17,
+       bre_ueberwachen=$18,bre_betrag=$19,bre_abschlag=$20,
        -- Eingeschränkte Nutzer erhalten keine Pushes; alte Abos verfallen.
        webpush_subscriptions = CASE WHEN $17 = 'eigene' THEN '[]'::jsonb ELSE webpush_subscriptions END,
        updated_at=now() WHERE id=$1`,
       [alt.id, daten.kurzname, daten.anzeigename, daten.email, daten.aktiv,
         daten.archiviert, daten.istTier, daten.pkv, daten.beihilfe, daten.pkvSatz,
         daten.beihilfeSatz, daten.farbe, daten.loginfaehig, daten.anmeldename,
-        passwordHash, daten.rolle, daten.lesebereich],
+        passwordHash, daten.rolle, daten.lesebereich,
+        daten.breUeberwachen, daten.breBetrag, daten.breAbschlag],
     );
     await client.query('COMMIT');
     appLog('INFO', 'mensch', 'Mensch aktualisiert', { entity: 'mensch', entityId: alt.id });

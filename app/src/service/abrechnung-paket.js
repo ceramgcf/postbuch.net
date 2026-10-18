@@ -162,7 +162,7 @@ export async function buildChunkPdfs(buffers) {
  * zu einer Zeile zusammengefasst, ihr Kürzungsbetrag aber korrekt aufsummiert
  * — nur der Kürzungsgrund steht nicht auf dem Vorblatt, siehe dort).
  */
-async function ladeVorgemerktePruefpositionen(person, periode) {
+async function ladeVorgemerktePruefpositionen(person, periode, ausschlussArzPostids = []) {
   const r = await pool.query(
     // DISTINCT ON fasst mehrere vorgemerkte Kürzungen derselben Bescheidposition
     // zu einer Vorblattzeile zusammen; die SUM-Fensterfunktion summiert dabei
@@ -179,8 +179,9 @@ async function ladeVorgemerktePruefpositionen(person, periode) {
      JOIN erstattungsbescheid e ON e.postid = b.eb_postid
      LEFT JOIN arztrechnung a ON a.postid = k.arz_postid
      WHERE b.person = $1 AND b.kostentraeger = 'PKV' AND b.periode = $2 AND b.status = 'VORGEMERKT'
+       AND (k.arz_postid IS NULL OR NOT (k.arz_postid = ANY($3::text[])))
      ORDER BY b.eb_postid, b.eb_subid`,
-    [person, periode]
+    [person, periode, ausschlussArzPostids]
   );
   return r.rows;
 }
@@ -192,17 +193,31 @@ async function ladeVorgemerktePruefpositionen(person, periode) {
  * Zeilen) und `bescheidCount`/`rechnungCount` (= Anzahl gekennzeichneter
  * Anlagen) gehen an den Aufrufer, damit die Session diese Zahlen (z. B. für
  * eine "Prüffälle"-Badge im Abrechnungsassistenten) weiterreichen kann.
- * @param {Array<{person:string, periode:number}>} pkvTargets
+ *
+ * Mehrere PKV-Zielperioden derselben Person (Sammelperiode plus eingereichte
+ * BRE-Perioden, service/bre.js) laufen in ein gemeinsames Vorblatt; jede
+ * Zeile trägt Person und Rechnung, der Snapshot bleibt je Zieltripel getrennt.
+ * `breHalten` eines Ziels nennt die Rechnungen, die für die
+ * Beitragsrückerstattung zurückgehalten werden – ihre Vormerkungen ziehen
+ * beim Bestätigen mit um und stehen deshalb weder im Vorblatt noch im Snapshot.
+ *
+ * `vorneEnthalten` nennt die Dokumente, die in derselben PKV-Einreichung
+ * bereits vorne regulär liegen: Sie hängen nicht noch einmal als Anlage
+ * hinten an, und das Vorblatt verweist dann auf „soweit nicht vorne enthalten“.
+ * @param {Array<{person:string, periode:number, breHalten?:string[]}>} pkvTargets
+ * @param {{vorneEnthalten?: Iterable<string>}} [optionen]
  * @returns {Promise<{buffers:Buffer[], pruefungCount:number, bescheidCount:number, rechnungCount:number, snapshotByTarget:Array<{person:string, periode:number, keys:string[]}>}>}
  */
-export async function buildPruefblockBuffers(pkvTargets) {
+export async function buildPruefblockBuffers(pkvTargets, { vorneEnthalten = [] } = {}) {
+  const vorne = new Set(vorneEnthalten);
   const zeilen = [];
   const ebIds = new Set();
   const arzIds = new Set();
   const snapshotByTarget = [];
 
   for (const t of pkvTargets) {
-    const rows = await ladeVorgemerktePruefpositionen(t.person, t.periode);
+    const ausschluss = Array.isArray(t.breHalten) ? t.breHalten : [];
+    const rows = await ladeVorgemerktePruefpositionen(t.person, t.periode, ausschluss);
     for (const row of rows) {
       zeilen.push({
         person: t.person,
@@ -223,9 +238,12 @@ export async function buildPruefblockBuffers(pkvTargets) {
     // Kürzungen derselben Bescheidposition zu einer Vorblattzeile zusammenfasst
     // und dabei den einzelnen kuerzung_id nicht mehr ausweist.
     const schluessel = await pool.query(
-      `SELECT eb_postid, eb_subid, kuerzung_id FROM beihilfe_kuerzung_pkv_pruefung
-       WHERE person = $1 AND kostentraeger = 'PKV' AND periode = $2 AND status = 'VORGEMERKT'`,
-      [t.person, t.periode]
+      `SELECT b.eb_postid, b.eb_subid, b.kuerzung_id FROM beihilfe_kuerzung_pkv_pruefung b
+       JOIN erstattungsbescheid_kuerzung k
+         ON k.postid = b.eb_postid AND k.eb_subid = b.eb_subid AND k.kuerzung_id = b.kuerzung_id
+       WHERE b.person = $1 AND b.kostentraeger = 'PKV' AND b.periode = $2 AND b.status = 'VORGEMERKT'
+         AND (k.arz_postid IS NULL OR NOT (k.arz_postid = ANY($3::text[])))`,
+      [t.person, t.periode, ausschluss]
     );
     snapshotByTarget.push({
       person: t.person,
@@ -236,12 +254,14 @@ export async function buildPruefblockBuffers(pkvTargets) {
 
   if (zeilen.length === 0) return { buffers: [], pruefungCount: 0, bescheidCount: 0, rechnungCount: 0, snapshotByTarget };
 
-  const buffers = [await generateVorblatt({ zeilen })];
-  for (const postid of [...ebIds, ...arzIds]) {
+  const anlagenEb = [...ebIds].filter((p) => !vorne.has(p));
+  const anlagenArz = [...arzIds].filter((p) => !vorne.has(p));
+  const buffers = [await generateVorblatt({ zeilen, rechnungenTeilweiseVorne: anlagenArz.length < arzIds.size })];
+  for (const postid of [...anlagenEb, ...anlagenArz]) {
     const grau = await ladeEinreichungsPdf(postid, 'a4');
     buffers.push(await kennzeichnePruefanlage(grau));
   }
-  return { buffers, pruefungCount: zeilen.length, bescheidCount: ebIds.size, rechnungCount: arzIds.size, snapshotByTarget };
+  return { buffers, pruefungCount: zeilen.length, bescheidCount: anlagenEb.length, rechnungCount: anlagenArz.length, snapshotByTarget };
 }
 
 /**

@@ -45,7 +45,7 @@ import { api } from '@/api/client';
 import { Logo } from '@/components/ui/Logo';
 import { Testergebnis } from '@/components/ui/testergebnis';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import { WurzelordnerFeld, useAppOrdner, standardWurzel, wurzelLabel, WURZEL_DIREKT } from '@/components/settings/WurzelordnerFeld';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -161,10 +161,14 @@ export default function AblageUmzugPage() {
   // statt einen frei erfundenen Ordnernamen vorzuschlagen. Ist im Zielbackend
   // (z. B. aus einer früheren Migration) bereits ein Wurzelordner bekannt
   // (etwa „postbuch_auf_magenta"), wird GENAU der übernommen.
+  // Ausnahme App-Ordner: dort ist „direkt im App-Ordner“ keine Rateangabe,
+  // sondern der vorgesehene Ort.
+  const zielAppOrdner = useAppOrdner(dstBackend);
   useEffect(() => {
     const w = zielWurzelQuery.data;
     if (w?.rootPath) setZielRootPath((alt) => alt || w.rootPath);
-  }, [zielWurzelQuery.data]);
+    else if (w && zielAppOrdner.aktiv) setZielRootPath((alt) => alt || WURZEL_DIREKT);
+  }, [zielWurzelQuery.data, zielAppOrdner.aktiv]);
 
   const [bestaetigt, setBestaetigt] = useState(false);
   const [loeschDialog, setLoeschDialog] = useState(null);
@@ -180,7 +184,7 @@ export default function AblageUmzugPage() {
   const [aufraeumJobId, setAufraeumJobId] = useState(null);
 
   const mVorbereiten = useMutation({
-    mutationFn: () => api.migration.zielVorbereiten(dstBackend, zielRootPath.trim() || 'postbuch'),
+    mutationFn: () => api.migration.zielVorbereiten(dstBackend, zielRootPath.trim() || standardWurzel(zielAppOrdner)),
     onSuccess: () => { setFehler(''); qc.invalidateQueries({ queryKey: ['settings'] }); refetch(); },
     onError: (e) => setFehler(e.message),
   });
@@ -454,14 +458,14 @@ export default function AblageUmzugPage() {
                   bei jedem Lauf frisch geprüft, auch wenn zuvor schon einmal eine Ordnerstruktur
                   angelegt wurde. So fällt sofort auf, wenn draußen etwas gelöscht wurde.
                 </p>
-                <div className="flex items-end gap-2">
+                <div className="flex items-start gap-2">
                   <div className="flex-1 space-y-1">
                     <label className="text-xs text-muted-foreground">Wurzelordner in {label(dstBackend)}</label>
-                    <Input value={zielRootPath} onChange={(e) => setZielRootPath(e.target.value)}
-                      placeholder={zielWurzelQuery.isPending ? 'wird gelesen…' : 'z. B. postbuch'}
-                      className="h-8 text-sm font-mono" />
+                    <WurzelordnerFeld appOrdner={zielAppOrdner} value={zielRootPath} onChange={setZielRootPath}
+                      placeholder={zielWurzelQuery.isPending ? 'wird gelesen…' : (zielAppOrdner.aktiv ? undefined : 'z. B. postbuch')}
+                      className="h-8 text-sm" disabled={mVorbereiten.isPending} />
                   </div>
-                  <Button size="sm" variant="outline" disabled={mVorbereiten.isPending || zielWurzelQuery.isPending}
+                  <Button size="sm" variant="outline" className="mt-5" disabled={mVorbereiten.isPending || zielWurzelQuery.isPending || !zielAppOrdner.bereit}
                     onClick={() => mVorbereiten.mutate()}>
                     {mVorbereiten.isPending ? <Spinner className="h-3.5 w-3.5" /> : null}
                     Ordner anlegen
@@ -470,7 +474,7 @@ export default function AblageUmzugPage() {
               </div>
             ) : (
               <p className="text-xs text-muted-foreground pl-7">
-                {mVorbereiten.data.anzahl} Ordner bereit ({mVorbereiten.data.neu} neu angelegt) unter „{mVorbereiten.data.rootPath}".
+                {mVorbereiten.data.anzahl} Ordner bereit ({mVorbereiten.data.neu} neu angelegt) {mVorbereiten.data.rootPath === WURZEL_DIREKT ? <>direkt in „{wurzelLabel(WURZEL_DIREKT, zielAppOrdner)}“</> : <>unter „{mVorbereiten.data.rootPath}“</>}.
               </p>
             )}
           </div>
@@ -890,7 +894,7 @@ export default function AblageUmzugPage() {
     || (definition.id === 'umschalten' && !run?.switched_at);
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-muted/40 to-background">
+    <div className="min-h-screen bg-linear-to-b from-muted/40 to-background">
       <header className="sticky top-0 z-20 border-b bg-background/85 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-3 py-2.5 sm:px-6">
           <Logo size={34} />

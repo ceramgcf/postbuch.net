@@ -1127,6 +1127,13 @@ export async function move(fileId, destFolderId, newName) {
   const zielBasis = zielElternPfad.split('/').filter(Boolean);
 
   return withPath(cfg, id, async (quellPfad) => {
+    // Ziel = aktueller Ort (z. B. Wiederverarbeitung mit unverändertem
+    // Ablagepfad): Der Server beantwortet MOVE auf sich selbst mit 412, und
+    // ohneKollision() würde die Datei grundlos in "Name (2)" umbenennen.
+    // OneDrive behandelt diesen Fall als No-Op – hier ebenso.
+    if (quellPfad.split('/').filter(Boolean).join('/') === [...zielBasis, sicher].join('/')) {
+      return { id, webUrl: webUrlFuer(cfg, id), name: sicher };
+    }
     const quellUrl = pfadZuUrl(cfg, quellPfad);
 
     const { ergebnis, name } = await ohneKollision(sicher, async (kandidat) => {

@@ -10,6 +10,12 @@
  *   - restorePeriode()       — Generisches Status-Restore (Undo-Helper)
  *   - deletePeriodeHighest() — Höchste COLLECTING löschen (Rechnungen → nächsthöhere COLLECTING)
  *   - mergePerioden()        — Source-COLLECTING in Target-COLLECTING mergen
+ *   - bearbeitePeriode()     — Erstattungssatz bzw. BRE-Schwelle einer offenen Periode ändern
+ *
+ * Zurückgehaltene Perioden (WITHHELD, Beitragsrückerstattung, service/bre.js)
+ * nimmt keine der Altoperationen an. Ihr einziger Rückweg ist das Einreichen
+ * über den Abrechnungsassistenten bzw. das Häkchen „BRE-unbeachtlich“ je
+ * Rechnung. Bearbeiten (Satz/Schwelle) ist erlaubt.
  */
 
 import pool from '../db.js';
@@ -77,7 +83,7 @@ async function loeseHerkunftAuf(client, person, kostentraeger, geloeschtePeriode
  * (person, kostentraeger, periode) eine aktive Abrechnungssession existiert.
  * `client` muss die Periodenzeile bereits FOR UPDATE gesperrt haben.
  */
-async function throwIfSessionLocked(client, person, kostentraeger, periode) {
+export async function throwIfSessionLocked(client, person, kostentraeger, periode) {
   const locked = await client.query(
     `SELECT 1 FROM _abrechnung_session_ziel
      WHERE person = $1 AND kostentraeger = $2 AND periode = $3 AND aktiv LIMIT 1`,
@@ -137,6 +143,7 @@ const STATUS_ANZEIGE = {
   SUBMITTED: 'EINGEREICHT',
   COMPLETED: 'ABGESCHLOSSEN',
   OMITTED: 'AUSGELASSEN',
+  WITHHELD: 'ZURÜCKGEHALTEN',
 };
 const anzeige = (status) => STATUS_ANZEIGE[status] || status;
 
@@ -177,6 +184,9 @@ export async function setPeriodeStatus({ person, kostentraeger, periode, targetS
     };
     if (currentStatus === 'COMPLETED') {
       throw new Error('ABGESCHLOSSEN-Perioden können nur durch Löschen des Erstattungsbescheids zurückgesetzt werden');
+    }
+    if (currentStatus === 'WITHHELD') {
+      throw new Error('ZURÜCKGEHALTEN-Perioden werden nur über den Abrechnungsassistenten eingereicht');
     }
     if (!allowed[currentStatus]?.includes(targetStatus)) {
       throw new Error(`Übergang ${anzeige(currentStatus)} → ${anzeige(targetStatus)} nicht erlaubt`);
@@ -541,6 +551,17 @@ export async function restoreCollectingFromMerge({ person, kostentraeger, period
     await client.query('BEGIN');
     await sperrePerioden(client, [{ person, kostentraeger }]);
 
+    // Eine inzwischen zurückhaltende Periode derselben Nummer darf ein Undo nie
+    // überschreiben (ON CONFLICT unten würde ihren Status sonst ersetzen).
+    const vorhanden = await client.query(
+      `SELECT status FROM abrechnungsperiode_buch
+       WHERE person = $1 AND kostentraeger = $2 AND periode = $3 FOR UPDATE`,
+      [person, kostentraeger, periode]
+    );
+    if (vorhanden.rows[0]?.status === 'WITHHELD') {
+      throw new Error('Rückgängig nicht möglich: Die Periode hält inzwischen Rechnungen für die Beitragsrückerstattung zurück');
+    }
+
     await client.query(
       `INSERT INTO abrechnungsperiode_buch (person, kostentraeger, periode, status, satz)
        SELECT $1, $2, $3, $4,
@@ -555,10 +576,17 @@ export async function restoreCollectingFromMerge({ person, kostentraeger, period
 
     if (Array.isArray(postIds) && postIds.length > 0) {
       const periodeCol = kostentraeger === 'PKV' ? 'abrechnungsperiode_pkv' : 'abrechnungsperiode_beihilfe';
+      // Rechnungen, die seither in eine zurückhaltende Periode gezogen sind,
+      // bleiben dort; das Undo betrifft nur die Sammelperioden.
       await client.query(
-        `UPDATE arztrechnung SET ${periodeCol} = $1
-         WHERE postid = ANY($2::text[]) AND behandelte_person = $3`,
-        [periode, postIds, person]
+        `UPDATE arztrechnung a SET ${periodeCol} = $1
+         WHERE a.postid = ANY($2::text[]) AND a.behandelte_person = $3
+           AND NOT EXISTS (
+             SELECT 1 FROM abrechnungsperiode_buch w
+             WHERE w.person = $3 AND w.kostentraeger = $4 AND w.periode = a.${periodeCol}
+               AND w.status = 'WITHHELD'
+           )`,
+        [periode, postIds, person, kostentraeger]
       );
     }
 
@@ -599,6 +627,15 @@ export async function undoOmit({ person, kostentraeger, periode, autoCreatedPeri
     await client.query('BEGIN');
     await sperrePerioden(client, [{ person, kostentraeger }]);
 
+    // Ohne diese Prüfung meldete der Aufruf auch für fremde Status Erfolg und
+    // räumte über autoCreatedPeriode trotzdem eine leere SAMMELT-Periode ab.
+    const cur = await client.query(
+      `SELECT status FROM abrechnungsperiode_buch WHERE person = $1 AND kostentraeger = $2 AND periode = $3 FOR UPDATE`,
+      [person, kostentraeger, periode]
+    );
+    if (cur.rows.length === 0) throw new Error('Periode nicht gefunden');
+    if (cur.rows[0].status !== 'OMITTED') throw new Error('Nur AUSGELASSEN-Perioden können auf SAMMELT zurückgesetzt werden');
+
     await client.query(
       `UPDATE abrechnungsperiode_buch SET status = 'COLLECTING'
        WHERE person = $1 AND kostentraeger = $2 AND periode = $3 AND status = 'OMITTED'`,
@@ -633,4 +670,76 @@ export async function undoOmit({ person, kostentraeger, periode, autoCreatedPeri
   } finally {
     client.release();
   }
+}
+
+/**
+ * Bearbeiten-Dialog der Periodenseite: ändert den Erstattungssatz einer
+ * offenen (COLLECTING) oder zurückhaltenden (WITHHELD) Periode und – nur bei
+ * WITHHELD – deren BRE-Schwelle. Nicht übergebene Felder bleiben unverändert;
+ * `satz: null` entfernt den Periodensatz (dann gilt wieder der Satz der Person).
+ *
+ * @param {{person:string, kostentraeger:string, periode:number,
+ *          satz?: number|null, breSchwelle?: number}} eingabe
+ */
+export async function bearbeitePeriode({ person, kostentraeger, periode, satz, breSchwelle }) {
+  if (!['PKV', 'Beihilfe'].includes(kostentraeger)) throw httpFehler('Ungültiger Kostenträger', 400);
+  if (!person || !Number.isInteger(periode)) throw httpFehler('Periode fehlt', 400);
+  const satzGesetzt = satz !== undefined;
+  const schwelleGesetzt = breSchwelle !== undefined;
+  if (!satzGesetzt && !schwelleGesetzt) throw httpFehler('Keine Änderung angegeben', 400);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await sperrePerioden(client, [{ person, kostentraeger }]);
+
+    const cur = await client.query(
+      `SELECT status, satz, bre_schwelle FROM abrechnungsperiode_buch
+       WHERE person = $1 AND kostentraeger = $2 AND periode = $3 FOR UPDATE`,
+      [person, kostentraeger, periode]
+    );
+    if (cur.rows.length === 0) throw httpFehler('Periode nicht gefunden', 404);
+    const { status } = cur.rows[0];
+    if (!['COLLECTING', 'WITHHELD'].includes(status)) {
+      throw httpFehler(`Nur SAMMELT- und ZURÜCKGEHALTEN-Perioden lassen sich bearbeiten (ist ${anzeige(status)})`, 409);
+    }
+    if (schwelleGesetzt && status !== 'WITHHELD') {
+      throw httpFehler('Eine BRE-Schwelle gibt es nur an ZURÜCKGEHALTEN-Perioden', 400);
+    }
+
+    try {
+      await throwIfSessionLocked(client, person, kostentraeger, periode);
+    } catch (err) {
+      err.status = 409;
+      throw err;
+    }
+
+    const neuerSatz = satzGesetzt ? satz : cur.rows[0].satz;
+    const neueSchwelle = schwelleGesetzt ? breSchwelle : cur.rows[0].bre_schwelle;
+    await client.query(
+      `UPDATE abrechnungsperiode_buch SET satz = $4, bre_schwelle = $5
+       WHERE person = $1 AND kostentraeger = $2 AND periode = $3`,
+      [person, kostentraeger, periode, neuerSatz, neueSchwelle]
+    );
+
+    await client.query('COMMIT');
+    const teile = [];
+    if (satzGesetzt) teile.push(`Satz ${cur.rows[0].satz ?? '–'} → ${neuerSatz ?? '–'}`);
+    if (schwelleGesetzt) teile.push(`BRE-Schwelle ${cur.rows[0].bre_schwelle} → ${neueSchwelle}`);
+    appLog('INFO', 'abrechnungsperiode',
+      `Periode bearbeitet: ${person}/${kostentraeger}/${periode} (${teile.join(', ')})`,
+      { entity: 'abrechnungsperiode', entityId: `${person}/${kostentraeger}/${periode}` });
+    return { person, kostentraeger, periode, status, satz: neuerSatz, bre_schwelle: neueSchwelle };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+function httpFehler(message, status) {
+  const e = new Error(message);
+  e.status = status;
+  return e;
 }

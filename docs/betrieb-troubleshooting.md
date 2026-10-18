@@ -116,6 +116,41 @@ Minuten.
 Ohne Agenten funktioniert alles andere unverändert – man aktualisiert eben
 über die Shell.
 
+### Datenbank-Umzug auf PostgreSQL 18
+
+postbuch.net läuft auf PostgreSQL 18. Eine Instanz, deren Datenbank noch von
+PostgreSQL 16 stammt, zieht einmalig um: Die Daten werden in eine neue
+PostgreSQL-18-Datenbank übertragen und Tabelle für Tabelle verglichen, erst
+dann wird umgeschaltet. Vorher legt der Installer eine Sicherung an. Während
+des Umzugs ist postbuch.net einige Minuten nicht erreichbar.
+
+Ausgelöst wird der Umzug auf drei Wegen:
+
+- **Mit Update-Agent** startet ihn der Agent wenige Minuten nach dem Update
+  von selbst.
+- **Bei jedem Update** über `install.sh` zieht der Installer vor dem
+  Containerwechsel um.
+- **Von Hand:**
+
+  ```bash
+  cd ~/postbuch && ./deploy-pages/install.sh --postgres-umzug
+  ```
+
+Solange der Umzug aussteht, zeigt die Karte **Updates** in den Einstellungen
+einen Hinweis mit diesem Befehl. postbuch.net arbeitet bis dahin mit
+PostgreSQL 16 weiter. Schlägt ein Umzug fehl, bleibt die alte Datenbank
+unverändert in Betrieb.
+
+Wurde der Datenbank-Container vor dem Umzug von Hand neu erstellt (etwa mit
+`docker compose up -d --force-recreate`), startet er nicht und meldet im Log
+`there appears to be PostgreSQL data in`. Die Daten sind
+dabei unberührt. Der Befehl oben startet die alte Datenbank wieder und zieht
+dann um.
+
+Die alte Datenbank bleibt bis zum erfolgreichen Start der App unter
+`data/postgres/umzug/` liegen und wird erst danach gelöscht. Der Platzbedarf
+liegt dabei beim Dreifachen der Datenbankgröße.
+
 ### Zurück auf eine ältere Version
 
 ```bash
@@ -133,6 +168,12 @@ getrennte Fragen**:
 2. **Bestätigung**: das Wort `ROLLBACK` tippen. Enter bricht ab.
 
 Ein Rollback ist nur interaktiv möglich, nicht automatisiert.
+
+Nutzt die Sicherung eine andere PostgreSQL-Version als die laufende Datenbank,
+etwa nach dem Umzug auf PostgreSQL 18, wird die Datenbank zwingend mit
+zurückgerollt. Die bisherige Datenbank bleibt unverändert unter
+`data/postgres.pg<version>-<zeitstempel>` liegen. Eine Sicherung ohne
+Datenbank-Dump lässt sich dann nicht verwenden.
 
 ## Häufige Fehlerbilder
 
@@ -200,7 +241,10 @@ bitte melden.
 - Ein Scan aus Scanner/Cleaner wird vor der Verarbeitung unter
   `/data/scan_buffer` gesichert. Scheitert der erste Dateiablage-Upload, versucht
   `_scan_retry_queue` ihn mit Backoff ungefähr 10,7 Tage erneut; danach bleibt
-  er als `manual_only` sichtbar und das PDF liegt weiter im Puffer.
+  er als `manual_only` sichtbar und das PDF liegt weiter im Puffer. Eine
+  Sicherung enthält den Puffer nicht: Fehlt das PDF dort, etwa nach einer
+  Wiederherstellung auf einem anderen Rechner, entfernt postbuch.net den Eintrag
+  beim nächsten Start oder Versuch und vermerkt das im App-Log.
 - Ein Browser-Upload lebt bis zum ersten erfolgreichen Dateiablage-Upload nur im
   Arbeitsspeicher des App-Prozesses. Schlägt genau dieser Schritt fehl oder
   startet der Container neu, muss die Datei erneut hochgeladen werden.

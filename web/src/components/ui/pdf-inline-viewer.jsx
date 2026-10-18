@@ -12,11 +12,11 @@
  * umfangreichen Sammel-PDFs nicht Dutzende Canvas-Elemente auf einmal zu
  * rendern, wachsen sie beim Scrollen nach.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Document, Page } from 'react-pdf';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
-import '@/lib/pdfjs-worker';
+import { PDFJS_DOCUMENT_OPTIONS } from '@/lib/pdfjs-worker';
 
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -53,7 +53,7 @@ export function PdfInlineViewer({ file, className, style, fehlerText = 'PDF konn
   const [sichtbareSeiten, setSichtbareSeiten] = useState(ERSTE_SEITEN);
 
   // Cookie-Auth: react-pdf lädt das PDF per XHR, ohne credentials käme 401 zurück.
-  const options = useMemo(() => ({ withCredentials: true }), []);
+  const options = PDFJS_DOCUMENT_OPTIONS;
 
   // Neues Dokument → wieder oben und nur die ersten Seiten rendern.
   useEffect(() => {
@@ -109,6 +109,7 @@ export function PdfInlineViewer({ file, className, style, fehlerText = 'PDF konn
       )}
       <div ref={messRef} className="p-2">
         <Document
+          suspense={false}
           file={file}
           options={options}
           onLoadSuccess={onLoadSuccess}

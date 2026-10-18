@@ -30,7 +30,7 @@
  */
 
 import { listProviders, getProvider } from './llm/registry.js';
-import { MODEL_CLASSES } from './llm/model-classes.js';
+import { aktiveModellklassen } from './llm/model-classes.js';
 import { resolveModelConfig } from './llm.js';
 import { embeddingConfig } from './embedding.js';
 import { istPrivateAdresse } from './net-guard.js';
@@ -101,7 +101,9 @@ export function cloudfreiBericht(settings, laufzeit = {}) {
     return provCache.get(providerId);
   };
 
-  for (const cls of MODEL_CLASSES) {
+  // Nur Klassen der aktuellen Modellwahl: eine ausgeblendete Stufe wird nie
+  // aufgerufen und darf das Ergebnis weder verderben noch schönen.
+  for (const cls of aktiveModellklassen(s)) {
     const cfg = resolveModelConfig(s[cls.settingKey], cls.provider, cls.model);
     const p = provInfo(cfg.providerId);
     const lokal = p?.typ === 'openai-compatible' ? wirktLokal(p.baseUrl) : false;

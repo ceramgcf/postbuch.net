@@ -41,6 +41,7 @@ OPT_YES=false               # --yes               keine Rueckfragen
 OPT_NON_INTERACTIVE=false   # --non-interactive   kein einziger /dev/tty-Zugriff
 OPT_DRY_RUN=false           # --dry-run           bis inkl. Backup, dann sauber raus
 OPT_ROLLBACK=false          # --rollback          auf ein Backup zurueck
+OPT_POSTGRES_UMZUG=false    # --postgres-umzug    Datenbank von PostgreSQL 16 auf 18 umziehen
 OPT_SHA256=""               # --erwarte-sha256=   Pruefsumme des Tarballs
 OPT_INSTALL_DIR=""          # --install-dir=      abweichendes Zielverzeichnis
 OPT_FEED_BASE_URL=""        # --quelle=           Bezugsquelle dieser Instanz
@@ -781,7 +782,7 @@ compose_build() {
     # am App-Code) und der xcaddy-Build dauert auf schwacher Hardware ~20 Min.
     # Daher nur bauen, wenn das Image noch fehlt – sonst wiederverwenden.
     if $with_caddy; then
-        if docker_runtime image inspect postbuch-caddy:local2 >/dev/null 2>&1; then
+        if docker_runtime image inspect postbuch-caddy:local3 >/dev/null 2>&1; then
             info "caddy-Image vorhanden – Build uebersprungen."
         else
             # Eigener Retry (statt im Code-Service-Loop unten): xcaddy laedt sehr
@@ -794,7 +795,7 @@ compose_build() {
             local caddy_versuch caddy_pause
             local caddy_gebaut=false
             for caddy_versuch in 1 2 3; do
-                info "Baue caddy (gepinntes Image local2, kann auf schwacher Hardware lange dauern)..."
+                info "Baue caddy (gepinntes Image local3, kann auf schwacher Hardware lange dauern)..."
                 if build_mit_lebenszeichen "Caddy" 30 \
                     $DOCKER_COMPOSE "${profile_args[@]}" build caddy; then
                     caddy_gebaut=true
@@ -926,9 +927,133 @@ update_build_services_bestimmen() { # $1=installierter Baum $2=verifizierter Sta
     fi
 }
 
+# ── PostgreSQL-Hauptversionsumzug ────────────────────────────────────────────
+# Seit 2.12 läuft PostgreSQL 18. Ein Bestand von PostgreSQL 16 zieht per Dump
+# und Restore um (scripts/postgres-umzug.sh aus dem aktuellen Quellbaum).
+# Installer bis 2.11 kennen den Schritt nicht: Nach ihrem Update auf 2.12 läuft
+# PostgreSQL 16 dank --no-recreate weiter, und das PostgreSQL-18-Image verweigert
+# einen leeren Start neben dem Altbestand. Umgezogen wird dann vom aktualisierten
+# Update-Agenten (install.sh --postgres-umzug), sonst beim nächsten Update.
+# Voraussetzung ist immer ein frisches Backup mit db.sql.gz.
+POSTGRES_UMZUG_BACKUP=""
+
+postgres_umzug_skript() {
+    local docker_cmd=docker
+    if [[ "${DOCKER_COMPOSE:-docker compose}" == sudo\ * ]]; then
+        if $OPT_NON_INTERACTIVE; then docker_cmd="sudo -n docker"; else docker_cmd="sudo docker"; fi
+    fi
+    POSTBUCH_DOCKER="$docker_cmd" COMPOSE_PROJECT_NAME="$(basename "$INSTALL_DIR")" \
+        "$INSTALL_DIR/scripts/postgres-umzug.sh" "$@" --install-dir="$INSTALL_DIR"
+}
+
+postgres_umzug_zustand() {
+    if [[ -d "$INSTALL_DIR/data/postgres" && -x "$INSTALL_DIR/scripts/postgres-umzug.sh" ]]; then
+        postgres_umzug_skript status 2>/dev/null || echo unbekannt
+    else
+        echo keiner
+    fi
+}
+
+# Vor jedem Backup: Ein PostgreSQL-16-Bestand, dessen Container fehlt oder
+# schon auf das neue Image umgestellt wurde (z. B. nach einem manuellen
+# `docker compose up --force-recreate postgres`), läuft danach wieder mit dem
+# bisherigen Image. Sonst schlüge das Backup und damit der Umzug fehl.
+postgres_altbestand_sicherstellen() {
+    case "$(postgres_umzug_zustand)" in ausstehend|abgebrochen) ;; *) return 0 ;; esac
+    postgres_umzug_skript altbestand \
+        || warn "PostgreSQL 16 konnte nicht mit dem vorhandenen Bestand gestartet werden."
+}
+
+# Vor dem Containerwechsel. Scheitert der Umzug vor seinem Marker, bleibt
+# PostgreSQL 16 der unveränderte Bestand und das Update läuft ohne Umzug weiter.
+postgres_umzug_vor_containerwechsel() {
+    local st
+    st=$(postgres_umzug_zustand)
+    case "$st" in ausstehend|abgebrochen|umgestellt) ;; *) return 0 ;; esac
+    if [[ -z "$POSTGRES_UMZUG_BACKUP" || ! -s "$POSTGRES_UMZUG_BACKUP/db.sql.gz" ]]; then
+        warn "PostgreSQL-Umzug steht aus, aber ohne frisches Datenbank-Backup – PostgreSQL 16 läuft weiter."
+        return 0
+    fi
+    phase datenbank
+    info "Ziehe die Datenbank auf PostgreSQL 18 um (Backup: $POSTGRES_UMZUG_BACKUP)..."
+    if postgres_umzug_skript ausfuehren --ohne-start; then
+        success "Datenbank auf PostgreSQL 18 umgezogen."
+        phase up
+        return 0
+    fi
+    st=$(postgres_umzug_zustand)
+    if [[ "$st" == ausstehend || "$st" == abgebrochen ]]; then
+        warn "PostgreSQL-Umzug fehlgeschlagen – PostgreSQL 16 bleibt unverändert in Betrieb."
+        warn "Neuer Versuch später mit: $INSTALL_DIR/deploy-pages/install.sh --postgres-umzug"
+        return 0
+    fi
+    echo "FEHLER: PostgreSQL-Umzug nach der geprüften Übernahme nicht abgeschlossen (Zustand: $st)." >&2
+    echo "  Altbestand und Dump liegen unter data/postgres/umzug. Erneut: install.sh --postgres-umzug" >&2
+    return 1
+}
+
+# Nach erfolgreichem App-Healthcheck: Altbestand und Umzugs-Dump löschen.
+postgres_umzug_aufraeumen() {
+    [[ "$(postgres_umzug_zustand)" == aufraeumen ]] || return 0
+    postgres_umzug_skript aufraeumen \
+        || warn "Altbestand unter data/postgres/umzug konnte nicht gelöscht werden."
+}
+
+postgres_umzug_modus() {
+    INSTALL_DIR="${OPT_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+    if [[ ! -f "$INSTALL_DIR/docker-compose.yml" ]]; then
+        echo "FEHLER: Keine Installation unter $INSTALL_DIR gefunden." >&2
+        return 1
+    fi
+    docker_headless_pruefen || return 1
+    cd "$INSTALL_DIR"
+    export COMPOSE_PROJECT_NAME="$(basename "$INSTALL_DIR")"
+    echo "postbuch.net: Datenbank auf PostgreSQL 18 umziehen"
+    echo "  Verzeichnis: $INSTALL_DIR"
+    local st
+    st=$(postgres_umzug_zustand)
+    case "$st" in
+        ausstehend|abgebrochen|umgestellt) ;;
+        aufraeumen) postgres_umzug_aufraeumen; echo "  Umzug war bereits abgeschlossen."; return 0 ;;
+        keiner) echo "  Kein PostgreSQL-16-Bestand vorhanden – nichts zu tun."; return 0 ;;
+        *) echo "FEHLER: Zustand von data/postgres unklar ($st) – nichts verändert." >&2; return 1 ;;
+    esac
+    phase backup
+    backup_altbestand_besitz_sicherstellen || return 1
+    postgres_altbestand_sicherstellen
+    local backup
+    backup=$(backup_current_installation) || true
+    if [[ -z "$backup" || ! -s "$backup/db.sql.gz" ]]; then
+        echo "FEHLER: Backup mit Datenbank fehlgeschlagen – kein Umzug." >&2
+        return 1
+    fi
+    echo "  Backup: $backup"
+    POSTGRES_UMZUG_BACKUP="$backup"
+    phase up
+    if grep -q '^DUCKDNS_API_TOKEN=.' .env 2>/dev/null; then
+        compose_recreate caddy || return 1
+    else
+        compose_recreate || return 1
+    fi
+    if ! warte_auf_app_gesund; then
+        echo "FEHLER: Die App antwortet nach dem Umzug nicht auf /api/health. Bitte 'docker compose logs app' prüfen." >&2
+        return 1
+    fi
+    st=$(postgres_umzug_zustand)
+    if [[ "$st" != aufraeumen ]]; then
+        echo "FEHLER: Umzug nicht abgeschlossen (Zustand: $st). PostgreSQL 16 läuft weiter." >&2
+        return 1
+    fi
+    postgres_umzug_aufraeumen
+    phase fertig
+    echo "  Datenbank läuft auf PostgreSQL 18."
+}
+
 compose_recreate() {
+    # Erst die aktiven Dienste bestimmen: Der Umzug stoppt die Code-Container.
     profil_zustand_sichern
     aktive_code_services
+    postgres_umzug_vor_containerwechsel || return 1
     local with_caddy=false
     [[ "${1:-}" == "caddy" ]] && with_caddy=true
     local profile_args=()
@@ -1036,9 +1161,9 @@ if [[ ",\$COMPOSE_PROFILES_WERT," == *,scanner,* ]]; then
 fi
 # caddy nur einmalig bauen (release-unabhaengig, teurer xcaddy-Build);
 # vorhandenes Image umtaggen statt neu zu bauen
-if [[ -n "\$DUCKDNS_TOKEN" ]] && ! docker image inspect postbuch-caddy:local2 >/dev/null 2>&1; then
+if [[ -n "\$DUCKDNS_TOKEN" ]] && ! docker image inspect postbuch-caddy:local3 >/dev/null 2>&1; then
     for caddy_versuch in 1 2 3; do
-        echo "Baue caddy (gepinntes Image local2)..."
+        echo "Baue caddy (gepinntes Image local3)..."
         docker compose "\${PROFILE_ARGS[@]}" build caddy && break
         if [[ "\$caddy_versuch" -lt 3 ]]; then
             caddy_pause=\$((caddy_versuch * 5))
@@ -1093,9 +1218,9 @@ if [[ ",$COMPOSE_PROFILES_WERT," == *,scanner,* ]]; then
 fi
 # caddy nur einmalig bauen (release-unabhaengig, teurer xcaddy-Build);
 # vorhandenes Image umtaggen statt neu zu bauen
-if [[ -n "$DUCKDNS_TOKEN" ]] && ! docker image inspect postbuch-caddy:local2 >/dev/null 2>&1; then
+if [[ -n "$DUCKDNS_TOKEN" ]] && ! docker image inspect postbuch-caddy:local3 >/dev/null 2>&1; then
     for caddy_versuch in 1 2 3; do
-        echo "Baue caddy (gepinntes Image local2)..."
+        echo "Baue caddy (gepinntes Image local3)..."
         docker compose "${PROFILE_ARGS[@]}" build caddy && break
         if [[ "$caddy_versuch" -lt 3 ]]; then
             caddy_pause=$((caddy_versuch * 5))
@@ -1258,6 +1383,11 @@ backup_current_installation() {
             2>/dev/null \
             | gzip > "$BACKUP_DIR/db.sql.gz"; then
             chmod 600 "$BACKUP_DIR/db.sql.gz"
+            # Hauptversion des Servers: Ein Dump lässt sich nur in dieselbe
+            # oder eine neuere PostgreSQL-Version einspielen (do_rollback).
+            printf "postgres_major=%s\n" \
+                "$(docker_runtime exec postbuch-postgres printenv PG_MAJOR 2>/dev/null || true)" \
+                >> "$BACKUP_DIR/metadata.txt"
             success "  Datenbank gesichert."
         else
             warn "  pg_dump fehlgeschlagen – Datenbank nicht im Backup enthalten."
@@ -1372,6 +1502,27 @@ SWEOF
     fi
 }
 
+# PostgreSQL-Hauptversion, auf die eine docker-compose.yml (stdin) festlegt.
+compose_postgres_major() {
+    grep -oE 'pgvector/pgvector:pg[0-9]+' | head -n 1 | sed 's/.*:pg//' || true
+}
+
+# Hauptversion des Datenbestands in data/postgres, leer ohne Bestand. Liest
+# über das vorhandene PostgreSQL-Image, weil das Verzeichnis dem Container-
+# Nutzer gehört. Ein Bestand bis 16 liegt direkt im Verzeichnis, ab 18
+# versioniert unter <major>/docker.
+postgres_daten_major() {
+    local img
+    [[ -d "$INSTALL_DIR/data/postgres" ]] || return 0
+    img=$(docker_runtime inspect postbuch-postgres --format '{{.Config.Image}}' 2>/dev/null || true)
+    [[ -n "$img" ]] || img=$(grep -oE 'pgvector/pgvector:pg[^[:space:]"]+' "$INSTALL_DIR/docker-compose.yml" 2>/dev/null | head -n 1 || true)
+    [[ -n "$img" ]] || return 0
+    docker_runtime run --rm --entrypoint sh -v "$INSTALL_DIR/data/postgres:/d:ro" "$img" -c '
+        if [ -f /d/PG_VERSION ]; then cat /d/PG_VERSION
+        else for f in /d/*/docker/PG_VERSION; do [ -f "$f" ] && cat "$f"; done | sort -n | tail -n 1
+        fi' 2>/dev/null | tr -d '[:space:]' || true
+}
+
 do_rollback() {
     local BACKUP_BASE="$INSTALL_DIR/backups"
 
@@ -1442,18 +1593,59 @@ do_rollback() {
     SEL_VER=$(grep '^version='   "$SELECTED/metadata.txt" 2>/dev/null | cut -d'=' -f2- || echo "?")
     SEL_TS=$(grep  '^timestamp=' "$SELECTED/metadata.txt" 2>/dev/null | cut -d'=' -f2- || echo "?")
 
+    # Vor dem ersten Eingriff: ohne Quellcode und .env bliebe ein halber Stand zurück.
+    [[ -f "$SELECTED/source.tar.gz" && -f "$SELECTED/.env" ]] \
+        || error "Das Backup ist unvollständig (source.tar.gz oder .env fehlt) – Rollback nicht möglich."
+
     local HAT_DB_DUMP=false
     [[ -f "$SELECTED/db.sql.gz" ]] && HAT_DB_DUMP=true
 
     local AKTUELLE_VERSION="?"
     [[ -f "$INSTALL_DIR/VERSION" ]] && AKTUELLE_VERSION=$(tr -d '[:space:]' < "$INSTALL_DIR/VERSION")
 
+    # Docker Compose ermitteln (do_rollback läuft vor SCHRITT 3)
+    local DC="docker compose"
+    if ! docker info &>/dev/null 2>&1; then
+        DC="sudo docker compose"
+    fi
+    # compose_up_build nutzt die globale Variable DOCKER_COMPOSE.
+    DOCKER_COMPOSE="$DC"
+
+    # Wechsel der PostgreSQL-Hauptversion (z. B. Rollback hinter den Umzug auf
+    # 18): Die ältere Version kann den neueren Datenbestand nicht öffnen. Der
+    # Bestand wird beiseitegelegt und die Datenbank aus dem Dump neu aufgebaut.
+    local PG_ZIEL PG_DATEN PG_WECHSEL=false
+    PG_ZIEL=$( { tar -xzOf "$SELECTED/source.tar.gz" ./docker-compose.yml 2>/dev/null \
+                 || tar -xzOf "$SELECTED/source.tar.gz" docker-compose.yml 2>/dev/null; } | compose_postgres_major)
+    PG_DATEN=$(postgres_daten_major)
+    if [[ -n "$PG_ZIEL" && -n "$PG_DATEN" && "$PG_ZIEL" != "$PG_DATEN" ]]; then
+        PG_WECHSEL=true
+        hr
+        echo ""
+        printf "  Das Backup nutzt PostgreSQL %s, der Datenbestand liegt in Version %s vor.\n" "$PG_ZIEL" "$PG_DATEN"
+        if ! $HAT_DB_DUMP; then
+            warn "Dieses Backup enthält keinen Datenbank-Dump – ein Rollback über den Versionswechsel ist damit nicht möglich."
+            return 1
+        fi
+        local DUMP_MAJOR
+        DUMP_MAJOR=$(gunzip -c "$SELECTED/db.sql.gz" 2>/dev/null | head -n 40 \
+            | grep -oE 'Dumped by pg_dump version [0-9]+' | grep -oE '[0-9]+$' | head -n 1 || true)
+        if [[ ! "$DUMP_MAJOR" =~ ^[0-9]+$ ]] || (( DUMP_MAJOR > PG_ZIEL )); then
+            warn "Der Datenbank-Dump stammt von pg_dump ${DUMP_MAJOR:-unbekannt} und lässt sich nicht in PostgreSQL $PG_ZIEL einspielen."
+            return 1
+        fi
+        echo "  Die Datenbank wird deshalb zwingend mit zurückgerollt. Der jetzige Bestand"
+        printf "  bleibt unverändert unter data/postgres.pg%s-<Zeitpunkt> liegen.\n" "$PG_DATEN"
+    fi
+
     # DB-Restore ist eine eigene Entscheidung, getrennt von der finalen
     # 'ROLLBACK'-Tippbestätigung weiter unten: die Frage sammelt den Intent
     # (Code+DB oder nur Code), die Tippbestätigung bleibt die einzige harte
     # Ausführungssperre.
     local DB_ROLLBACK="n"
-    if $HAT_DB_DUMP; then
+    if $PG_WECHSEL; then
+        DB_ROLLBACK="j"
+    elif $HAT_DB_DUMP; then
         hr
         echo ""
         echo "  Dieses Backup enthält auch einen Datenbank-Dump vom Backup-Zeitpunkt."
@@ -1537,19 +1729,25 @@ do_rollback() {
         return 0
     fi
 
-    # Docker Compose ermitteln (do_rollback läuft vor SCHRITT 3)
-    local DC="docker compose"
-    if ! docker info &>/dev/null 2>&1; then
-        DC="sudo docker compose"
-    fi
-    # compose_up_build nutzt die globale Variable DOCKER_COMPOSE.
-    DOCKER_COMPOSE="$DC"
-
     hr
     echo ""
     info "Stoppe Docker-Stack..."
     cd "$INSTALL_DIR"
     $DC down 2>/dev/null || true
+
+    if $PG_WECHSEL; then
+        local PG_ABLAGE
+        PG_ABLAGE="$INSTALL_DIR/data/postgres.pg${PG_DATEN}-$(date '+%Y%m%d_%H%M%S')"
+        info "Lege den Datenbestand von PostgreSQL $PG_DATEN beiseite: $PG_ABLAGE"
+        if ! mv "$INSTALL_DIR/data/postgres" "$PG_ABLAGE" 2>/dev/null; then
+            sudo mv "$INSTALL_DIR/data/postgres" "$PG_ABLAGE" \
+                || error "data/postgres konnte nicht beiseitegelegt werden – Rollback gestoppt, Quellcode unverändert."
+        fi
+        # data/ gehört oft root. Fehlt das Verzeichnis trotzdem, legt Docker
+        # es beim Start des Bind-Mounts selbst an.
+        mkdir -p "$INSTALL_DIR/data/postgres" 2>/dev/null \
+            || sudo mkdir -p "$INSTALL_DIR/data/postgres" 2>/dev/null || true
+    fi
 
     info "Stelle Quellcode wieder her..."
     tar -xzf "$SELECTED/source.tar.gz" -C "$INSTALL_DIR"
@@ -1575,9 +1773,12 @@ do_rollback() {
         $DC up -d postgres
 
         info "Warte auf PostgreSQL..."
+        # Über TCP: Ein frisch angelegter Cluster (Rollback über einen
+        # PostgreSQL-Versionswechsel) läuft zuerst mit einem Init-Server, der nur
+        # auf dem Socket lauscht und danach neu startet.
         local waited=0
         until docker_runtime exec postbuch-postgres \
-                pg_isready -U "$DB_USER" -q 2>/dev/null \
+                pg_isready -h 127.0.0.1 -U "$DB_USER" -q 2>/dev/null \
               || [[ $waited -ge 60 ]]; do
             sleep 2; waited=$((waited+2))
         done
@@ -1601,6 +1802,15 @@ do_rollback() {
         docker_runtime exec postbuch-postgres env PGPASSWORD="$DB_PW" \
             createdb -U "$DB_USER" -O "$DB_USER" "$DB_NAME" \
             || error "Leere Zieldatenbank konnte nicht angelegt werden – Rollback gestoppt."
+
+        if $PG_WECHSEL; then
+            # Frischer Cluster: Der Dump vergibt Leserechte an die Backup-Rolle,
+            # die sonst erst das Schema der App beim Start anlegt.
+            docker_runtime exec postbuch-postgres env PGPASSWORD="$DB_PW" \
+                psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME" -q -c \
+                "DO \$\$ BEGIN CREATE ROLE postbuch_backup NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END \$\$" \
+                || error "Rolle postbuch_backup konnte nicht angelegt werden – Rollback gestoppt."
+        fi
 
         info "Stelle Datenbank atomar wieder her..."
         if ! gunzip -c "$SELECTED/db.sql.gz" | \
@@ -1733,7 +1943,9 @@ stack_steuerung_menu() {
         case "$WAHL" in
             1)
                 info "Starte den gesamten Docker-Stack..."
-                $DC "${STACK_PROFILE_ARGS[@]}" up -d
+                # Vorhandene Container nur starten, nie ersetzen: PostgreSQL
+                # wechselt Image und Datenbestand nur über install.sh-Updates.
+                $DC "${STACK_PROFILE_ARGS[@]}" up -d --no-recreate
                 ;;
             2)
                 info "Starte den gesamten Docker-Stack neu..."
@@ -1992,6 +2204,17 @@ So gehst du vor:
         ONEDRIVE_REDIRECT_URI="http://localhost:3420/api/onedrive-auth/callback"
     fi
 
+    # Ohne Caddy ist Port 3420 der einzige Zugang und bleibt offen. Mit Caddy
+    # kann die Oberfläche auf die HTTPS-Adresse beschränkt werden.
+    WEB_BIND=""
+    if [[ -n "$DUCKDNS_API_TOKEN" ]]; then
+        echo ""
+        info "Die Weboberfläche ist im Heimnetz zusätzlich über http://<IP>:3420 erreichbar."
+        local _web_wahl
+        _web_wahl=$(prompt "Nur noch über https://$DUCKDNS_DOMAIN erreichbar machen? [j/N]" "N")
+        [[ "${_web_wahl,,}" == j* ]] && WEB_BIND="127.0.0.1"
+    fi
+
     ONEDRIVE_CLIENT_ID=""
     ONEDRIVE_CLIENT_SECRET=""
     ONEDRIVE_TENANT_ID="consumers"
@@ -2123,7 +2346,12 @@ EOF
 
 # ── Ports ──────────────────────────────────────────────────────────
 WEB_PORT=3420
+# Leer = alle Schnittstellen; 127.0.0.1 = nur über Caddy (HTTPS).
+WEB_BIND=$WEB_BIND
 POSTGRES_HOST_PORT=5433
+# Scan-Webhook für andere Geräte im Netz: leer = freigegeben, 127.0.0.1 = gesperrt.
+# App und Cleaner erreichen den Scanner unabhängig davon über das Docker-Netz.
+SCANNER_BIND=127.0.0.1
 EOF
 
     chmod 600 "$ENV_FILE"
@@ -2187,6 +2415,7 @@ Optionen:
   --non-interactive         Niemals von /dev/tty lesen (impliziert --yes)
   --dry-run                 Bis inkl. Backup laufen, dann ohne Aenderung beenden
   --rollback                Rollback-Dialog starten
+  --postgres-umzug          Datenbank von PostgreSQL 16 auf 18 umziehen (mit Backup)
   --erwarte-sha256=<hex>    Tarball muss diese sha256-Summe haben, sonst Abbruch
   --install-dir=<pfad>      Abweichendes Installationsverzeichnis. Ohne diese
                             Angabe wird die Installation gesucht: Skript-
@@ -2217,6 +2446,7 @@ parse_args() {
             --non-interactive)   OPT_NON_INTERACTIVE=true; OPT_YES=true ;;
             --dry-run)           OPT_DRY_RUN=true ;;
             --rollback)          OPT_ROLLBACK=true ;;
+            --postgres-umzug)    OPT_POSTGRES_UMZUG=true ;;
             --erwarte-sha256=*)  OPT_SHA256="${1#*=}" ;;
             --install-dir=*)     OPT_INSTALL_DIR="${1#*=}" ;;
             --quelle=*)          OPT_FEED_BASE_URL="${1#*=}" ;;
@@ -2641,7 +2871,8 @@ verifier_docker() {   # $1 = Datendatei, $2 = Signatur (Base64), $3 = Pubkey (Ba
     # Der Image-Name folgt dem Compose-Projekt, also dem Verzeichnisnamen.
     basis=$(basename "${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}" 2>/dev/null || echo postbuch)
     for kandidat in "${basis}-app:latest" "postbuch-app:latest" \
-                    "postbuch-unified-app:latest" "node:22-alpine" "node:22"; do
+                    "postbuch-unified-app:latest" "node:24-alpine" "node:24" \
+                    "node:22-alpine" "node:22"; do
         if $dk image inspect "$kandidat" >/dev/null 2>&1; then bild="$kandidat"; break; fi
     done
     [[ -n "$bild" ]] || return 2
@@ -3547,11 +3778,13 @@ headless_update() {
     phase backup
     echo "  Erstelle Sicherung (Quellcode + Datenbank)..."
     backup_altbestand_besitz_sicherstellen || return 1
+    postgres_altbestand_sicherstellen
     local BACKUP_RESULT
     BACKUP_RESULT=$(backup_current_installation) || true
     if [[ -n "$BACKUP_RESULT" && -d "$BACKUP_RESULT" \
           && -s "$BACKUP_RESULT/db.sql.gz" ]]; then
         echo "  Backup: $BACKUP_RESULT"
+        POSTGRES_UMZUG_BACKUP="$BACKUP_RESULT"
     else
         echo "FEHLER: Vollständiges Backup einschließlich Datenbank konnte nicht erstellt werden – Abbruch." >&2
         safe_rm_rf "$RELEASE_STAGE"
@@ -3647,6 +3880,7 @@ headless_update() {
         echo "  (fragt vor einem DB-Restore gesondert nach)." >&2
         return 1
     fi
+    postgres_umzug_aufraeumen
 
     # Erst nach dem erfolgreichen Containerwechsel den persistenten Agenten
     # aktualisieren. Bei Build-Abbruch bleibt er passend zum Fallback-Quellbaum.
@@ -3675,6 +3909,11 @@ if $OPT_ROLLBACK; then
     fi
     do_rollback
     exit 0
+fi
+
+if $OPT_POSTGRES_UMZUG; then
+    postgres_umzug_modus
+    exit $?
 fi
 
 if $OPT_UPDATE && $OPT_NON_INTERACTIVE; then
@@ -4063,9 +4302,11 @@ if [[ "$MODE" == "update" ]]; then
         warn "Update abgebrochen, bis die angezeigte Eigentümer-Reparatur ausgeführt wurde."
         return 1
     }
+    postgres_altbestand_sicherstellen
     BACKUP_RESULT=$(backup_current_installation) || true
     if [[ -n "$BACKUP_RESULT" && -d "$BACKUP_RESULT" ]]; then
         success "Backup erstellt: $BACKUP_RESULT"
+        POSTGRES_UMZUG_BACKUP="$BACKUP_RESULT"
     else
         warn "Backup konnte nicht vollständig erstellt werden."
         echo ""
@@ -4152,11 +4393,13 @@ CADDYEOF
     info "Starte aktualisierten Stack..."
     echo ""
     cd "$INSTALL_DIR"
+    recreate_ok=true
     if [[ -n "$UPDATE_DUCKDNS_TOKEN" ]]; then
-        compose_recreate caddy
+        compose_recreate caddy || recreate_ok=false
     else
-        compose_recreate
+        compose_recreate || recreate_ok=false
     fi
+    $recreate_ok || error "Der Stack konnte nicht gestartet werden. Details stehen oberhalb."
 
     info "Warte, bis die App wieder antwortet..."
     if ! warte_auf_app_gesund; then
@@ -4164,6 +4407,7 @@ CADDYEOF
         echo "  Bei Bedarf: ./install.sh --rollback (fragt vor einem DB-Restore gesondert nach)" >&2
         error "Die App antwortet nach dem Update nicht auf /api/health – vermutlich ist die Schema-Migration oder der App-Start fehlgeschlagen."
     fi
+    postgres_umzug_aufraeumen
 
     # Ein vorhandener Agent wird mit jeder erfolgreichen interaktiven
     # Aktualisierung mitgezogen. Der Dialog darunter richtet nur neue Agenten
@@ -4287,6 +4531,10 @@ if [[ "$MODE" == "reinstall" ]]; then
 
         info "Lösche Datenbank und Scan-Puffer..."
         safe_rm_rf "$INSTALL_DIR/data/postgres"  || error "Konnte data/postgres nicht löschen. Bitte manuell: sudo rm -rf \"$INSTALL_DIR/data/postgres\""
+        for pg_alt in "$INSTALL_DIR"/data/postgres.pg*-*; do
+            [[ -e "$pg_alt" ]] || continue
+            safe_rm_rf "$pg_alt" || error "Konnte $pg_alt nicht löschen. Bitte manuell: sudo rm -rf \"$pg_alt\""
+        done
         safe_rm_rf "$INSTALL_DIR/data/scan_buffer" || error "Konnte data/scan_buffer nicht löschen. Bitte manuell: sudo rm -rf \"$INSTALL_DIR/data/scan_buffer\""
 
         if [[ "$RESTORE_BACKUP" == "true" ]]; then
@@ -4315,6 +4563,10 @@ if [[ "$MODE" == "reinstall" ]]; then
 
         info "Lösche Daten und Konfiguration..."
         safe_rm_rf "$INSTALL_DIR/data/postgres"  || error "Konnte data/postgres nicht löschen. Bitte manuell: sudo rm -rf \"$INSTALL_DIR/data/postgres\""
+        for pg_alt in "$INSTALL_DIR"/data/postgres.pg*-*; do
+            [[ -e "$pg_alt" ]] || continue
+            safe_rm_rf "$pg_alt" || error "Konnte $pg_alt nicht löschen. Bitte manuell: sudo rm -rf \"$pg_alt\""
+        done
         safe_rm_rf "$INSTALL_DIR/data/scan_buffer" || error "Konnte data/scan_buffer nicht löschen. Bitte manuell: sudo rm -rf \"$INSTALL_DIR/data/scan_buffer\""
         rm -f "$INSTALL_DIR/.env"
 

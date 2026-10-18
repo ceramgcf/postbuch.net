@@ -26,7 +26,8 @@ export async function atomicPgRestore(tempDumpPath, dbHost, dbPort, dbUser, dbNa
   ], { env: pgEnv, maxBuffer: 500 * 1024 * 1024 });
 
   const cleanupBlock = cleanupSql.length ? `${cleanupSql.join('\n')}\n` : '';
-  const sql = `BEGIN;\nDROP SCHEMA IF EXISTS postbuch CASCADE;\n${dumpSql}\n${cleanupBlock}COMMIT;\n`;
+  const passendSql = await anServerversionAnpassen(dumpSql, dbHost, dbPort, dbUser, dbName, pgEnv);
+  const sql = `BEGIN;\nDROP SCHEMA IF EXISTS postbuch CASCADE;\n${passendSql}\n${cleanupBlock}COMMIT;\n`;
 
   const sqlPath = `${tempDumpPath}.sql`;
   await writeFile(sqlPath, sql, { mode: 0o600 });
@@ -43,6 +44,20 @@ export async function atomicPgRestore(tempDumpPath, dbHost, dbPort, dbUser, dbNa
   } finally {
     await unlink(sqlPath).catch(() => {});
   }
+}
+
+/**
+ * pg_restore 18 setzt `transaction_timeout`, das PostgreSQL erst ab 17 kennt.
+ * Läuft der Server noch auf 16 (Umzug auf 18 steht aus), bräche psql an dieser
+ * Zeile ab. Sie wird dann entfernt; der Wert 0 ist ohnehin der Standard.
+ */
+async function anServerversionAnpassen(dumpSql, dbHost, dbPort, dbUser, dbName, pgEnv) {
+  const { stdout } = await execFileAsync('psql', [
+    '-h', dbHost, '-p', dbPort, '-U', dbUser, '-d', dbName,
+    '--no-psqlrc', '-At', '-c', 'SHOW server_version_num',
+  ], { env: pgEnv });
+  if (Number(stdout.trim()) >= 170000) return dumpSql;
+  return dumpSql.replace(/^SET transaction_timeout = 0;\n/gm, '');
 }
 
 function jsonAlsSqlAusdruck(wert) {
@@ -117,11 +132,50 @@ function verschluesselungErhaltenSql(aktuell, zusatzDeks = []) {
 }
 
 /**
+ * Cleanup-SQL, das Zugangsdaten der laufenden Instanz übernimmt, wo das
+ * eingespielte Backup keine enthält. Unverschlüsselte Backups lassen
+ * Geheimnisse weg (jobs/backup.js); ohne diesen Schritt löschte ein solcher
+ * Restore OneDrive-Anmeldung, KI-Schlüssel, Webhook-Tokens usw. der Instanz.
+ * Was das Backup mitbringt, bleibt unverändert. Der VAPID-Schlüssel ist ein
+ * Paar: Fehlt der private Schlüssel im Backup, kommt auch der öffentliche aus
+ * der Instanz.
+ *
+ * `geheimnisse` = geheimeSettingsDerInstanz() aus lib/geheime-settings.js.
+ */
+function zugangsdatenErhaltenSql(geheimnisse = []) {
+  if (!geheimnisse.length) return null;
+  return `DO $postbuch$
+     DECLARE
+       instanz jsonb := ${jsonAlsSqlAusdruck(geheimnisse)};
+       eintrag jsonb;
+       vapid_fehlt boolean;
+     BEGIN
+       IF to_regclass('postbuch._settings') IS NULL THEN RETURN; END IF;
+       vapid_fehlt := NOT EXISTS (SELECT 1 FROM postbuch._settings WHERE key = 'vapid_private_key');
+       FOR eintrag IN SELECT * FROM jsonb_array_elements(instanz) LOOP
+         IF eintrag->>'key' = 'vapid_public_key' THEN
+           IF vapid_fehlt AND EXISTS (SELECT 1 FROM jsonb_array_elements(instanz) e
+                                      WHERE e->>'key' = 'vapid_private_key') THEN
+             INSERT INTO postbuch._settings (key, value, updated_at)
+             VALUES ('vapid_public_key', eintrag->'value', NOW())
+             ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();
+           END IF;
+         ELSE
+           INSERT INTO postbuch._settings (key, value, updated_at)
+           VALUES (eintrag->>'key', eintrag->'value', NOW())
+           ON CONFLICT (key) DO NOTHING;
+         END IF;
+       END LOOP;
+     END $postbuch$;`;
+}
+
+/**
  * Cleanup-SQL für die admin-only Restore-Routen (routes/backup.js).
  * `verschluesselung` = verschluesselungFuerRestore(settings) der laufenden Instanz.
  */
-export function adminRestoreCleanupSql(verschluesselung = null) {
+export function adminRestoreCleanupSql(verschluesselung = null, geheimnisse = []) {
   return [
+    zugangsdatenErhaltenSql(geheimnisse),
     // Web-Sitzungen gehören nicht zum wiederhergestellten Stand: auch Backups
     // aus Versionen, die die Sitzungstabelle noch mitgesichert haben, dürfen
     // keine alten Anmeldungen zurückbringen. Alle melden sich neu an.
@@ -136,17 +190,21 @@ export function adminRestoreCleanupSql(verschluesselung = null) {
        END IF;
      END $postbuch$;`,
     verschluesselungErhaltenSql(verschluesselung),
-  ];
+  ].filter(Boolean);
 }
 
 /**
  * Cleanup-SQL für den Neuinstallations-Restore (routes/setup-restore.js):
- * zusätzlich Sessions und Zugangsdaten der alten Instanz kappen, sowie das
+ * zusätzlich Sessions und Zugangsdaten der alten Instanz kappen, fehlende
+ * Zugangsdaten aus der frischen Instanz übernehmen sowie das
  * frische SESSION_SECRET dieser Installation eintragen. `zusatzDeks` (Base64)
  * stammen aus einer auf der Setup-Seite mitgegebenen Schlüsseldatei.
  */
-export function setupRestoreCleanupSql({ zusatzDeks = [] } = {}) {
+export function setupRestoreCleanupSql({ zusatzDeks = [], geheimnisse = [] } = {}) {
   const cleanupSql = [
+    // Vor dem Löschen unten: app_password und OAuth-Zwischenstand der frischen
+    // Instanz werden danach wie bisher entfernt.
+    zugangsdatenErhaltenSql(geheimnisse),
     `DO $postbuch$ BEGIN
        IF to_regclass('postbuch.session') IS NOT NULL THEN
          DELETE FROM postbuch.session;
@@ -175,5 +233,5 @@ export function setupRestoreCleanupSql({ zusatzDeks = [] } = {}) {
        END $postbuch$;`,
     );
   }
-  return cleanupSql;
+  return cleanupSql.filter(Boolean);
 }

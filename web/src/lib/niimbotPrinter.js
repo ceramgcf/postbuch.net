@@ -1,4 +1,4 @@
-import { NiimbotBluetoothClient, ImageEncoder, LabelType } from '@mmote/niimbluelib';
+import { NiimbotBluetoothClient, ImageEncoder, LabelType, PageColorType } from '@mmote/niimbluelib';
 
 export async function connectPrinter() {
   const client = new NiimbotBluetoothClient();
@@ -13,11 +13,12 @@ export async function disconnectPrinter(client) {
 export async function printLabel(client, canvas) {
   // "left" rotiert 90° im Uhrzeigersinn: 320×96 (Querformat) → 96 Spalten × 320 Zeilen
   // = 12mm Druckkopfbreite × 40mm Etikett-Länge – passt exakt für D110 12×40mm
-  const encoded = ImageEncoder.encodeCanvas(canvas, 'left');
+  // Einfarbig (SingleColor) ist auch der Standard des PrintTasks; beide müssen übereinstimmen.
+  const encoded = ImageEncoder.encodeCanvas(canvas, PageColorType.SingleColor, 'left');
 
   // Ermittle den optimalen PrintTask-Typ vom Drucker (D110 oder D110M_V4)
   const taskName = client.getPrintTaskType() ?? 'D110';
-  const printTask = client.abstraction.newPrintTask(taskName, {
+  const printTask = client.protocol.newPrintTask(taskName, {
     totalPages: 1,
     labelType: LabelType.WithGaps,
     density: 3,
@@ -29,6 +30,6 @@ export async function printLabel(client, canvas) {
     await printTask.waitForPageFinished();
     await printTask.waitForFinished();
   } finally {
-    await client.abstraction.printEnd();
+    await client.protocol.printEnd();
   }
 }

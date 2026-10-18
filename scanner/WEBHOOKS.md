@@ -4,6 +4,12 @@ Host: `http://<scanner-host>:8080`
 
 Alle Endpunkte sind einfache GET-Requests mit Query-Parametern. Standardwerte: `dpi=300`, `mode=gray`.
 
+Jeder Aufruf braucht den Scanner-Token: Query-Parameter `token=<scanner-token>`
+oder Header `X-Scanner-Token`. Die Import-Seite zeigt die vollständige URL samt
+Token. Ohne gültigen Token antwortet der Dienst mit `401`, solange er noch keinen
+Token von der App geladen hat, mit `503`. Die Beispiele unten lassen den Token
+der Lesbarkeit halber weg.
+
 Ausgabeordner im Container: `/scans` (auf Host gemountet als `./scans_raw`).
 
 ## Übersicht

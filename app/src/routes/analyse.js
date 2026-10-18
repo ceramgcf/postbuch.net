@@ -8,6 +8,8 @@ import {
 } from '../service/steuer-auswertungen.js';
 import { ladeKuerzungen, filtereKuerzungen, kuerzungenExcel, parseGesehen } from '../service/kuerzungen.js';
 import { sendeExcel } from '../lib/excel.js';
+import { erstattungsSatzSql, erwarteteErstattungSql } from '../lib/erstattung-sql.js';
+import { breVorschau, breRingDaten } from '../service/bre.js';
 
 const router = Router();
 
@@ -151,25 +153,21 @@ router.get('/perioden', async (req, res) => {
     const [result, patientGroups] = await Promise.all([query(`
       SELECT
         ab.person, per.ist_tier, ab.kostentraeger, ab.periode, ab.status, ab.eb_postid,
-        ab.satz AS periode_satz, ab.ursprungsperiode,
+        ab.satz AS periode_satz, ab.ursprungsperiode, ab.bre_jahr, ab.bre_schwelle,
+        per.bre_abschlag AS person_bre_abschlag,
         COUNT(a.postid) AS anzahl_rechnungen,
         COALESCE(SUM(a.gesamtbetrag), 0) AS summe_rechnungen,
         COALESCE(SUM(
-          CASE
-            WHEN a.gesamtbetrag IS NULL THEN NULL
-            WHEN ab.kostentraeger = 'PKV'
-              AND COALESCE(a.pkv_satz_override, ab.satz, per.pkv_satz) IS NOT NULL
-              THEN a.gesamtbetrag * COALESCE(a.pkv_satz_override, ab.satz, per.pkv_satz) / 100.0
-            WHEN ab.kostentraeger = 'Beihilfe'
-              AND COALESCE(a.beihilfe_satz_override, ab.satz, per.beihilfe_satz) IS NOT NULL
-              THEN a.gesamtbetrag * COALESCE(a.beihilfe_satz_override, ab.satz, per.beihilfe_satz) / 100.0
+          CASE ab.kostentraeger
+            WHEN 'PKV'      THEN ${erwarteteErstattungSql('PKV')}
+            WHEN 'Beihilfe' THEN ${erwarteteErstattungSql('Beihilfe')}
             ELSE NULL
           END
         ), 0) AS summe_erwartet,
         BOOL_OR(
           CASE ab.kostentraeger
-            WHEN 'PKV'      THEN COALESCE(a.pkv_satz_override, ab.satz, per.pkv_satz)      IS NOT NULL
-            WHEN 'Beihilfe' THEN COALESCE(a.beihilfe_satz_override, ab.satz, per.beihilfe_satz) IS NOT NULL
+            WHEN 'PKV'      THEN ${erstattungsSatzSql('PKV')} IS NOT NULL
+            WHEN 'Beihilfe' THEN ${erstattungsSatzSql('Beihilfe')} IS NOT NULL
             ELSE false
           END
         ) AS hat_satz,
@@ -220,7 +218,8 @@ router.get('/perioden', async (req, res) => {
           (ab.kostentraeger = 'PKV' AND a.abrechnungsperiode_pkv = ab.periode)
           OR (ab.kostentraeger = 'Beihilfe' AND a.abrechnungsperiode_beihilfe = ab.periode)
         )
-      GROUP BY ab.person, per.ist_tier, ab.kostentraeger, ab.periode, ab.status, ab.satz, ab.eb_postid, ab.ursprungsperiode
+      GROUP BY ab.person, per.ist_tier, ab.kostentraeger, ab.periode, ab.status, ab.satz, ab.eb_postid, ab.ursprungsperiode,
+               ab.bre_jahr, ab.bre_schwelle, per.bre_abschlag
       ORDER BY per.ist_tier, ab.person, ab.kostentraeger, ab.periode DESC
     `), query(`
       SELECT ist_tier
@@ -229,6 +228,25 @@ router.get('/perioden', async (req, res) => {
       GROUP BY ist_tier
       ORDER BY ist_tier
     `)]);
+
+    // Ringdaten der zurückhaltenden Perioden (Beitragsrückerstattung). Ein
+    // Fehler hier darf die Übersicht nicht verhindern; die Zeile zeigt dann
+    // nur keinen Ring.
+    const breRing = {};
+    const brePersonen = [...new Set(result.rows
+      .filter((r) => r.status === 'WITHHELD').map((r) => r.person))];
+    for (const person of brePersonen) {
+      try {
+        for (const ring of await breRingDaten(person)) {
+          breRing[`${person}|PKV|${ring.periode}`] = ring;
+        }
+      } catch (err) {
+        console.error(`GET /api/analyse/perioden: BRE-Ring für ${person} fehlgeschlagen:`, err.message);
+      }
+    }
+    for (const r of result.rows) {
+      r.bre_ring = r.status === 'WITHHELD' ? breRing[`${r.person}|${r.kostentraeger}|${r.periode}`] ?? null : null;
+    }
 
     res.json({ data: result.rows, patientGroups: patientGroups.rows });
   } catch (err) {
@@ -261,6 +279,25 @@ router.get('/perioden/collecting', async (req, res) => {
   }
 });
 
+// GET /api/analyse/bre-vorschau?person=<kurzname> — Bewertung der
+// Beitragsrückerstattung für den Abrechnungsassistenten (rein lesend).
+// Antwort: { person, relevant:false } oder die Bewertung aus service/bre.js
+// (entscheidungsjahre, schwellen, verwirkt, kombinationen, vorschlag,
+// ohneJahr, kandidaten, withheld, schwelleAktuell, sammelPeriode, ueberwachen).
+router.get('/bre-vorschau', async (req, res) => {
+  const person = typeof req.query.person === 'string' ? req.query.person.trim() : '';
+  if (!person) return res.status(400).json({ error: 'person fehlt' });
+  try {
+    res.json(await breVorschau(person));
+  } catch (err) {
+    if (err.code === 'BRE_ZU_VIELE_JAHRE') {
+      return res.status(422).json({ error: err.message, code: err.code });
+    }
+    console.error('GET /api/analyse/bre-vorschau error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
 // GET /api/analyse/perioden/:person/:kostentraeger/:periode/rechnungen
 // Ohne `historisch`-Filter, und das mit Absicht: Eine Rechnung verlässt ihre
 // Abrechnungsperiode nur, wenn die Periode ausdrücklich zurückgesetzt wird —
@@ -279,7 +316,6 @@ router.get('/perioden/:person/:kostentraeger/:periode/rechnungen', async (req, r
 
     const col = kostentraeger === 'PKV' ? 'a.abrechnungsperiode_pkv' : 'a.abrechnungsperiode_beihilfe';
     const satzOverrideCol = kostentraeger === 'PKV' ? 'a.pkv_satz_override' : 'a.beihilfe_satz_override';
-    const satzPersonCol   = kostentraeger === 'PKV' ? 'per.pkv_satz'        : 'per.beihilfe_satz';
     const result = await query(`
       SELECT
         p.postid, p.briefdatum, p.dokumentart AS art, p.betreff, p.historisch,
@@ -290,13 +326,10 @@ router.get('/perioden/:person/:kostentraeger/:periode/rechnungen', async (req, r
         per.beihilfe_satz AS personen_beihilfe_satz,
         ab.satz AS periode_satz,
         ${satzOverrideCol} AS satz_override,
-        COALESCE(${satzOverrideCol}, ab.satz, ${satzPersonCol}) AS effektiver_satz,
-        CASE
-          WHEN a.gesamtbetrag IS NOT NULL
-            AND COALESCE(${satzOverrideCol}, ab.satz, ${satzPersonCol}) IS NOT NULL
-          THEN a.gesamtbetrag * COALESCE(${satzOverrideCol}, ab.satz, ${satzPersonCol}) / 100.0
-          ELSE NULL
-        END AS erwartete_erstattung,
+        ${erstattungsSatzSql(kostentraeger)} AS effektiver_satz,
+        ${erwarteteErstattungSql(kostentraeger)} AS erwartete_erstattung,
+        a.bre_unbeachtlich,
+        postbuch.arz_behandlungsjahre(a.postid) AS bre_jahre,
         COALESCE((
           SELECT SUM(ep.erstattungsbetrag)
           FROM erstattungsbescheid_einzelposition ep

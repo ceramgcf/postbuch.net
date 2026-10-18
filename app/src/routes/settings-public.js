@@ -25,13 +25,15 @@
 
 import { Router } from 'express';
 import { loadDynamicSettings, getFolders, getActiveBackendName } from '../config.js';
-import { ermittleWurzelPfad } from '../service/storage-setup.js';
+import { ermittleWurzelPfad, WURZEL_DIREKT } from '../service/storage-setup.js';
+import * as onedrive from '../lib/storage/onedrive.js';
 import db from '../db.js';
 import { appLog } from '../app-log.js';
 import { getCacheMode, setCacheMode } from '../lib/cache-mode.js';
 import { subscriptionFeatureUnlocked } from '../lib/claude-subscription.js';
 import { resolveTierModelConfig, capsForRef, providerForRef, kannDokumentSehen } from '../lib/llm.js';
 import { buildAiHealthRedacted } from '../lib/ai-health.js';
+import { modellwahl } from '../lib/llm/model-classes.js';
 import { gesamtbild as einrichtungGesamtbild } from './einrichtung.js';
 
 const router = Router();
@@ -163,16 +165,26 @@ router.get('/importwege', async (_req, res) => {
     const settings = await loadDynamicSettings();
     const backend = getActiveBackendName(settings);
     let rootPath = null;
+    let inboxPfad = null;
     try {
       rootPath = await ermittleWurzelPfad(backend);
+      if (rootPath !== null) {
+        inboxPfad = [rootPath === WURZEL_DIREKT ? '' : rootPath, '_inbox'].filter(Boolean).join('/');
+        // getPath() rechnet im App-Ordner-Modus ab dem App-Ordner; im
+        // OneDrive des Nutzers liegt der unter Apps/.
+        if (backend === 'onedrive' && onedrive.zugriffsModusAus(settings) === 'appordner') {
+          inboxPfad = `Apps/${(await onedrive.getAppOrdnerGemerkt()).name}/${inboxPfad}`;
+        }
+      }
     } catch {
       // Backend gerade nicht erreichbar — die Seite kommt ohne Pfad aus.
+      inboxPfad = null;
     }
     const polling = settings.onedrive_polling || {};
     res.json({
       backend,
       rootPath,
-      inboxPfad: rootPath === null ? null : [rootPath, '_inbox'].filter(Boolean).join('/'),
+      inboxPfad,
       polling: {
         enabled: polling.enabled === true,
         intervalSec: Number(polling.intervalSec) > 0 ? Number(polling.intervalSec) : 60,
@@ -222,7 +234,9 @@ router.get('/ai/tier-models', async (req, res) => {
     }
     const subscriptionEnabled =
       subscriptionFeatureUnlocked() && settings.llm_claude_subscription_enabled === true;
-    res.json({ tiers, subscription: { enabled: subscriptionEnabled } });
+    // In der einfachen Modellwahl zeigen alle Stufen auf das Analysemodell;
+    // der Dialog bietet dann keine Stufenwahl an.
+    res.json({ tiers, modellwahl: modellwahl(settings), subscription: { enabled: subscriptionEnabled } });
   } catch (err) {
     console.error('[settings-public] ai/tier-models Fehler:', err);
     res.status(500).json({ error: err.message });

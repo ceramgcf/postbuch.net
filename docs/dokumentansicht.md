@@ -169,7 +169,9 @@ Stellschrauben:
    _Mittel_, _Schwer_. Zu jeder Stufe stehen das konkrete Modell und der
    Anbieter; Stufen, deren Modell weder PDFs noch Bilder verarbeiten kann, sind
    mit **nur Text** gekennzeichnet. Bei jeder festen Stufe entfällt die
-   Voranalyse – das gewählte Modell wird direkt verwendet.
+   Voranalyse – das gewählte Modell wird direkt verwendet. Die Stufen gibt es
+   nur bei gestaffelter [Modellwahl](ki-provider.md#modellwahl); mit einem
+   Modell für alles steht hier nur _Auto_ mit dem Analysemodell.
 3. **Eingescannten Text verwerfen (nur das Bild an die KI geben)** – erscheint
    nur, wenn das PDF überhaupt eine Textebene hat. postbuch.net kreuzt das
    Kästchen von sich aus an, wenn es eine automatisch erkannte OCR-Textebene
@@ -870,7 +872,7 @@ einen Faktor über 2,3 –, wird sie klein darunter eingeblendet.
 Positionen, die in einem Erstattungsbescheid **gekürzt** wurden, erscheinen
 **rot**. Das ist der schnellste Weg zu sehen, woran eine Erstattung gescheitert
 ist. Am rechten Rand jeder Zeile liegt das [SymLink](#symlinks)-Kettensymbol.
-Die letzte Zeile **Summe** addiert alle Positionen.
+Die Zeile **Summe** addiert alle Positionen.
 
 ##### Positionen bearbeiten, hinzufügen und löschen
 
@@ -889,16 +891,22 @@ von Hand richtigstellen (nicht mit Lesezugriff):
 Jede dieser Änderungen steht im Rückgängig-Verlauf. Eine gelöschte und per
 **Strg+Z** zurückgeholte Position erhält dabei eine neue Nummer.
 
-##### Automatisch ermittelter Differenzbetrag
+##### Abweichung zum Rechnungsbetrag
 
-Ergibt die Summe der Positionen nicht den Rechnungsbetrag, steht am Ende der
-Liste eine kursive Zeile **automatisch ermittelter Differenzbetrag**. Sie nimmt
-genau den Unterschied auf, damit die Positionen zusammen wieder den
-Rechnungsbetrag ergeben, und passt sich bei jeder Änderung an Positionen oder
-Gesamtbetrag von selbst an. Stimmen die Summen überein, verschwindet sie. Ein
-negativer Betrag bedeutet, dass die Positionen zusammen mehr ergeben als der
-Rechnungsbetrag. Die Zeile lässt sich weder bearbeiten noch löschen. Ohne
+Ergibt die Summe der Positionen nicht den Rechnungsbetrag, steht unter der
+Summe eine kursive Zeile **Abweichung zum Rechnungsbetrag**: Rechnungsbetrag
+minus Summe. Typische Ursachen sind Mehrwertsteuer oder eine Minderung, die
+auf der Rechnung nicht als eigene Position steht, aber auch eine falsch
+gelesene Position oder ein falsch gelesener Gesamtbetrag. Ein negativer Betrag
+bedeutet, dass die Positionen zusammen mehr ergeben als der Rechnungsbetrag.
+Die Zeile ist keine Position: Sie wird bei jedem Öffnen neu berechnet, hat
+keine Nummer und verschwindet, sobald die Summen übereinstimmen. Ohne
 Einzelpositionen oder ohne Gesamtbetrag gibt es sie nicht.
+
+Eine Position **Differenzbetrag zum Rechnungsbetrag (früher automatisch
+ermittelt)** stammt aus Version 2.11, in der die Abweichung als eigene
+Position gespeichert wurde. Erhalten geblieben sind nur solche, auf die eine
+Kürzung verweist; sie sind gewöhnliche Positionen und lassen sich bearbeiten.
 
 Eine [Wiederverarbeitung](#wiederverarbeiten) liest die Positionen neu aus und
 ersetzt dabei auch die von Hand geänderten.
@@ -916,6 +924,16 @@ Prozentanteil und die Kürzung. Darunter stehen **Gesamt erstattet** und die
 Ist noch nichts zugeordnet, steht dort „Keine Erstattungen zugeordnet."; der
 Knopf ![Hinzufügen-Symbol](icons/plus.svg) **+ Erstattung zuordnen** ist
 trotzdem da.
+
+#### Beitragsrückerstattung
+
+Bei privat versicherten Menschen zeigt der Rechnungsblock die Zeile
+**Beitragsrückerstattung**: das Behandlungsjahr der Rechnung (aus den
+Behandlungsdaten der Positionen, sonst „(geschätzt)“ aus dem Rechnungsdatum,
+ohne jedes Datum „Behandlungsjahr unbekannt“) und das Häkchen
+**BRE-unbeachtlich (z. B. Vorsorge)**. Was beides
+bewirkt, steht unter
+[Beitragsrückerstattung überwachen](abrechnung-pkv-beihilfe.md#beitragsrückerstattung-überwachen).
 
 #### Erstattungen von Hand verknüpfen
 

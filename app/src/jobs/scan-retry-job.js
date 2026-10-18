@@ -7,16 +7,39 @@
  * Dieser Job läuft alle 5 Minuten und verarbeitet fällige Einträge (next_retry_at <= now()).
  * Backoff: 30min → 1h → 2h → 4h → 8h → 16h → 32h → 64h → 128h → 256h (ca. 10,7 Tage)
  * Nach max_retries: status = 'manual_only', prominentes Dashboard-Banner.
+ *
+ * Fehlt die gepufferte Datei (Restore auf eine andere Maschine – die Sicherung
+ * enthält die Tabelle, aber nicht den Scan-Buffer – oder ein geleerter Buffer),
+ * gibt es nichts mehr zu wiederholen: Der Eintrag wird entfernt, statt tagelang
+ * als „wartet auf Upload“ im Dashboard zu stehen.
  */
 
 import pool from '../db.js';
 import * as tracker from './tracker.js';
 import { enqueueDocument } from './pipeline-queue.js';
-import { readScanBuffer } from '../lib/scan-buffer.js';
+import { readScanBuffer, scanBufferVorhanden } from '../lib/scan-buffer.js';
 import { appLog } from '../app-log.js';
 
 const BASE_INTERVAL_MIN = 30;
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+async function entferneEintrag(row, grund) {
+  await pool.query('DELETE FROM postbuch._scan_retry_queue WHERE job_id = $1', [row.job_id]);
+  appLog('WARN', 'scan-retry-job',
+    `Retry-Eintrag entfernt: ${row.original_filename} – ${grund}`,
+    { details: `jobId=${row.job_id}` }
+  );
+}
+
+/** Einträge ohne gepufferte Datei entfernen (beim Start, z. B. nach einem Restore). */
+async function entferneVerwaiste() {
+  const { rows } = await pool.query('SELECT job_id, original_filename FROM postbuch._scan_retry_queue');
+  for (const row of rows) {
+    if (!(await scanBufferVorhanden(row.job_id))) {
+      await entferneEintrag(row, 'gepufferte Scan-Datei fehlt');
+    }
+  }
+}
 
 async function sweep() {
   let rows;
@@ -56,6 +79,11 @@ async function sweep() {
         { details: `originalJobId=${row.job_id}` }
       );
     } catch (err) {
+      if (err.code === 'ENOENT') {
+        await entferneEintrag(row, 'gepufferte Scan-Datei fehlt')
+          .catch(e => console.error(`[scan-retry-job] DELETE fehlgeschlagen: ${e.message}`));
+        continue;
+      }
       const newRetryCount = row.retry_count + 1;
       const reachedMax = newRetryCount >= row.max_retries;
 
@@ -89,7 +117,10 @@ async function sweep() {
 }
 
 export function startScanRetryJob() {
-  sweep().catch(e => console.error(`[scan-retry-job] Initialer Sweep fehlgeschlagen: ${e.message}`));
+  entferneVerwaiste()
+    .catch(e => console.error(`[scan-retry-job] Aufräumen verwaister Einträge fehlgeschlagen: ${e.message}`))
+    .then(() => sweep())
+    .catch(e => console.error(`[scan-retry-job] Initialer Sweep fehlgeschlagen: ${e.message}`));
   setInterval(
     () => sweep().catch(e => console.error(`[scan-retry-job] Sweep fehlgeschlagen: ${e.message}`)),
     SWEEP_INTERVAL_MS

@@ -187,7 +187,11 @@ const DISPATCHER_TTL_MS = 60_000;
 const _dispatcherCache = new Map(); // key → { dispatcher, expires }
 
 function holeDispatcher(url, allowPrivate, addresses, reuse, allowUntrustedTls = false) {
+  // allowH2: false hält das Verhalten von undici 7 fest (nur HTTP/1.1). Ab
+  // undici 8 handelt ein Agent per ALPN sonst auch HTTP/2 aus; das ist für
+  // LLM-Streams und WebDAV-Backends ungetestet.
   const baue = () => new Agent({
+    allowH2: false,
     connect: {
       ...(url.protocol === 'https:' && allowUntrustedTls ? { rejectUnauthorized: false } : {}),
       lookup: (_host, options, cb) => {

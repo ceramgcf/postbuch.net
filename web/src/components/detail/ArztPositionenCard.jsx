@@ -91,10 +91,10 @@ function PositionDialog({ offen, titel, entwurf, setEntwurf, fehler, pending, on
 
 /**
  * Einzelpositionen einer Arztrechnung mit Bearbeiten, Hinzufügen und Löschen.
- * Die Zeile „automatisch ermittelter Differenzbetrag" (ist_differenz) pflegt
- * der Server selbst; sie steht immer am Ende und hat keine Aktionen.
+ * `abweichung` (Rechnungsbetrag minus Positionssumme) berechnet der Server beim
+ * Laden; sie wird unter der Summe angezeigt und nirgends gespeichert.
  */
-export function ArztPositionenCard({ postid, positionen = [], istTier, affectedSubids }) {
+export function ArztPositionenCard({ postid, positionen = [], abweichung, istTier, affectedSubids }) {
   const { canWrite } = useAuth();
   const { pushAction } = useUndoHistory();
   const addMut = useAddArztPosition();
@@ -108,9 +108,7 @@ export function ArztPositionenCard({ postid, positionen = [], istTier, affectedS
   const [loeschen, setLoeschen] = useState(null);
   const [loeschFehler, setLoeschFehler] = useState(null);
 
-  const regulaer = positionen.filter((p) => !p.ist_differenz);
-  const differenz = positionen.filter((p) => p.ist_differenz);
-  const sortiert = [...regulaer, ...differenz];
+  const abweichungBetrag = parseFloat(abweichung) || 0;
   const summe = positionen.reduce((s, p) => s + (parseFloat(p.betrag) || 0), 0);
 
   if (positionen.length === 0 && !canWrite) return null;
@@ -200,24 +198,8 @@ export function ArztPositionenCard({ postid, positionen = [], istTier, affectedS
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortiert.map((pos) => {
+              {positionen.map((pos) => {
                 const gekuerzt = affectedSubids.has(pos.subid);
-                if (pos.ist_differenz) {
-                  return (
-                    <TableRow key={pos.subid} className={cn('italic text-muted-foreground', gekuerzt && 'text-red-600')}
-                      title="Die Summe der Positionen weicht vom Rechnungsbetrag ab. Diese Zeile gleicht den Unterschied aus und passt sich automatisch an.">
-                      <TableCell>{pos.subid}</TableCell>
-                      <TableCell />
-                      <TableCell />
-                      <TableCell>{pos.leistung}</TableCell>
-                      <TableCell />
-                      <TableCell className="text-right font-mono">{formatCurrency(pos.betrag)}</TableCell>
-                      <TableCell className="text-right">
-                        <SymLinkButton token={positionToken(postid, pos.subid)} title="Positions-SymLink kopieren" />
-                      </TableCell>
-                    </TableRow>
-                  );
-                }
                 return (
                   <Fragment key={pos.subid}>
                     <TableRow className={cn('group', pos.begruendung && 'border-0', gekuerzt && 'text-red-600')}>
@@ -267,6 +249,15 @@ export function ArztPositionenCard({ postid, positionen = [], istTier, affectedS
                 <TableCell className="text-right font-mono">{formatCurrency(summe)}</TableCell>
                 <TableCell />
               </TableRow>
+              {abweichungBetrag !== 0 && (
+                <TableRow className="hover:bg-transparent italic text-muted-foreground"
+                  title="Rechnungsbetrag minus Summe der Positionen, z. B. Mehrwertsteuer oder eine Minderung, die nicht als eigene Position erfasst ist.">
+                  <TableCell />
+                  <TableCell colSpan={4}>Abweichung zum Rechnungsbetrag</TableCell>
+                  <TableCell className="text-right font-mono">{formatCurrency(abweichungBetrag)}</TableCell>
+                  <TableCell />
+                </TableRow>
+              )}
             </TableBody>
           </Table>
         )}
@@ -288,7 +279,6 @@ export function ArztPositionenCard({ postid, positionen = [], istTier, affectedS
         <DialogTitle>Position {loeschen?.subid} löschen?</DialogTitle>
         <DialogDescription>
           {loeschen?.leistung || 'Position'} über {formatCurrency(loeschen?.betrag)} wird entfernt.
-          Weicht die Summe danach vom Rechnungsbetrag ab, gleicht der automatisch ermittelte Differenzbetrag sie aus.
         </DialogDescription>
         {loeschFehler && <p className="text-sm text-destructive mt-3">{loeschFehler}</p>}
         <DialogFooter>

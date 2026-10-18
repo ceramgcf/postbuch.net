@@ -173,7 +173,14 @@ export default function ImportwegePage() {
           <p>
             Das ist eine technische Schnittstelle für andere Geräte im selben Netz: ein Smarthome-Knopf
             neben dem Scanner, eine Taste am Schreibtisch, ein Skript. Von außen ist sie nicht erreichbar.
+            Die Adresse enthält einen geheimen Token; ohne ihn lehnt der Scanner-Dienst ab.
           </p>
+          {portData?.freigegeben === false && (
+            <p>
+              Auf dieser Instanz ist der Scan-Webhook für andere Geräte nicht freigegeben. Freigeben kann
+              ihn die Administration unter Einstellungen → Scanner.
+            </p>
+          )}
         </Weg>
 
         <Weg icon={Printer} art="Papier" titel="Scanner legt direkt in der Cloud ab">

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useLocation, useNavigate } from 'react-router';
 import { useGesundheitskosten } from '@/hooks/usePostbuch';
 import { useGemerkteFilter } from '@/hooks/useGemerkteFilter';
@@ -122,12 +122,16 @@ export default function GesundheitskostenPage() {
     return param ? param.split(',') : allePersonen;
   }, [searchParams, allePersonen]);
 
-  if (data && alleJahre.length > 0 && !searchParams.get('jahre') && !defaultsApplied.current) {
+  // Gemerkte bzw. Standardfilter beim ersten Datenstand in die URL schreiben.
+  // Im Effect, nicht beim Rendern: Kommen die Daten aus dem Cache (Wechsel
+  // innerhalb der App), verwirft der Router eine Navigation im ersten Render.
+  useEffect(() => {
+    if (!data || alleJahre.length === 0 || searchParams.get('jahre') || defaultsApplied.current) return;
     defaultsApplied.current = true;
     const next = (searchParams.size === 0 ? gemerkt.laden(alleJahre) : null) || new URLSearchParams(searchParams);
     if (!next.get('jahre')) next.set('jahre', defaultJahre.join(','));
     setSearchParams(next, { replace: true });
-  }
+  });
 
   const setzeParam = (key, werte, alle) => {
     const next = new URLSearchParams(searchParams);

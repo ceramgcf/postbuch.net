@@ -40,18 +40,154 @@ export const capabilities = {
 };
 
 export async function getFreeSpace() {
-  const response = await graphFetch('/me/drive?$select=quota');
+  let response;
+  try {
+    response = await graphFetch('/me/drive?$select=quota');
+  } catch (err) {
+    // Mit reinem App-Ordner-Zugriff darf Microsoft die Laufwerksangaben
+    // verweigern. Dann ist der freie Platz schlicht unbekannt.
+    if ((err.status === 403 || err.status === 401) && await zugriffsModus() === 'appordner') return null;
+    throw err;
+  }
   const data = await response.json();
   const remaining = Number(data?.quota?.remaining);
   return Number.isFinite(remaining) ? { freiBytes: remaining } : null;
 }
 
-// Scopes für Microsoft Graph OneDrive-Zugriff
-const SCOPES = [
+// ── Zugriffsumfang ───────────────────────────────────────────────────────────
+//
+// 'appordner'   Files.ReadWrite.AppFolder: postbuch.net sieht nur seinen
+//               eigenen Ordner unter Apps/ (Microsoft vergibt ihn je
+//               Anwendung). Standard für neue Verbindungen.
+// 'vollzugriff' Files.ReadWrite.All: Ablage kann überall im OneDrive liegen.
+//               Bestandsverbindungen bleiben dabei, bis der Admin umstellt
+//               (service/onedrive-zugriff.js).
+//
+// Gespeichert in _settings.onedrive_zugriff (Seed beim Start). Fehlt der Wert,
+// gilt eine vorhandene Verbindung oder Ordnerstruktur als Bestand.
+
+const SCOPES_VOLLZUGRIFF = [
   'https://graph.microsoft.com/Files.ReadWrite.All',
   'https://graph.microsoft.com/User.Read',
   'offline_access',
 ];
+const SCOPES_APPORDNER = [
+  'https://graph.microsoft.com/Files.ReadWrite.AppFolder',
+  'https://graph.microsoft.com/User.Read',
+  'offline_access',
+];
+
+/**
+ * Zugriffsumfang aus einem Settings-Objekt (ohne DB-Zugriff).
+ * @param {object} settings  Ergebnis von loadDynamicSettings()
+ * @returns {'appordner'|'vollzugriff'}
+ */
+export function zugriffsModusAus(settings) {
+  const wert = settings?.onedrive_zugriff;
+  if (wert === 'appordner' || wert === 'vollzugriff') return wert;
+  const ordner = settings?.storage_folders?.onedrive;
+  const bestand = !!settings?.onedrive_tokens || (ordner && Object.keys(ordner).length > 0);
+  return bestand ? 'vollzugriff' : 'appordner';
+}
+
+/** Aktueller Zugriffsumfang laut DB. */
+export async function zugriffsModus() {
+  return zugriffsModusAus(await loadDynamicSettings());
+}
+
+/** Scopes für den gespeicherten Zugriffsumfang. */
+export function scopesFuer(modus) {
+  return modus === 'appordner' ? SCOPES_APPORDNER : SCOPES_VOLLZUGRIFF;
+}
+
+async function aktuelleScopes() {
+  return scopesFuer(await zugriffsModus());
+}
+
+// App-Ordner je Prozess merken; er wechselt nur, wenn die Client-ID
+// wechselt, und das setzt ohnehin resetMsalClient() voraus.
+let _appOrdner = null;
+
+/**
+ * Der App-Ordner dieser Anwendung (Apps/<Name>). Microsoft legt ihn beim
+ * ersten Aufruf an. Ausschließlich über special/approot ansprechen: Name und
+ * Ort sind nicht garantiert, die Zuordnung hängt an der Client-ID.
+ * @returns {{ id: string, name: string }}
+ */
+export async function getAppOrdner() {
+  const response = await graphFetch('/me/drive/special/approot?$select=id,name');
+  const data = await response.json();
+  _appOrdner = { id: data.id, name: data.name };
+  return { ..._appOrdner };
+}
+
+/** Wie getAppOrdner(), aber aus dem Prozess-Merker, solange er gilt. */
+export async function getAppOrdnerGemerkt() {
+  return _appOrdner ? { ..._appOrdner } : getAppOrdner();
+}
+
+/**
+ * Die Wurzel „/“ (Struktur direkt im Ablage-Root) gibt es nur im
+ * App-Ordner-Modus. Mit Vollzugriff wäre das die Laufwerkswurzel.
+ */
+export async function wurzelDirektErlaubt() {
+  return await zugriffsModus() === 'appordner';
+}
+
+/**
+ * Wurzel des gesamten Laufwerks. Nur mit Vollzugriff erreichbar; gebraucht
+ * für den Rückweg aus dem App-Ordner, wenn der frühere Ort fehlt.
+ * @returns {{ id: string, name: string }}
+ */
+export async function getLaufwerksWurzel() {
+  const response = await graphFetch('/me/drive/root?$select=id,name');
+  const data = await response.json();
+  return { id: data.id, name: data.name };
+}
+
+/**
+ * Wirksamkeitsprobe: Reicht die aktuelle Anmeldung über den App-Ordner hinaus?
+ * Microsoft rechnet frühere Zustimmungen zusammen, deshalb entscheidet nicht
+ * der angefragte Scope, sondern dieser echte Zugriff außerhalb des App-Ordners.
+ *
+ * Mit reinem App-Ordner-Recht beantwortet Graph root/children mit 200 und
+ * einer leeren Liste. Entscheidend ist deshalb der Inhalt: Mit Vollzugriff
+ * ist die Laufwerkswurzel nie leer, weil dort mindestens Apps/ mit dem
+ * App-Ordner liegt. getAppOrdner() legt ihn vorher sicher an.
+ * @returns {Promise<boolean>}
+ */
+export async function hatVollzugriff() {
+  try {
+    await getAppOrdner();
+    const response = await graphFetch('/me/drive/root/children?$top=1&$select=id');
+    const data = await response.json();
+    return Array.isArray(data.value) && data.value.length > 0;
+  } catch (err) {
+    if ([401, 403, 404].includes(err.status)) return false;
+    throw err;
+  }
+}
+
+/**
+ * Verschiebt einen Ordner samt Inhalt innerhalb desselben Laufwerks. Die
+ * Item-IDs bleiben dabei erhalten. Bei Namensgleichheit am Ziel vergibt
+ * OneDrive einen neuen Namen, statt abzubrechen.
+ * @returns {{ id: string, name: string, parentId: string|null }}
+ */
+export async function verschiebeOrdner(ordnerId, zielId) {
+  assertItemId(ordnerId, 'verschiebeOrdner');
+  assertItemId(zielId, 'verschiebeOrdner(ziel)');
+  const response = await graphFetch(
+    `/me/drive/items/${ordnerId}?@microsoft.graph.conflictBehavior=rename`,
+    { method: 'PATCH', body: JSON.stringify({ parentReference: { id: zielId } }) },
+  );
+  const data = await response.json();
+  return { id: data.id, name: data.name, parentId: data.parentReference?.id ?? null };
+}
+
+async function approotId() {
+  return (await getAppOrdnerGemerkt()).id;
+}
 
 // ── MSAL Clients (Singletons) ────────────────────────────────────────────────
 //
@@ -209,6 +345,7 @@ async function getMsalClient() {
 export function resetMsalClient() {
   _msalClient = null;
   _msalPublicClient = null;
+  _appOrdner = null;
 }
 
 /**
@@ -274,7 +411,7 @@ export async function getAccessToken() {
 
     const result = await client.acquireTokenSilent({
       account: accounts[0],
-      scopes: SCOPES,
+      scopes: await aktuelleScopes(),
     });
 
     if (!result?.accessToken) {
@@ -620,14 +757,16 @@ export async function remove(fileId) {
 export async function resolvePath(path) {
   // Edge-Case: Root-Ordner direkt abrufen
   const cleanPath = path.replace(/^\/+/, '').replace(/\/+$/, '');
+  // Im App-Ordner-Modus sind alle Pfade relativ zum App-Ordner.
+  const basis = await zugriffsModus() === 'appordner' ? '/me/drive/special/approot' : '/me/drive/root';
   if (!cleanPath) {
-    const response = await graphFetch('/me/drive/root');
+    const response = await graphFetch(basis);
     const data = await response.json();
     return { id: data.id, name: data.name };
   }
   // Pfad-Segmente einzeln enkodieren, Slashes erhalten
   const encodedPath = cleanPath.split('/').map((seg) => encodeURIComponent(seg)).join('/');
-  const response = await graphFetch(`/me/drive/root:/${encodedPath}`);
+  const response = await graphFetch(`${basis}:/${encodedPath}`);
   const data = await response.json();
   return { id: data.id, name: data.name };
 }
@@ -721,11 +860,12 @@ export async function findOrCreateFolder(parentFolderId, folderName, opts = {}) 
 }
 
 /**
- * Liefert die ID des Ablage-Wurzelverzeichnisses (Drive-Root).
- * Startpunkt der Ordner-Initialisierung.
+ * Liefert die ID des Ablage-Wurzelverzeichnisses: Drive-Root bei Vollzugriff,
+ * der App-Ordner im App-Ordner-Modus. Startpunkt der Ordner-Initialisierung.
  * @returns {{ id: string, name: string }}
  */
 export async function getRoot() {
+  if (await zugriffsModus() === 'appordner') return getAppOrdner();
   const response = await graphFetch('/me/drive/root');
   const data = await response.json();
   return { id: data.id, name: data.name };
@@ -733,9 +873,8 @@ export async function getRoot() {
 
 /**
  * Der Ordner, unterhalb dessen dieses Backend Postbuch-Daten hält.
- * Bei OneDrive gibt es keinen vom Nutzer-Speicher abgegrenzten Bereich — die
- * Ordner-IDs stehen einzeln in storage_folders —, deshalb identisch zu
- * getRoot(). Siehe lib/storage/index.js.
+ * Identisch zu getRoot(): Drive-Root bei Vollzugriff, sonst der App-Ordner.
+ * Siehe lib/storage/index.js.
  */
 export async function getAblageRoot() {
   return getRoot();
@@ -798,6 +937,7 @@ export async function getMeta(fileId) {
  */
 export async function getPath(fileId) {
   assertItemId(fileId, 'getPath');
+  if (await zugriffsModus() === 'appordner') return pfadImAppOrdner(fileId);
   const response = await graphFetch(
     `/me/drive/items/${fileId}?$select=name,parentReference`
   );
@@ -805,6 +945,25 @@ export async function getPath(fileId) {
   // parentReference.path ist z. B. "/drive/root:/postbuch/Arztrechnung" oder "/drive/root:"
   const parentPath = (data.parentReference?.path || '').replace(/^\/drive\/root:/, '');
   return parentPath ? `${parentPath}/${data.name}` : `/${data.name}`;
+}
+
+/**
+ * Pfad relativ zum App-Ordner. Bewusst über die Elternkette statt über
+ * parentReference.path: dessen Form unterscheidet sich je nach Kontotyp und
+ * Berechtigung, die Kette nicht.
+ */
+async function pfadImAppOrdner(fileId) {
+  const wurzel = await approotId();
+  const namen = [];
+  let id = fileId;
+  for (let tiefe = 0; tiefe < 40 && id; tiefe++) {
+    if (id === wurzel) return `/${namen.reverse().join('/')}`;
+    const response = await graphFetch(`/me/drive/items/${assertItemId(id, 'getPath')}?$select=id,name,parentReference`);
+    const data = await response.json();
+    namen.push(data.name);
+    id = data.parentReference?.id || null;
+  }
+  throw new Error('getPath: Das Element liegt nicht im App-Ordner.');
 }
 
 /**
@@ -893,7 +1052,7 @@ export async function listAllFiles(folderId) {
 export async function getAuthCodeUrl(redirectUri, state) {
   const client = await getMsalClient();
   return client.getAuthCodeUrl({
-    scopes: SCOPES,
+    scopes: await aktuelleScopes(),
     redirectUri,
     state,
     prompt: 'select_account',
@@ -913,7 +1072,7 @@ export async function acquireTokenByCode(code, redirectUri) {
   const result = await client.acquireTokenByCode({
     code,
     redirectUri,
-    scopes: SCOPES,
+    scopes: await aktuelleScopes(),
   });
 
   // afterCacheAccess wird automatisch aufgerufen → Tokens in DB gespeichert
@@ -937,11 +1096,11 @@ export async function acquireTokenByCode(code, redirectUri) {
  * (MSAL prüft das Flag zwischen den Polls gegen Microsoft).
  *
  * @param {(info: {userCode:string, verificationUri:string, message:string, expiresIn:number}) => void} onDeviceCode
- * @returns {object} DeviceCodeRequest (mutierbar: `.cancel`)
+ * @returns {Promise<object>} DeviceCodeRequest (mutierbar: `.cancel`)
  */
-export function createDeviceCodeRequest(onDeviceCode) {
+export async function createDeviceCodeRequest(onDeviceCode) {
   return {
-    scopes: SCOPES,
+    scopes: await aktuelleScopes(),
     cancel: false,
     deviceCodeCallback(response) {
       onDeviceCode({

@@ -28,7 +28,7 @@ import * as onedriveAuth from '../lib/storage/onedrive.js';
 import * as nextcloud from '../lib/storage/nextcloud.js';
 import { getActiveAdapter, getAdapter, BACKENDS } from '../lib/storage/index.js';
 import {
-  setupFolderStructure, SYSTEM_FOLDERS, ermittleWurzelPfad, GEMEINSAM_ORDNER, OHNE_DATUM_ORDNER, RICHTUNG_ORDNER,
+  setupFolderStructure, SYSTEM_FOLDERS, ermittleWurzelPfad, pruefeWurzel, WURZEL_DIREKT, GEMEINSAM_ORDNER, OHNE_DATUM_ORDNER, RICHTUNG_ORDNER,
 } from '../service/storage-setup.js';
 import { getAktiveTaxonomie, getGesamteTaxonomie } from '../lib/taxonomie.js';
 import { raeumeFremdeStrukturAuf } from '../service/storage-legacy-cleanup.js';
@@ -53,14 +53,15 @@ import {
 import { leseAgentStatus } from '../lib/update-agent-datei.js';
 import { subscriptionFeatureUnlocked, testClaudeSubscription } from '../lib/claude-subscription.js';
 import { buildAiHealth, invalidateAiHealthCache, listProviderModels } from '../lib/ai-health.js';
-import { MODEL_CLASSES } from '../lib/llm/model-classes.js';
+import { MODEL_CLASSES, MODELLWAHLEN } from '../lib/llm/model-classes.js';
 import { cloudfreiBericht } from '../lib/cloudfrei.js';
 import { webpushErlaubt, setzeWebpushErlaubt, ermittlePushEmpfaenger } from '../lib/webpush.js';
 import * as empfehlungen from '../lib/llm/empfehlungen.js';
 import { resolveModelConfig } from '../lib/llm.js';
+import { isSecretKey } from '../lib/geheime-settings.js';
 import {
-  listProviders, getProvider, providerKeySetting, isProviderKeySetting,
-  PROVIDER_ID_RE, PROVIDER_TYPES, PROVIDER_PRESETS, BUILTIN_PROVIDER_IDS,
+  listProviders, getProvider, providerKeySetting,
+  PROVIDER_ID_RE, PROVIDER_TYPES, PROVIDER_PRESETS, BUILTIN_PROVIDER_IDS, DIALEKTE,
   defaultCapsForType, CAP_KEYS, normalizeRasterMaxSeiten, RASTER_MAX_SEITEN_GRENZE,
   normalizeMaxOutputTokens, MAX_OUTPUT_TOKENS_MIN, MAX_OUTPUT_TOKENS_GRENZE,
 } from '../lib/llm/registry.js';
@@ -78,48 +79,8 @@ import { buildEbParsePrompt, buildMatchKuerzungenPrompt } from '../prompts/ersta
 
 const router = Router();
 
-// Keys die niemals an das Frontend zurückgegeben werden (Secrets).
-// Blockliste — deshalb liegt der Router zusätzlich hinter requireAdmin: eine
-// vergessene Zeile hier (wie jahrelang bei vapid_private_key) darf kein Geheimnis
-// mehr an normale Nutzer ausliefern.
-const SECRET_KEY_NAMES = new Set([
-  // Kein Geheimnis, aber ausschließlich Eigentum der dedizierten admin-only
-  // Einrichtung-Route; niemals als generisches Setting ausgeben/ändern.
-  'einrichtung',
-  'session_secret',
-  'onedrive_client_secret',
-  'onedrive_tokens',
-  'onedrive_auth_state',
-  'llm_openai_key',
-  'llm_anthropic_key',
-  'llm_bedrock_key',
-  'llm_claude_oauth_token',
-  'discord_webhook_url',
-  'discord_bot_token',
-  'discord_channel_id',
-  'vapid_private_key',
-  'webhook_token',
-  'nextcloud_app_password',
-]);
-
-// Suffixregel ergaenzend zur Namensliste. Bewusst ENG gehalten: '_key'/'_token'
-// pauschal zu sperren wuerde vapid_public_key mitnehmen, der absichtlich lesbar
-// ist und vom Frontend gebraucht wird.
-const SECRET_KEY_SUFFIX_RE = /(^|_)(password|passwort|secret|credentials)$/;
-
-/**
- * Ist dieser Setting-Schlüssel ein Geheimnis?
- *
- * Namensliste PLUS Präfixregel `llm_provider_key_*` (frei konfigurierbare
- * Provider — die Menge ihrer Keys ist zur Übersetzungszeit nicht bekannt).
- * Wird bei GET **und** bei PUT eingesetzt: nur bei GET eingebaut hieße, dass
- * jeder Admin-Aufruf beliebige fremde Keys überschreiben könnte.
- */
-function isSecretKey(key) {
-  return SECRET_KEY_NAMES.has(key)
-    || isProviderKeySetting(key)
-    || SECRET_KEY_SUFFIX_RE.test(key);
-}
+// Welche Schlüssel Geheimnisse sind, steht in lib/geheime-settings.js – dieselbe
+// Regel entscheidet, was unverschlüsselte Backups weglassen.
 
 // Keys, die über PUT /:key gesetzt werden dürfen — **Whitelist**.
 // Vorher galt nur die SECRET_KEYS-Blockliste, d. h. jeder beliebige Key war
@@ -137,7 +98,9 @@ const ALLOWED_SETTING_KEYS = new Set([
   'salden_quellen_aktiv',
   // OneDrive
   'onedrive_polling',
-  // KI: Modellwahl je Stufe
+  // KI: Modellwahl (einfach/gestaffelt) und Modell je Stufe
+  'llm_modellwahl',
+  'llm_model_analyse',
   'llm_model_preanalysis',
   'llm_model_large',
   'llm_model_leicht',
@@ -778,6 +741,9 @@ router.put('/:key', async (req, res) => {
       intervalSec: Number.isFinite(rawInterval) ? Math.max(10, Math.floor(rawInterval)) : 60,
     };
   }
+  if (key === 'llm_modellwahl' && !MODELLWAHLEN.includes(value)) {
+    return res.status(400).json({ error: `Ungültige Modellwahl. Erlaubt: ${MODELLWAHLEN.join(', ')}.` });
+  }
   if (key === 'scanner_device_url') {
     try {
       normalizedValue = normalisiereScannerEndpoint(value);
@@ -942,9 +908,11 @@ router.get('/onedrive-folders/root', async (req, res) => {
 // ausdrücklich bestätigt statt stillschweigend ausgeführt.
 
 router.post('/onedrive-folders/setup-wizard', async (req, res) => {
-  const rootPath = (req.body?.rootPath || '').trim();
-  if (!rootPath) {
-    return res.status(400).json({ error: 'Es wurde kein Wurzelordner angegeben.' });
+  let rootPath;
+  try {
+    rootPath = await pruefeWurzel(req.body?.rootPath);
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ error: err.message });
   }
   // Früher, klarer Fehlschlag statt eines Laufs, der erst nach dem (idempotenten,
   // aber sichtbaren) Ordner-Schritt am eigentlichen Umzug scheitert.
@@ -958,9 +926,10 @@ router.post('/onedrive-folders/setup-wizard', async (req, res) => {
       appLog('WARN', 'settings',
         `Setup-Assistent: Umzugsbestätigung angefordert — Wurzelordner "${bisher}" → "${rootPath}"`,
         { entity: 'settings', entityId: req.session?.username || null });
+      const ort = (p) => (p === WURZEL_DIREKT ? 'direkt im App-Ordner' : `"${p}"`);
       return res.status(409).json({
-        error: `Der Wurzelordner wurde geändert: bisher "${bisher}", jetzt "${rootPath}". `
-          + `Beim Anlegen entsteht die Ordnerstruktur unter "${rootPath}" und der gesamte `
+        error: `Der Wurzelordner wurde geändert: bisher ${ort(bisher)}, jetzt ${ort(rootPath)}. `
+          + `Beim Anlegen entsteht die Ordnerstruktur ${rootPath === WURZEL_DIREKT ? 'direkt im App-Ordner' : `unter "${rootPath}"`} und der gesamte `
           + `Dokumentenbestand wird dorthin umgezogen.`,
         code: 'WURZEL_ABWEICHUNG',
         bisher,
@@ -1618,7 +1587,7 @@ function normalisiereProviderEingabe(body, vorhanden) {
     typ,
     label: typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, 80) : (vorhanden?.label || vorhanden?.id),
     baseUrl: typeof body.baseUrl === 'string' ? body.baseUrl.trim() : (vorhanden?.baseUrl ?? null),
-    dialekt: ['openai', 'ollama', 'anthropic', 'lmstudio'].includes(body.dialekt) ? body.dialekt : (vorhanden?.dialekt || 'openai'),
+    dialekt: DIALEKTE.includes(body.dialekt) ? body.dialekt : (vorhanden?.dialekt || 'openai'),
     aktiv: body.aktiv !== false,
     caps,
     rasterMaxSeiten,

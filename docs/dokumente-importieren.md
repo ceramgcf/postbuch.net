@@ -36,7 +36,8 @@ ausgewählten Dateien._
 
 Legst du eine PDF in den Ordner `<postbuch.net-Wurzelverzeichnis>/_inbox` deiner Dateiablage, holt postbuch.net sie
 von selbst ab. Der vollständige Pfad ist `<postbuch.net-Wurzelverzeichnis>/_inbox`; welcher
-Wurzelordner das auf deiner Instanz ist, steht in der App unter
+Wurzelordner das auf deiner Instanz ist – bei OneDrive im App-Ordner meist der
+App-Ordner `Apps/<Name>` selbst –, steht in der App unter
 ![Import-Symbol](icons/upload.svg) `Importieren → Sechs Wege` und unter
 ![Einstellungen-Symbol](icons/settings.svg) `Einstellungen → Dateiablage`.
 
@@ -66,16 +67,16 @@ Scan über denselben überwachten Ordner wie
 Auf der Seite ![Import-Symbol](icons/upload.svg) `Importieren` per Drag & Drop
 oder Dateiauswahl. Zwei Modi:
 
+![Batch-Symbol](icons/inbox.svg) **Batch** – Jede Datei wird **separat**
+verarbeitet und bekommt eine eigene Postnummer. Das ist der Weg für einen Stapel
+unabhängiger Dokumente. Vorausgewählt ist Batch.
+
 ![Sammlung-Symbol](icons/layers.svg) **Sammlung** – Alle abgelegten PDFs werden
 vorab **zu _einer_ Datei zusammengeführt** und als _ein_ Dokument verarbeitet.
 Die Reihenfolge lässt sich vorher per ![Aufwärts-Symbol](icons/arrow-up.svg) /
 ![Abwärts-Symbol](icons/arrow-down.svg) Pfeiltasten ändern, der Dateiname ist
 frei wählbar. Das ist der Weg für einen Brief mit Anlagen oder ein mehrteilig
 gescanntes Schreiben.
-
-![Batch-Symbol](icons/inbox.svg) **Batch** – Jede Datei wird **separat**
-verarbeitet und bekommt eine eigene Postnummer. Das ist der Weg für einen Stapel
-unabhängiger Dokumente.
 
 ## Weg 4: Scannen über „Importieren"
 
@@ -157,7 +158,7 @@ Farbmodus und Format – die angezeigte URL gehört immer genau zu dem, was gera
 eingestellt ist. Ihre Form:
 
 ```
-http://<adresse-dieser-instanz>:<scanner-port>/scan/adf/simplex?dpi=300&mode=gray
+http://<adresse-dieser-instanz>:<scanner-port>/scan/adf/simplex?dpi=300&mode=gray&token=<scanner-token>
 ```
 
 Ein Aufruf dieser URL löst sofort einen Scan aus. Das ist eine **technische
@@ -165,11 +166,36 @@ Schnittstelle** für andere Geräte im selben Netz: ein Smarthome-Knopf neben de
 Scanner, eine Tastenbelegung, ein Skript, eine Hausautomatisierung. Für den
 täglichen Gebrauch brauchst du sie nicht.
 
+Der **Scanner-Token** am Ende der URL ist ein Geheimnis: Ohne ihn lehnt der
+Scanner-Dienst jeden Aufruf ab, wer die vollständige URL kennt, kann scannen.
+Statt als Parameter `token` lässt er sich auch im Header `X-Scanner-Token`
+mitschicken. Die URL sehen nur Nutzer mit Vollzugriff und der Administrator.
+Der Administrator kann den Token unter der URL mit **Token erneuern** austauschen;
+bisher kopierte URLs funktionieren danach nicht mehr, der Scanner-Dienst
+übernimmt den neuen Token innerhalb von 30 Sekunden.
+
 > [!NOTE]
 >
-> Der Scanner-Dienst hört nur im lokalen Netz und kennt keine Anmeldung. Er
-> gehört deshalb nie ins Internet weitergeleitet – wer die Adresse erreicht,
-> kann scannen.
+> Der Scanner-Dienst gehört nie ins Internet weitergeleitet. Er ist für Geräte im
+> eigenen Netz gedacht.
+
+**Freigabe für andere Geräte:** Neuinstallationen binden den Scanner-Port nur
+an den Rechner selbst. Der Webhook ist dann von anderen Geräten aus nicht
+erreichbar, und die Import-Seite zeigt statt der URL einen Hinweis. Freigeben
+lässt er sich unter ![Scanner-Symbol](icons/scan-line.svg) **Einstellungen →
+Scanner** mit **Freigeben**; **Schließen** nimmt die Freigabe zurück. Beides
+erledigt der Host-Agent auf dem Server, in der Regel innerhalb einer Minute.
+
+Ohne Host-Agent bestimmt `SCANNER_BIND` in der `.env` die Freigabe:
+`127.0.0.1` für nur den Rechner selbst, leer (oder ohne Zeile) für alle Geräte
+im Netz. Nach einer Änderung den Scanner-Dienst neu starten:
+
+```sh
+docker compose up -d --no-deps scanner app
+```
+
+Scannen über die Import-Seite funktioniert in beiden Fällen, weil postbuch.net
+den Scanner-Dienst über das interne Docker-Netz anspricht.
 
 Bei **Flachbett Mehrseitig** braucht es mehrere Aufrufe: je Seite
 `/scan/flatbed/session/scan`, am Ende `/scan/flatbed/session/finish`.
@@ -212,7 +238,8 @@ man verlassen.
 Bei einem Cloud-Anbieter rufen die KI-Phasen den eingestellten Provider
 kostenpflichtig auf; bei einem lokal betriebenen, OpenAI-kompatiblen Anbieter
 entstehen keine externen API-Kosten pro Dokument. Ein Import umfasst
-normalerweise Voranalyse, Hauptanalyse und ein Embedding; bei
+normalerweise die Hauptanalyse und ein Embedding, bei gestaffelter
+[Modellwahl](ki-provider.md#modellwahl) vorher eine kurze Voranalyse; bei
 Reparatur, Fallback oder einem Erstattungsbescheid können weitere Aufrufe
 dazukommen. Als grobe Orientierung sind **1–20 Eurocent je Dokument** üblich,
 mit günstigen Modellen auch weniger und bei langen, schwierigen oder mehrfach
@@ -255,12 +282,15 @@ falsch verstanden wurde. Optional lässt sich dabei die OCR-Textebene entfernen,
 wenn sie schlechter ist als das Bild selbst; postbuch.net schlägt das von sich
 aus vor, wenn es eine fragwürdige Textebene erkennt. Dabei entstehen erneut
 ungefähr dieselben KI-Kosten wie beim Import; eine feste Modellstufe spart die
-Voranalyse, nicht aber die Hauptanalyse und das neue Embedding.
+Voranalyse, nicht aber die Hauptanalyse und das neue Embedding. Die Wahl der
+Modellstufe gibt es nur bei gestaffelter
+[Modellwahl](ki-provider.md#modellwahl); mit einem Modell für alles verarbeitet
+das Analysemodell das Dokument erneut.
 
 Bei einem Erstattungsbescheid gilt die Korrekturanweisung auch für das
 anschließende Auslesen der Positionen und den Abgleich der Kürzungen. Eine fest
 gewählte Modellstufe liest auch die Positionen aus; bei „Auto“ übernimmt das die
-Stufe Mittel. Schlägt dieser Schritt fehl, wiederholt postbuch.net ihn nach
+Stufe Mittel, mit einem Modell für alles das Analysemodell. Schlägt dieser Schritt fehl, wiederholt postbuch.net ihn nach
 wenigen Minuten automatisch mit derselben Anweisung.
 
 ![PDF-ersetzen-Symbol](icons/file-up.svg) **PDF ersetzen** – Ersetzt nur die
@@ -285,7 +315,8 @@ KI-Wiederverarbeitung.
 Wer viele Dokumente am Stück einliest – etwa beim erstmaligen Digitalisieren
 eines Aktenschranks –, kann den **Cache-Mode** einschalten. Er bündelt die
 Verarbeitung auf ein _fixes_ Modell und nutzt dessen Prompt-Caching, was die
-Kosten deutlich senkt.
+Kosten deutlich senken kann. Ob der Cache greift, hängt vom Modell ab, siehe
+[Cache-Mode](ki-provider.md#cache-mode).
 
 - Die Modellstufe wird vorher gewählt und bleibt für die Dauer fest.
 - Der Modus gilt **global** für alle Eingangswege, auch Scanner und
@@ -295,7 +326,9 @@ Kosten deutlich senkt.
   verbleibende Zeit steht auf der Karte.
 
 Die Karte erscheint auf der Import-Seite nur, wenn Cache-Mode in den
-KI-Einstellungen freigeschaltet ist.
+KI-Einstellungen freigeschaltet ist. Den Cache-Mode gibt es nur bei gestaffelter
+[Modellwahl](ki-provider.md#modellwahl); mit einem Modell für alles ist das
+Prompt-Caching ohnehin immer an.
 
 ## Sonderfall: Dokumentenübergabe einspielen
 

@@ -5,11 +5,13 @@ bekommt eine eigene App-Registrierung; die **Anwendungs-ID (Client-ID)** ist
 kein Geheimnis. Der empfohlene Gerätecode braucht weder Client-Secret noch
 Redirect-URI.
 
-> [!WARNING]
+> [!NOTE]
 >
-> Die delegierte Berechtigung `Files.ReadWrite.All` erlaubt Zugriff auf alle
-> Ordner des verbundenen OneDrive-Kontos. Ein separates Microsoft-Konto nur
-> für postbuch.net begrenzt diesen Zugriff am wirksamsten.
+> postbuch.net braucht nur die delegierte Berechtigung
+> `Files.ReadWrite.AppFolder`: Zugriff auf seinen eigenen App-Ordner unter
+> `Apps/`, nicht auf den Rest des OneDrive. Ältere Verbindungen mit
+> `Files.ReadWrite.All` lassen sich umstellen, siehe
+> [Zugriffsumfang umstellen](storage-backends.md#zugriffsumfang-umstellen).
 
 > [!TIP]
 >
@@ -32,8 +34,8 @@ Redirect-URI.
    **Ja** und speichere. Ohne diese Einstellung kann Microsoft keinen
    Gerätecode ausgeben.
 4. Füge unter **API-Berechtigungen → Microsoft Graph → Delegierte
-   Berechtigungen** `Files.ReadWrite.All`, `User.Read` und `offline_access`
-   hinzu.
+   Berechtigungen** `Files.ReadWrite.AppFolder`, `User.Read` und
+   `offline_access` hinzu.
 5. Kopiere auf der Übersichtsseite die **Anwendungs-ID (Client)**. Trage sie im
    ![Dateiablage-Symbol](icons/folder-open.svg) Einrichtungsassistenten ein, speichere und starte die Verbindung.
 6. Öffne den angezeigten Microsoft-Link, kopiere den Code mit einem Klick und

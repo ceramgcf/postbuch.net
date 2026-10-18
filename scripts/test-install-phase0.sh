@@ -85,7 +85,7 @@ error() { :; }
 docker_runtime() {
   printf 'docker %s\n' "$*" >> "$LOG"
   [[ "$1 $2 $3" == "inspect postbuch-scanner --format" ]] && return 1
-  [[ "$1 $2 $3" == "image inspect postbuch-caddy:local2" ]] && return "${CADDY_FEHLT:-1}"
+  [[ "$1 $2 $3" == "image inspect postbuch-caddy:local3" ]] && return "${CADDY_FEHLT:-1}"
   return 0
 }
 upsert_env_value() {
@@ -188,7 +188,7 @@ grep -q 'compose build app web$' "$LOG"
 printf 'COMPOSE_PROFILES=scanner\n' > .env
 CADDY_FEHLT=0; export CADDY_FEHLT
 : > "$LOG"; compose_build caddy app
-grep -q 'docker image inspect postbuch-caddy:local2' "$LOG"
+grep -q 'docker image inspect postbuch-caddy:local3' "$LOG"
 ! grep -q 'compose --profile caddy build caddy' "$LOG"
 grep -q 'compose build app' "$LOG"
 
@@ -286,7 +286,7 @@ run_headless_case() (
   printf tar > "$TMP/release.tar.gz"
   source "$TMP/headless.sh"
   OPT_INSTALL_DIR="$inst" DEFAULT_INSTALL_DIR="$inst" OPT_DRY_RUN=false LOCAL_TARBALL="$TMP/release.tar.gz"
-  RELEASE_STAGE="$stage" ERWARTETE_SHA=a FEED_AUTH_B64=''
+  RELEASE_STAGE="$stage" ERWARTETE_SHA=a FEED_AUTH_B64='' QUELLE_GITHUB=true
   docker_headless_pruefen(){ :; }; safe_mode_headless(){ :; }; bezugsquelle_sicherstellen(){ :; }
   feed_auth_aus_env(){ :; }; feed_auth_uebernehmen(){ :; }; feed_auth_probe(){ :; }
   env_single_quote(){ printf "'%s'" "$1"; }; installations_besitzer_bestimmen(){ printf '1000:1000\n'; }
@@ -296,7 +296,7 @@ run_headless_case() (
   release_stage_erstellen(){ mkdir -p "$stage"; printf '2\n' > "$stage/VERSION"; RELEASE_STAGE="$stage"; }
   safe_rm_rf(){ :; }; update_build_services_bestimmen(){ UPDATE_BUILD_SERVICES=(app); }
   compose_build(){ printf 'build\n' >> "$lauflog"; }; release_stage_promoten(){ printf 'promote\n' >> "$lauflog"; }
-  write_restart_script(){ :; }; compose_recreate(){ printf 'recreate\n' >> "$lauflog"; }
+  write_restart_script(){ :; }; write_lokale_installerkopie(){ :; }; compose_recreate(){ printf 'recreate\n' >> "$lauflog"; }
   aktualisiere_vorhandenen_update_agent(){ printf 'refresh\n' >> "$lauflog"; [[ "$modus" != refresh_fail ]]; }
   backup_current_installation(){
     [[ "$modus" != backup_fail ]] || return 1

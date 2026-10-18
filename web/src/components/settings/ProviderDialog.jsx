@@ -148,7 +148,7 @@ export default function ProviderDialog({
       <DialogDescription>
         {builtin
           ? 'Eingebauter Provider – Typ und Kennung liegen fest, alles andere ist änderbar.'
-          : 'Ein OpenAI-kompatibler Endpunkt: Ollama, LM Studio, vLLM, LiteLLM, OpenRouter und viele mehr.'}
+          : 'Ein OpenAI-kompatibler Endpunkt: Mistral, Ollama, LM Studio, vLLM, LiteLLM, OpenRouter und viele mehr.'}
       </DialogDescription>
 
       <div className="mt-4 space-y-4 max-h-[60vh] overflow-y-auto pr-1">
@@ -194,11 +194,14 @@ export default function ProviderDialog({
                   <option value="openai">OpenAI (Standard)</option>
                   <option value="ollama">Ollama</option>
                   <option value="lmstudio">LM Studio</option>
+                  <option value="mistral">Mistral</option>
                 </select>
                 <p className="text-xs text-muted-foreground">
                   Ollama will <span className="font-mono">format</span> statt{' '}
                   <span className="font-mono">response_format</span>. LM Studio verlangt bei
-                  Bild-Uploads rohes Base64 statt einer data:-URL.
+                  Bild-Uploads rohes Base64 statt einer data:-URL. Mistral will{' '}
+                  <span className="font-mono">max_tokens</span> und liefert Antworten mit
+                  Denkschritten als Liste.
                 </p>
               </div>
             )}

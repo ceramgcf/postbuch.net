@@ -19,4 +19,17 @@ if (!pdfjs.GlobalWorkerOptions.workerSrc) {
   ).toString();
 }
 
+/**
+ * Gemeinsame `options` für <Document> aller PDF-Viewer. PDF.js dekodiert
+ * Schwarz-Weiß-Scans (CCITT/JBIG2) und JPEG 2000 über WebAssembly-Module und
+ * lädt Standardschriften nach; ohne diese Pfade bleiben solche Bilder leer.
+ * Die Dateien kopiert web/Dockerfile beim Build aus pdfjs-dist nach
+ * public/pdfjs/ (Auslieferung: web/nginx.conf, Block /pdfjs/).
+ */
+export const PDFJS_DOCUMENT_OPTIONS = Object.freeze({
+  withCredentials: true,
+  wasmUrl: '/pdfjs/wasm/',
+  standardFontDataUrl: '/pdfjs/standard_fonts/',
+});
+
 export { pdfjs };

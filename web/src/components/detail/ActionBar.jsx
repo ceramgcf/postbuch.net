@@ -433,7 +433,9 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
         <div className="mt-4">
           <div className="text-sm font-medium mb-1.5">KI-Modell</div>
           <div className="space-y-0.5">
-            {MODEL_TIER_OPTIONS.map((opt) => {
+            {/* Einfache Modellwahl: alle Stufen zeigen aufs Analysemodell, eine
+                Auswahl gäbe es nicht. */}
+            {(tierModels?.modellwahl === 'einfach' ? MODEL_TIER_OPTIONS.slice(0, 1) : MODEL_TIER_OPTIONS).map((opt) => {
               const info = opt.key === 'auto' ? null : tierModels?.tiers?.[opt.key];
               const showAbo = !!info && tierModels?.subscription?.enabled && info.providerId === 'anthropic';
               return (
@@ -449,7 +451,11 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
                     onChange={() => setModelTier(opt.key)}
                   />
                   <span className="font-medium w-14">{opt.label}</span>
-                  {opt.key === 'auto' ? (
+                  {opt.key === 'auto' && tierModels?.modellwahl === 'einfach' ? (
+                    <span className="text-xs text-gray-500">
+                      Analysemodell <span className="font-mono">{tierModels?.tiers?.leicht?.model || '…'}</span>
+                    </span>
+                  ) : opt.key === 'auto' ? (
                     <span className="text-xs text-gray-500">Standard – automatische Schwierigkeitseinschätzung</span>
                   ) : (
                     <>

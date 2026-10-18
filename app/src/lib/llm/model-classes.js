@@ -1,5 +1,5 @@
 /**
- * lib/llm/model-classes.js — die zehn Modellklassen an einer Stelle
+ * lib/llm/model-classes.js — die Modellklassen an einer Stelle
  *
  * Bis 1.7.3 stand dieselbe Liste dreimal im Code: als `KLASSEN` in
  * `lib/ai-health.js` (nur sechs Einträge — die vier Chat-/Akten-Klassen fehlten
@@ -30,12 +30,14 @@ function klasse(key, settingKey, label, extra = {}) {
 }
 
 export const MODEL_CLASSES = [
-  // Dokument-Pipeline — hängen an der Fallback-Kette in selectModelChain()
-  klasse('preanalysis', 'llm_model_preanalysis', 'Voranalyse'),
-  klasse('large',       'llm_model_large',       'Lange Dokumente'),
-  klasse('leicht',      'llm_model_leicht',      'Leicht'),
-  klasse('mittel',      'llm_model_mittel',      'Mittel'),
-  klasse('schwierig',   'llm_model_schwierig',   'Schwierig'),
+  // Dokument-Pipeline. `modus` sagt, in welcher Modellwahl die Klasse wirkt
+  // (siehe modellwahl()); ohne Angabe in beiden.
+  klasse('analyse',     'llm_model_analyse',     'Analysemodell', { modus: 'einfach' }),
+  klasse('preanalysis', 'llm_model_preanalysis', 'Voranalyse',      { modus: 'gestaffelt' }),
+  klasse('large',       'llm_model_large',       'Lange Dokumente', { modus: 'gestaffelt' }),
+  klasse('leicht',      'llm_model_leicht',      'Leicht', { modus: 'gestaffelt' }),
+  klasse('mittel',      'llm_model_mittel',      'Mittel', { modus: 'gestaffelt' }),
+  klasse('schwierig',   'llm_model_schwierig',   'Schwierig', { modus: 'gestaffelt' }),
   klasse('fallback',    'llm_model_fallback',    'Letzter Fallback'),
 
   // Büroassistent und Akten — eigene Modellwahl, unabhängig von der Kette
@@ -44,6 +46,27 @@ export const MODEL_CLASSES = [
   klasse('chat_title',     'chat_model_title',     'Büroassistent · Titel',     { group: 'chat' }),
   klasse('akte_vorschlag', 'akte_model_vorschlag', 'Akte · Metadaten-Vorschlag',{ group: 'chat' }),
 ];
+
+/**
+ * Modellwahl der Dokumentanalyse:
+ *   'einfach'    — ein Analysemodell für jedes Dokument, dahinter nur der
+ *                  letzte Fallback. Keine Voranalyse, Prompt-Caching immer an.
+ *   'gestaffelt' — Voranalyse schätzt die Schwierigkeit, danach Leicht/Mittel/
+ *                  Schwierig bzw. Lange Dokumente.
+ * Neuinstallationen starten einfach, bestehende Instanzen behalten die
+ * Staffelung (seed-settings.js). Fehlt der Schlüssel trotzdem, bleibt es beim
+ * bisherigen Verhalten.
+ */
+export const MODELLWAHLEN = ['einfach', 'gestaffelt'];
+export function modellwahl(settings) {
+  return settings?.llm_modellwahl === 'einfach' ? 'einfach' : 'gestaffelt';
+}
+
+/** Klassen, die in der aktuellen Modellwahl tatsächlich benutzt werden. */
+export function aktiveModellklassen(settings) {
+  const m = modellwahl(settings);
+  return MODEL_CLASSES.filter((c) => !c.modus || c.modus === m);
+}
 
 /** settingKey → Klassendefinition (für den Löschschutz in routes/settings.js). */
 export const MODEL_CLASS_BY_SETTING = Object.fromEntries(

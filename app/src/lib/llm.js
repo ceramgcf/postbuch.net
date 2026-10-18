@@ -30,8 +30,9 @@ import { getProvider, listProviders, BUILTIN_PROVIDER_IDS, kannPdfEmpfangen, per
 import { callAnthropic, buildAnthropicUserContent } from './llm/providers/anthropic.js';
 import { callBedrock, getBedrockClient } from './llm/providers/bedrock.js';
 import { callOpenAI } from './llm/providers/openai.js';
+import { ZWECK_EXTRAKTION_NACHDENKEN, extraktionsModus, merkeNachdenkenNoetig } from './llm/thinking-policy.js';
 import { werkseinstellung } from './llm/empfehlungs-standard.js';
-import { MODEL_CLASSES } from './llm/model-classes.js';
+import { MODEL_CLASSES, modellwahl } from './llm/model-classes.js';
 import { gleichesModell } from './llm/modell-id.js';
 
 export { getBedrockClient };
@@ -249,7 +250,13 @@ export function resolveModelConfig(val, defaultProvider, defaultModel) {
  * Releases hinweg verstreute Altmodelle entstanden.
  */
 export function resolveKlassenModell(klasseKey, settings) {
-  const cls = MODEL_CLASSES.find((c) => c.key === klasseKey);
+  // In der einfachen Modellwahl stehen die Staffel-Klassen nicht zur Wahl;
+  // wer sie anfragt (Bescheide, Profilierung, Nachprüfung), bekommt das
+  // Analysemodell.
+  const angefragt = MODEL_CLASSES.find((c) => c.key === klasseKey);
+  const cls = angefragt?.modus === 'gestaffelt' && modellwahl(settings) === 'einfach'
+    ? MODEL_CLASSES.find((c) => c.key === 'analyse')
+    : angefragt;
   if (!cls) return resolveModelConfig(null, undefined, undefined);
   return resolveModelConfig(settings?.[cls.settingKey], cls.provider, cls.model);
 }
@@ -293,6 +300,7 @@ const TIER_DEFAULTS = {
 export function resolveTierModelConfig(tier, settings) {
   const def = TIER_DEFAULTS[tier];
   if (!def) return null;
+  if (modellwahl(settings) === 'einfach') return resolveKlassenModell(tier, settings);
   return resolveModelConfig(settings?.[def.setting], def.providerId, def.model);
 }
 
@@ -838,17 +846,35 @@ export async function analyzeDocument(
   // überspringt die Voranalyse (Preclassifier) und nutzt fix das Stufen-Modell.
   const forceTier = options?.forceTier && TIER_DEFAULTS[options.forceTier] ? options.forceTier : null;
 
+  // Einfache Modellwahl: ein Analysemodell für alles, ohne Voranalyse.
+  const einfach = !forceTier && modellwahl(s) === 'einfach';
+
   // Cache-Mode? Dann fixes Modell + Prompt-Caching für die Batch-Verarbeitung.
   // Bei forcierter Modellstufe ignorieren — die explizite User-Wahl hat Vorrang.
-  const cacheTier = forceTier ? null : await activeCacheTier();
+  // In der einfachen Modellwahl ist das Modell ohnehin fest, der Mode entfällt.
+  const cacheTier = (forceTier || einfach) ? null : await activeCacheTier();
 
   let difficulty = null, pages = 1;
   let preAnalysisNote = null, preAnalysisMs = 0, rawPreAnalysisResponse = null;
   let preAnalysisModel = null, preAnalysisTokensIn = null, preAnalysisTokensOut = null, preAnalysisCostUsd = null;
   let models, chainReason;
   let cacheSystem = false;
-  let systemForCall;                     // gecachter System-Prompt (nur Cache-Mode, kurze Docs)
+  let systemForCall;                     // gecachter System-Prompt (fixes Modell)
   let userPromptForCall;                 // User-Turn-Text
+
+  // Fixes Modell → stabilen Prompt-Prefix als System-Prompt cachen, sofern der
+  // Provider Prompt-Caching kann. Familien, PKV/Beihilfe, Betreiberregeln und
+  // Korrekturen bleiben im User-Turn.
+  const mitPromptCache = (fixed) => {
+    cacheSystem = !!promptParts.staticPrompt && capsForRef(s, fixed).promptCache === true;
+    if (cacheSystem) {
+      systemForCall = promptParts.staticPrompt;
+      userPromptForCall = `${promptParts.dynamicPrompt}${korrekturKontext || ''}`.trim()
+        || 'Analysiere das beigefügte Dokument gemäß den Anweisungen im System-Prompt.';
+    } else {
+      userPromptForCall = vollständigerPrompt + (korrekturKontext || '');
+    }
+  };
 
   if (forceTier) {
     // Manuelle Modellwahl: Voranalyse überspringen, fix mit dem Stufen-Modell starten.
@@ -872,6 +898,13 @@ export async function analyzeDocument(
     models = chainOf(...chainForTier);
     chainReason = `Manuelle Modellwahl (${forceTier}: ${refLabel(chainForTier[0])}) — Voranalyse übersprungen`;
     userPromptForCall = vollständigerPrompt + (korrekturKontext || '');
+  } else if (einfach) {
+    // Seitenzahl nur lokal für das Log; lange Dokumente laufen über dasselbe Modell.
+    try { pages = await countPdfPages(pdfBuffer); } catch { pages = 1; }
+    const fixed = resolveKlassenModell('analyse', s);
+    models = chainOf(fixed, resolveKlassenModell('fallback', s));
+    chainReason = `Einfache Modellwahl (${refLabel(fixed)}, ${pages} Seiten)`;
+    mitPromptCache(fixed);
   } else if (cacheTier) {
     // Seitenzahl LOKAL bestimmen (keine LLM-Voranalyse im Cache-Mode).
     try { pages = await countPdfPages(pdfBuffer); } catch { pages = 1; }
@@ -889,16 +922,7 @@ export async function analyzeDocument(
       chainReason = `Cache-Mode aktiv (${cacheTier}: ${refLabel(fixed)}, ${pages} Seiten)`;
       // Cache-Mode ist der globale Opt-in. Der OpenAI-Adapter handelt die
       // Modellunterstützung selbst dynamisch mit einem sicheren Fallback aus.
-      cacheSystem = !!promptParts.staticPrompt && capsForRef(s, fixed).promptCache === true;
-      if (cacheSystem) {
-        // Nur der explizit als stabil markierte Prefix wird gecacht. Familien,
-        // PKV/Beihilfe, Betreiberregeln und Korrekturen bleiben im User-Turn.
-        systemForCall = promptParts.staticPrompt;
-        userPromptForCall = `${promptParts.dynamicPrompt}${korrekturKontext || ''}`.trim()
-          || 'Analysiere das beigefügte Dokument gemäß den Anweisungen im System-Prompt.';
-      } else {
-        userPromptForCall = vollständigerPrompt + (korrekturKontext || '');
-      }
+      mitPromptCache(fixed);
     }
   } else {
     // Normalbetrieb: Schwierigkeitseinschätzung bestimmt die Modell-Kette.
@@ -943,26 +967,49 @@ export async function analyzeDocument(
         // System/cacheSystem nur für das fixe Cache-Mode-Modell (erstes der Kette).
         const useCache = cacheSystem && refKey(ref) === refKey(models[0]);
         const basisPrompt = useCache ? userPromptForCall : fullPrompt;
-        const resp = await callModel(
-          ref,
-          doc.inputMode === 'text' ? withDocumentText(basisPrompt, doc.text) : basisPrompt,
-          { pdf: doc.pdf, bilder: doc.bilder, maxTokens: 8192, system: useCache ? systemForCall : undefined, cacheSystem: useCache },
-          ctx,
-          analysisMeta,
-        );
-        const analysisMs = Date.now() - tAnalysis;
-        const data = parseJsonFromText(resp.text);
-
-        // Inhaltliche Mindeststruktur gehört zur Gültigkeit einer
-        // Modellantwort. Ein fehlender Fachblock ist deshalb ein Modellfehler
-        // und muss das nächste Kettenglied mit erneutem Dokumentzugriff
-        // auslösen, nicht erst einen leeren DB-Insert.
-        const strukturFehler = options?.validateResult
-          ? await options.validateResult(data)
-          : null;
-        if (strukturFehler) {
-          throw new Error(`Unvollständige Extraktion: ${strukturFehler}`);
+        const versuche = async (zweck) => {
+          const r = await callModel(
+            ref,
+            doc.inputMode === 'text' ? withDocumentText(basisPrompt, doc.text) : basisPrompt,
+            { pdf: doc.pdf, bilder: doc.bilder, maxTokens: 8192, system: useCache ? systemForCall : undefined, cacheSystem: useCache, zweck },
+            ctx,
+            analysisMeta,
+          );
+          let d;
+          try {
+            d = parseJsonFromText(r.text);
+          } catch (err) {
+            err.schemaFehler = true;
+            throw err;
+          }
+          // Inhaltliche Mindeststruktur gehört zur Gültigkeit einer
+          // Modellantwort. Ein fehlender Fachblock ist deshalb ein Modellfehler
+          // und muss das nächste Kettenglied mit erneutem Dokumentzugriff
+          // auslösen, nicht erst einen leeren DB-Insert.
+          const strukturFehler = options?.validateResult
+            ? await options.validateResult(d)
+            : null;
+          if (strukturFehler) {
+            throw Object.assign(new Error(`Unvollständige Extraktion: ${strukturFehler}`), { schemaFehler: true });
+          }
+          return { resp: r, data: d };
+        };
+        // Extraktion läuft mit niedrigem Effort, Modelle aus der Messliste ohne
+        // Nachdenken. Liefert ein solches Modell so kein gültiges Schema, versucht
+        // es dasselbe Modell sofort mit niedrigem Effort und bleibt ab dann dabei
+        // (gemerkt bis zum Neustart).
+        const ohneNachdenken = extraktionsModus(ref.providerId, ref.model) === 'aus';
+        let resp, data;
+        try {
+          ({ resp, data } = await versuche(undefined));
+        } catch (err) {
+          if (!ohneNachdenken || !err.schemaFehler) throw err;
+          merkeNachdenkenNoetig(ref.providerId, ref.model);
+          console.warn(`[llm] ${label} ohne Nachdenken ungültig (${err.message}) – erneut mit niedrigem Effort`);
+          appLog('WARN', 'llm', `analyzeDocument ${label}: ohne Nachdenken ungültig, erneut mit niedrigem Effort`);
+          ({ resp, data } = await versuche(ZWECK_EXTRAKTION_NACHDENKEN));
         }
+        const analysisMs = Date.now() - tAnalysis;
 
         // Mindest-Validierung
         const lxdLabel = typeof data.lebensbereich === 'string' && typeof data.dokumentart === 'string'

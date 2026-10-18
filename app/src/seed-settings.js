@@ -164,6 +164,22 @@ try {
                 THEN '"legacy"'::jsonb ELSE '"device"'::jsonb END
     WHERE NOT EXISTS (SELECT 1 FROM _settings WHERE key = 'onedrive_auth_mode')
   `);
+
+  // Zugriffsumfang festschreiben, damit er nicht kippt, wenn Tokens oder
+  // Ordner später fehlen. Neue Verbindungen nutzen den App-Ordner; eine
+  // bestehende Verbindung oder Ordnerstruktur bleibt beim Vollzugriff, bis der
+  // Admin selbst umstellt.
+  await client.query(`
+    INSERT INTO _settings (key, value)
+    SELECT 'onedrive_zugriff',
+           CASE WHEN EXISTS (SELECT 1 FROM _settings WHERE key = 'onedrive_tokens')
+                  OR EXISTS (SELECT 1 FROM _settings
+                              WHERE key = 'storage_folders'
+                                AND jsonb_typeof(value -> 'onedrive') = 'object'
+                                AND value -> 'onedrive' <> '{}'::jsonb)
+                THEN '"vollzugriff"'::jsonb ELSE '"appordner"'::jsonb END
+    WHERE NOT EXISTS (SELECT 1 FROM _settings WHERE key = 'onedrive_zugriff')
+  `);
 } catch (err) {
   console.error('[seed] FAILED host/auth defaults:', err.message);
   await client.end();
@@ -208,6 +224,40 @@ for (const { key, value } of scannerDefaults) {
     );
     console.log('[seed] Seeded scanner default:', key);
   }
+}
+
+// ── Modellwahl der Dokumentanalyse ──────────────────────────────────────────
+// Neue Instanzen analysieren mit einem Modell für alles ('einfach'). Eine
+// bestehende Instanz hat ihre Stufen bewusst gewählt und behält die
+// Staffelung, bis der Betreiber umschaltet: erkennbar an bereits gespeicherten
+// Stufenmodellen oder vorhandenen Dokumenten. Muss VOR der Modell-Werkseinstellung
+// unten laufen, die die Stufenschlüssel einer frischen Instanz erst anlegt.
+// Ein Restore bringt die _settings der Sicherung mit; fehlt dort der Schlüssel,
+// greift beim nächsten Start dieselbe Erkennung.
+//
+// Das Analysemodell einer bestehenden Instanz startet mit ihrem Modell für
+// „Leicht", damit ein späteres Umschalten nicht auf einen Provider zeigt, den
+// die Instanz gar nicht nutzt.
+try {
+  await client.query(`
+    INSERT INTO _settings (key, value)
+    SELECT 'llm_modellwahl',
+           CASE WHEN EXISTS (SELECT 1 FROM _settings
+                              WHERE key IN ('llm_model_preanalysis', 'llm_model_leicht',
+                                            'llm_model_mittel', 'llm_model_schwierig', 'llm_model_large'))
+                  OR EXISTS (SELECT 1 FROM postbuch)
+                THEN '"gestaffelt"'::jsonb ELSE '"einfach"'::jsonb END
+    WHERE NOT EXISTS (SELECT 1 FROM _settings WHERE key = 'llm_modellwahl')
+  `);
+  await client.query(`
+    INSERT INTO _settings (key, value)
+    SELECT 'llm_model_analyse', value FROM _settings WHERE key = 'llm_model_leicht'
+    ON CONFLICT (key) DO NOTHING
+  `);
+} catch (err) {
+  console.error('[seed] FAILED llm_modellwahl:', err.message);
+  await client.end();
+  process.exit(1);
 }
 
 // Modell-Werkseinstellung passend zum Schlüssel, den der Installer mitgegeben hat.
@@ -374,6 +424,25 @@ try {
   }
 } catch (err) {
   console.error('[seed] webhook_token-Erzeugung fehlgeschlagen:', err.message);
+}
+
+// ── Scanner-Token (einmalig, falls noch nicht vorhanden) ────────────────────
+// Schützt die Scan-Webhooks des Scanner-Dienstes (/scan/*). Der Scanner holt ihn
+// über /api/internal/config, die App sendet ihn bei eigenen Aufrufen mit, und die
+// Import-Seite hängt ihn an die kopierbare Webhook-URL. Erneuern über die UI.
+try {
+  const existing = await client.query("SELECT 1 FROM _settings WHERE key = 'scanner_token'");
+  if (existing.rows.length === 0) {
+    await client.query(
+      'INSERT INTO _settings (key, value) VALUES ($1, $2::jsonb) ON CONFLICT (key) DO NOTHING',
+      ['scanner_token', JSON.stringify(randomBytes(32).toString('hex'))]
+    );
+    console.log('[seed] scanner_token erzeugt.');
+  } else {
+    console.log('[seed] scanner_token bereits vorhanden — übersprungen.');
+  }
+} catch (err) {
+  console.error('[seed] scanner_token-Erzeugung fehlgeschlagen:', err.message);
 }
 
 await client.end();

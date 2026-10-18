@@ -87,4 +87,39 @@ LEERER_SERVICE=''; UNHEALTHY_SERVICE='id-web'
 if hostconfig_anwenden "$TMP" port 3458; then exit 1; fi
 grep -q '^WEB_PORT=3420$' "$TMP/.env"
 
+# Freigaben: Scanner wird nur bei aktivem Profil neu erstellt.
+UNHEALTHY_SERVICE=''
+printf 'COMPOSE_PROFILES=scanner\nWEB_PORT=3420\n' > "$TMP/.env"
+: > "$LOG"
+hostconfig_anwenden "$TMP" freigabe scanner:lokal
+grep -q '^SCANNER_BIND=127.0.0.1$' "$TMP/.env"
+grep -q 'compose --profile scanner up -d --force-recreate --no-deps scanner$' "$LOG"
+[[ $(hostconfig_bind_lesen "$TMP/.env" SCANNER_BIND) == lokal ]]
+hostconfig_anwenden "$TMP" freigabe scanner:lan
+grep -q '^SCANNER_BIND=$' "$TMP/.env"
+[[ $(hostconfig_bind_lesen "$TMP/.env" SCANNER_BIND) == lan ]]
+printf 'COMPOSE_PROFILES=\n' > "$TMP/.env"
+: > "$LOG"
+hostconfig_anwenden "$TMP" freigabe scanner:lokal
+grep -q '^SCANNER_BIND=127.0.0.1$' "$TMP/.env"
+if grep -q 'no-deps scanner' "$LOG"; then exit 1; fi
+
+# Oberfläche nur über HTTPS: ohne laufenden Caddy abgelehnt, sonst web neu.
+printf 'WEB_PORT=3420\n' > "$TMP/.env"
+: > "$LOG"; LEERER_SERVICE=caddy
+if hostconfig_anwenden "$TMP" freigabe web:lokal; then exit 1; fi
+if grep -q '^WEB_BIND=' "$TMP/.env"; then exit 1; fi
+LEERER_SERVICE=''
+hostconfig_anwenden "$TMP" freigabe web:lokal
+grep -q '^WEB_BIND=127.0.0.1$' "$TMP/.env"
+grep -q 'compose up -d --force-recreate --no-deps web' "$LOG"
+# Fehlgeschlagenes Recreate tauscht zurück.
+: > "$LOG"; COMPOSE_FEHLER_MUSTER='no-deps web'
+if hostconfig_anwenden "$TMP" freigabe web:lan; then exit 1; fi
+grep -q '^WEB_BIND=127.0.0.1$' "$TMP/.env"
+COMPOSE_FEHLER_MUSTER=''
+hostconfig_anwenden "$TMP" freigabe web:lan
+grep -q '^WEB_BIND=$' "$TMP/.env"
+if hostconfig_anwenden "$TMP" freigabe web:irgendwas; then exit 1; fi
+
 printf 'Hostconfig-Harness: OK\n'

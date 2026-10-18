@@ -10,9 +10,9 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 
 export function SetupGuideCard({ icon: Icon, title, subtitle, tone = 'sky', children, defaultOpen = true }) {
   const tones = {
-    sky: 'border-sky-200/80 bg-gradient-to-br from-sky-50 via-white to-cyan-50 text-slate-800',
-    rose: 'border-rose-200/80 bg-gradient-to-br from-rose-50 via-white to-pink-50 text-slate-800',
-    amber: 'border-amber-200/80 bg-gradient-to-br from-amber-50 via-white to-orange-50 text-slate-800',
+    sky: 'border-sky-200/80 bg-linear-to-br from-sky-50 via-white to-cyan-50 text-slate-800',
+    rose: 'border-rose-200/80 bg-linear-to-br from-rose-50 via-white to-pink-50 text-slate-800',
+    amber: 'border-amber-200/80 bg-linear-to-br from-amber-50 via-white to-orange-50 text-slate-800',
   };
 
   const [open, setOpen] = useState(defaultOpen);

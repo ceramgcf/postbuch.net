@@ -12,7 +12,7 @@ hostconfig_compose() {
 hostconfig_env_setzen() { # $1 Datei, $2 Key, $3 Wert
     local datei="$1" key="$2" wert="$3" tmp backup gefunden=false
     case "$key" in
-        COMPOSE_PROFILES|WEB_PORT|APP_BASE_URL|DUCKDNS_DOMAIN|DUCKDNS_API_TOKEN) ;;
+        COMPOSE_PROFILES|WEB_PORT|APP_BASE_URL|DUCKDNS_DOMAIN|DUCKDNS_API_TOKEN|SCANNER_BIND|WEB_BIND) ;;
         *) return 2 ;;
     esac
     [[ -f "$datei" && ! -L "$datei" ]] || return 2
@@ -115,6 +115,30 @@ hostconfig_scanner_aktiv() { # $1 env
     [[ ",$profile," == *,scanner,* ]]
 }
 
+# Freigabe eines Ports: "lan" (alle Schnittstellen), "lokal" (nur der Host
+# selbst) oder "anders" (von Hand gesetzte Adresse). Liest nur, gibt nur das
+# feste Vokabular aus.
+hostconfig_bind_lesen() { # $1 env $2 Key (SCANNER_BIND|WEB_BIND)
+    local wert
+    wert=$(grep "^$2=" "$1" 2>/dev/null | tail -n1 | cut -d= -f2- || true)
+    case "$wert" in
+        ''|0.0.0.0|'::') echo lan ;;
+        127.0.0.1|localhost|'::1') echo lokal ;;
+        *) echo anders ;;
+    esac
+}
+
+hostconfig_scanner_neu_erstellen() { # $1 env; nur wenn das Scannerprofil aktiv ist
+    hostconfig_scanner_aktiv "$1" || return 0
+    hostconfig_compose --profile scanner up -d --force-recreate --no-deps scanner || return 1
+    hostconfig_services_bereit scanner
+}
+
+hostconfig_web_neu_erstellen() {
+    hostconfig_compose up -d --force-recreate --no-deps web || return 1
+    hostconfig_services_bereit web
+}
+
 hostconfig_ruecktausch() { # $1 env $2 typ $3 scanner-war-aktiv $4 caddy-war-aktiv $5 Caddyfile
     local env="$1" typ="$2" scanner_war_aktiv="$3" caddy_war_aktiv="${4:-false}" caddyfile="${5:-}"
     hostconfig_rollback "$env" || return 1
@@ -128,6 +152,10 @@ hostconfig_ruecktausch() { # $1 env $2 typ $3 scanner-war-aktiv $4 caddy-war-akt
             ;;
         port) hostconfig_compose up -d --force-recreate --no-deps web || true ;;
         netzwerk) hostconfig_compose up -d --force-recreate --no-deps app web || true ;;
+        freigabe)
+            hostconfig_web_neu_erstellen || true
+            hostconfig_scanner_neu_erstellen "$env" || true
+            ;;
         duckdns)
             [[ -n "$caddyfile" ]] && hostconfig_caddy_rollback "$caddyfile" || true
             if [[ "$caddy_war_aktiv" == true ]]; then
@@ -185,6 +213,33 @@ hostconfig_anwenden() { # $1 install-dir $2 typ $3 wert $4 secret(optional)
                 || { hostconfig_ruecktausch "$env" "$typ" "$scanner_war_aktiv"; return 1; }
             hostconfig_app_host_db_setzen "$env" "$wert" \
                 || { hostconfig_ruecktausch "$env" "$typ" "$scanner_war_aktiv"; return 1; }
+            ;;
+        freigabe)
+            # Scan-Webhook bzw. Oberfläche für das Heimnetz öffnen oder auf den
+            # Host beschränken. Caddy und App erreichen die Dienste über das
+            # Docker-Netz und sind von der Bindung nicht betroffen.
+            case "$wert" in
+                scanner:lan|scanner:lokal)
+                    local scanner_bind=''
+                    [[ "$wert" == scanner:lokal ]] && scanner_bind=127.0.0.1
+                    hostconfig_env_setzen "$env" SCANNER_BIND "$scanner_bind" || return 1
+                    hostconfig_scanner_neu_erstellen "$env" \
+                        || { hostconfig_ruecktausch "$env" "$typ" "$scanner_war_aktiv"; return 1; }
+                    ;;
+                web:lan|web:lokal)
+                    local web_bind=''
+                    if [[ "$wert" == web:lokal ]]; then
+                        # Ohne laufenden Caddy wäre die Oberfläche danach nur
+                        # noch auf dem Host selbst erreichbar.
+                        $caddy_war_aktiv || return 2
+                        web_bind=127.0.0.1
+                    fi
+                    hostconfig_env_setzen "$env" WEB_BIND "$web_bind" || return 1
+                    hostconfig_web_neu_erstellen \
+                        || { hostconfig_ruecktausch "$env" "$typ" "$scanner_war_aktiv"; return 1; }
+                    ;;
+                *) return 2 ;;
+            esac
             ;;
         duckdns)
             hostconfig_caddy_sichern "$caddyfile" || return 1

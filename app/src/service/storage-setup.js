@@ -37,6 +37,48 @@ export const SYSTEM_FOLDERS = [
   { folder: '_debug',             keys: ['debug'],                          description: 'KI-Pipeline-Debuglogs (nur bei aktiviertem Debug-Modus)' },
 ];
 
+/** Wurzelangabe für „Struktur direkt im Ablage-Root“ (OneDrive-App-Ordner). */
+export const WURZEL_DIREKT = '/';
+
+function wurzelFehler(text) {
+  const e = new Error(text);
+  e.statusCode = 400;
+  return e;
+}
+
+/**
+ * Bringt eine Wurzelangabe in die kanonische Form: Segmente ohne führenden
+ * oder abschließenden Schrägstrich, oder WURZEL_DIREKT. Leere Eingabe → null.
+ * @param {unknown} eingabe
+ * @returns {string|null}
+ */
+export function normalisiereWurzel(eingabe) {
+  const roh = String(eingabe ?? '').trim();
+  if (!roh) return null;
+  const segmente = roh.split('/').map((s) => s.trim()).filter(Boolean);
+  if (segmente.some((s) => s === '.' || s === '..')) throw wurzelFehler('Ungültiger Wurzelordner.');
+  return segmente.length ? segmente.join('/') : WURZEL_DIREKT;
+}
+
+/**
+ * Normalisiert und prüft eine Wurzelangabe für ein Backend. Die Wurzel „/“
+ * gibt es nur, wo der Adapter sie zulässt (OneDrive im App-Ordner-Modus).
+ * @returns {Promise<string>}
+ */
+export async function pruefeWurzel(eingabe, backendName) {
+  const wurzel = normalisiereWurzel(eingabe);
+  if (!wurzel) throw wurzelFehler('Es wurde kein Wurzelordner angegeben.');
+  if (wurzel === WURZEL_DIREKT) {
+    const settings = await loadDynamicSettings();
+    const adapter = getAdapter(backendName || getActiveBackendName(settings));
+    const erlaubt = typeof adapter.wurzelDirektErlaubt === 'function' && await adapter.wurzelDirektErlaubt();
+    if (!erlaubt) {
+      throw wurzelFehler('Der Wurzelordner „/“ ist nur im App-Ordner-Modus von OneDrive zulässig. Bitte einen Ordnernamen angeben.');
+    }
+  }
+  return wurzel;
+}
+
 /**
  * Hauptfunktion: Erstellt alle Ordner unter rootFolderPath im angegebenen
  * Backend und speichert die IDs in _settings.storage_folders[<backend>].
@@ -53,7 +95,9 @@ export async function setupFolderStructure(rootFolderPath, backendName, onProgre
 
   // 1) Root-Ordner auflösen (erstellen oder vorhandenen nehmen).
   // Der Pfad kann mehrstufig sein (z. B. "archiv/postbuch") → segmentweise.
-  const cleanRoot = rootFolderPath.replace(/^\/+/, '').replace(/\/+$/, '') || 'postbuch';
+  // WURZEL_DIREKT: keine Segmente, die Struktur liegt direkt in getRoot().
+  const wurzel = await pruefeWurzel(rootFolderPath, backend);
+  const cleanRoot = wurzel === WURZEL_DIREKT ? '' : wurzel;
   const segments = cleanRoot.split('/').filter(Boolean);
 
   // Lebensbereichsordner gehören nur an die Wurzel, wenn sie dort die erste
@@ -136,8 +180,9 @@ export async function heileAblageWurzel(backendName) {
   if (typeof adapter.merkeAblageWurzelPfad !== 'function'
       || typeof adapter.leseAblageWurzelPfad !== 'function') return null;
 
-  const tatsaechlich = await ermittleWurzelPfad(backend);
-  if (tatsaechlich === null) return null;
+  const ermittelt = await ermittleWurzelPfad(backend);
+  if (ermittelt === null) return null;
+  const tatsaechlich = ermittelt === WURZEL_DIREKT ? '' : ermittelt;
 
   const gespeichert = await adapter.leseAblageWurzelPfad();
   if (gespeichert === tatsaechlich) return null;
@@ -165,7 +210,8 @@ export async function heileAblageWurzel(backendName) {
  * anschließend alle Dokumente dorthin um.
  *
  * @param {string} [backendName]  Backend; Default: das aktive
- * @returns {Promise<string|null>}  z. B. "postbuch_testinstanz", oder null,
+ * @returns {Promise<string|null>}  z. B. "postbuch_testinstanz", WURZEL_DIREKT
+ *                                  ("/") für die Struktur direkt im Root, oder null,
  *                                  wenn (noch) nichts konfiguriert bzw. der
  *                                  Ordner nicht mehr auflösbar ist
  */
@@ -183,7 +229,7 @@ export async function ermittleWurzelPfad(backendName) {
       const pfad = await getAdapter(backend).getPath(id);
       const segmente = String(pfad || '').split('/').filter(Boolean);
       if (segmente.pop() !== def.folder) continue;   // Ordner umbenannt/verschoben
-      return segmente.join('/');                     // "" = direkt in der Wurzel
+      return segmente.length ? segmente.join('/') : WURZEL_DIREKT;
     } catch {
       // Ordner gelöscht oder Backend gerade nicht erreichbar → nächsten versuchen
     }
@@ -212,6 +258,21 @@ export async function saveFolderIds(backend, patch) {
     [backend, JSON.stringify(patch)]
   );
   return patch;
+}
+
+/**
+ * Entfernt Cache-Schlüssel aus storage_folders[backend], etwa weil ihr Ordner
+ * nicht mehr existiert. ensureAblageOrdner legt sie bei Bedarf neu an.
+ */
+export async function entferneOrdnerSchluessel(backend, keys) {
+  if (!keys?.length) return;
+  await db.query(
+    `UPDATE postbuch._settings
+        SET value = jsonb_set(value, ARRAY[$1::text], (value->$1::text) - $2::text[]),
+            updated_at = NOW()
+      WHERE key = 'storage_folders' AND value ? $1::text`,
+    [backend, keys],
+  );
 }
 
 // ── Ablageebenen ──────────────────────────────────────────────────────────────

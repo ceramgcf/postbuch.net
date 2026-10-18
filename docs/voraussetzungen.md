@@ -44,20 +44,17 @@ gleichwertig unterstützt, ein Wechsel ist später möglich (siehe
 
 **OneDrive** Ein Microsoft-Konto plus eine eigene, kostenlose _Azure App
 Registration_. Der Web-Assistent führt nach dem ersten Login durch die
-Registrierung. Standard ist der Gerätecode mit `Files.ReadWrite.All`,
+Registrierung. Standard ist der Gerätecode mit `Files.ReadWrite.AppFolder`,
 `User.Read` und `offline_access`; er braucht weder Secret noch Callback-URL.
 Siehe [OneDrive-App registrieren](onedrive-app-registrierung.md).
 
-> [!WARNING]
+> [!NOTE]
 >
-> `Files.ReadWrite.All` ist Vollzugriff auf **alle** Ordner dieses
-> Microsoft-Kontos, nicht nur auf den postbuch-Ordner – nötig, damit die
-> Dokumente im gewöhnlichen Dateibaum liegen und auch ohne postbuch.net
-> erreichbar bleiben. Das Token liegt anschließend unverschlüsselt in der
-> Datenbank und in jedem Backup: Wer Server, Datenbank oder Backup-Datei hat,
-> hat dein komplettes OneDrive. Wer das nicht will, nimmt ein separates
-> Microsoft-Konto oder eine eigene Nextcloud. Einzelheiten:
-> [Sicherheit](sicherheit.md#der-zugriff-auf-die-dateiablage-ist-ein-vollzugriff).
+> `Files.ReadWrite.AppFolder` beschränkt postbuch.net auf seinen eigenen
+> App-Ordner unter `Apps/`. Du siehst ihn wie jeden anderen Ordner in deinem
+> OneDrive. Das Token liegt in der Datenbank und in jedem verschlüsselten
+> Backup. Einzelheiten:
+> [Sicherheit](sicherheit.md#wie-weit-der-zugriff-auf-die-dateiablage-reicht).
 
 **Nextcloud / ownCloud** Ein eigener Server oder ein kommerzieller Anbieter auf
 Nextcloud-Basis (z. B. MagentaCLOUD). Hier ist in der `.env` **nichts**

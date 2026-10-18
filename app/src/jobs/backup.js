@@ -36,6 +36,7 @@ import { backupDatum, retentionKeepIds } from './backup-retention.js';
 import { backupExcludeArgs } from './backup-policy.js';
 import { aktuellerSchluesselbund, sidecarAbgleichen } from '../lib/backup-encryption.js';
 import { buildEncryptedFile } from '../lib/backup-crypto.js';
+import { nichtGeheimeSettingKeys } from '../lib/geheime-settings.js';
 
 const execFileAsync = promisify(execFile);
 const gzipAsync = promisify(gzip);
@@ -114,6 +115,28 @@ function backupIdFromFilename(filename) {
  * Dateinamen mit. Die Version steht zusätzlich im Namen, damit sie bei einer
  * einzeln kopierten Datei sofort sichtbar bleibt.
  */
+// Schlüssel landen in PGOPTIONS (-c name=wert); Leerzeichen und Backslashes
+// müssten dort maskiert werden. Solche Schlüssel kommen nicht vor; falls doch,
+// fehlen sie im unverschlüsselten Backup statt die Sicherung zu gefährden.
+const SICHERER_SETTING_KEY = /^[A-Za-z0-9_.:-]+$/;
+// Das Startup-Paket des Servers fasst höchstens 10 000 Byte.
+const MAX_PGOPTIONS_LAENGE = 8000;
+
+/** pg_dump-Argumente und PGOPTIONS für ein Backup ohne Zugangsdaten. */
+async function ohneZugangsdatenDumpOptionen() {
+  const keys = await nichtGeheimeSettingKeys();
+  const sicher = keys.filter((k) => SICHERER_SETTING_KEY.test(k));
+  if (sicher.length < keys.length) {
+    const ausgelassen = keys.filter((k) => !SICHERER_SETTING_KEY.test(k));
+    appLog('WARN', 'backup', `Einstellungen mit ungewöhnlichem Schlüssel nicht im unverschlüsselten Backup: ${ausgelassen.join(', ')}`);
+  }
+  const pgOptions = `-c postbuch.backup_keys=${sicher.join(',')}`;
+  if (pgOptions.length > MAX_PGOPTIONS_LAENGE) {
+    throw new Error('Zu viele Einstellungen für ein unverschlüsseltes Backup ohne Zugangsdaten. Backup-Verschlüsselung einschalten.');
+  }
+  return { args: ['--role=postbuch_backup', '--enable-row-security'], pgOptions };
+}
+
 async function recordBackupMetadata(backupId, encrypted) {
   const schema = await readFile('/app/base_schema.sql');
   const schemaSha256 = createHash('sha256').update(schema).digest('hex');
@@ -247,6 +270,18 @@ export async function runBackup({ manuell = false } = {}) {
     const verschluesselt = settings.backup_encryption?.enabled === true && !!dek;
     const wrappedDekCurrent = schluessel?.wrappedDekCurrent ?? null;
 
+    // Unverschlüsselte Backups enthalten keine Zugangsdaten: pg_dump liest
+    // _settings als postbuch_backup, die per Policy (base_schema.sql) nur die
+    // hier übergebenen Schlüssel sieht. Beim Einspielen behält die Instanz
+    // ihre eigenen Zugangsdaten (lib/pg-restore.js).
+    const dumpArgs = [...baseArgs];
+    const dumpEnv = { ...pgEnv };
+    if (!verschluesselt) {
+      const { args, pgOptions } = await ohneZugangsdatenDumpOptionen();
+      dumpArgs.push(...args);
+      dumpEnv.PGOPTIONS = [process.env.PGOPTIONS, pgOptions].filter(Boolean).join(' ');
+    }
+
     const metadata = await recordBackupMetadata(backupId, verschluesselt);
     const versionLabel = metadata.appVersion ? `v${metadata.appVersion}` : 'vunbekannt';
     const binaryFileName = `postbuch_${backupId}_${versionLabel}.pgdump.gz`;
@@ -256,10 +291,10 @@ export async function runBackup({ manuell = false } = {}) {
     //     post_files und der semantische Hilfekorpus sind regenerierbare Caches;
     //     ihre Daten werden bewusst nicht in den Dump geschrieben.
     await execFileAsync('pg_dump', [
-      ...baseArgs,
+      ...dumpArgs,
       '-F', 'c',
       '-f', binaryDumpPath,
-    ], { env: pgEnv });
+    ], { env: dumpEnv });
 
     // 1b. SQL-Textdump (Fallback für manuelles Restore via psql)
     //   --create    → beinhaltet CREATE DATABASE + \connect
@@ -267,11 +302,11 @@ export async function runBackup({ manuell = false } = {}) {
     //   --if-exists → vermeidet Fehler wenn DB/Objekte noch nicht existieren
     //   Restore: gunzip -c dump.sql.gz | psql -h <host> -U <user> postgres
     await execFileAsync('pg_dump', [
-      ...baseArgs,
+      ...dumpArgs,
       '--create', '--clean', '--if-exists',
       '-F', 'p',
       '-f', sqlDumpPath,
-    ], { env: pgEnv });
+    ], { env: dumpEnv });
 
     // 2. Beide Dumps komprimieren (parallel)
     const [binaryData, sqlData] = await Promise.all([

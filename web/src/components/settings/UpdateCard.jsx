@@ -210,6 +210,28 @@ export default function UpdateCard() {
 
           <SignaturZeile signatur={data?.signatur} />
 
+          {data?.datenbank?.umzugAusstehend && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">
+              <p className="text-xs font-medium text-amber-800 dark:text-amber-400">
+                Datenbank-Umzug auf PostgreSQL 18 steht aus
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Die Datenbank läuft noch auf PostgreSQL {data.datenbank.postgres}.{' '}
+                {data.agent?.capabilities?.includes('postgres-umzug') && data.agent?.modus === 'normal'
+                  ? 'Der Update-Agent zieht sie in den nächsten Minuten selbst um; postbuch.net ist dabei kurz nicht erreichbar. Schlägt das fehl, führe diesen Befehl auf dem Server aus:'
+                  : 'Führe diesen Befehl auf dem Server aus. Er legt vorher ein Backup an; postbuch.net ist dabei einige Minuten nicht erreichbar:'}
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="flex-1 min-w-0 truncate rounded bg-background px-2 py-1 text-[11px] font-mono">
+                  {data.datenbank.umzugsbefehl}
+                </code>
+                <Button variant="outline" size="sm" className="h-7 shrink-0" onClick={() => kopiere(data.datenbank.umzugsbefehl)}>
+                  {kopiert ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                </Button>
+              </div>
+            </div>
+          )}
+
           {!quelleKonfiguriert && (
             <p className="text-xs rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-amber-800 dark:text-amber-400">
               Keine Bezugsquelle eingerichtet. Setze auf dem Server

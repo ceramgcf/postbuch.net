@@ -1,8 +1,46 @@
 {
   "schemaVersion": 1,
-  "stand": "2026-10-07",
+  "stand": "2026-10-17",
   "hinweis": "Kuratierte Empfehlungen des postbuch.net-Entwicklerteams. Die Reihenfolge je Klasse ist der Rang; postbuch.net nimmt den ersten Kandidaten, auf den diese Instanz nachweislich Zugriff hat. Preise in USD je 1 Million Token.",
   "klassen": {
+    "analyse": [
+      {
+        "providerId": "anthropic",
+        "providerTyp": "anthropic",
+        "model": "claude-haiku-5-5",
+        "label": "Claude Haiku 5.5",
+        "preisIn": 0.1,
+        "preisOut": 0.5,
+        "preisCacheWrite": 0.125,
+        "preisCacheRead": 0.01,
+        "waehrung": "USD",
+        "notiz": "Bestes Verhältnis aus Trefferquote und Preis für alle Dokumente"
+      },
+      {
+        "providerId": "openai",
+        "providerTyp": "openai",
+        "model": "gpt-6-luna",
+        "label": "GPT-6 Luna",
+        "preisIn": 0.1,
+        "preisOut": 0.5,
+        "preisCacheWrite": 0.125,
+        "preisCacheRead": 0.01,
+        "waehrung": "USD",
+        "notiz": "Alternative bei fehlendem Anthropic-Zugriff"
+      },
+      {
+        "providerId": "mistral",
+        "providerTyp": "openai-compatible",
+        "model": "mistral-large-4",
+        "label": "Mistral Large 4",
+        "preisIn": 1.36,
+        "preisOut": 4.18,
+        "preisCacheWrite": 1.36,
+        "preisCacheRead": 0.14,
+        "waehrung": "USD",
+        "notiz": "Alternative mit Inferenz in der EU"
+      }
+    ],
     "preanalysis": [
       {
         "providerId": "openai",
@@ -27,6 +65,18 @@
         "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
+      },
+      {
+        "providerId": "mistral",
+        "providerTyp": "openai-compatible",
+        "model": "mistral-large-4",
+        "label": "Mistral Large 4",
+        "preisIn": 1.36,
+        "preisOut": 4.18,
+        "preisCacheWrite": 1.36,
+        "preisCacheRead": 0.14,
+        "waehrung": "USD",
+        "notiz": "Alternative mit Inferenz in der EU"
       }
     ],
     "large": [
@@ -53,6 +103,18 @@
         "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
+      },
+      {
+        "providerId": "mistral",
+        "providerTyp": "openai-compatible",
+        "model": "mistral-large-4",
+        "label": "Mistral Large 4",
+        "preisIn": 1.36,
+        "preisOut": 4.18,
+        "preisCacheWrite": 1.36,
+        "preisCacheRead": 0.14,
+        "waehrung": "USD",
+        "notiz": "Alternative mit Inferenz in der EU"
       }
     ],
     "leicht": [
@@ -79,6 +141,18 @@
         "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
+      },
+      {
+        "providerId": "mistral",
+        "providerTyp": "openai-compatible",
+        "model": "mistral-large-4",
+        "label": "Mistral Large 4",
+        "preisIn": 1.36,
+        "preisOut": 4.18,
+        "preisCacheWrite": 1.36,
+        "preisCacheRead": 0.14,
+        "waehrung": "USD",
+        "notiz": "Alternative mit Inferenz in der EU"
       }
     ],
     "mittel": [
@@ -105,6 +179,18 @@
         "preisCacheRead": 0.2,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
+      },
+      {
+        "providerId": "mistral",
+        "providerTyp": "openai-compatible",
+        "model": "mistral-large-4",
+        "label": "Mistral Large 4",
+        "preisIn": 1.36,
+        "preisOut": 4.18,
+        "preisCacheWrite": 1.36,
+        "preisCacheRead": 0.14,
+        "waehrung": "USD",
+        "notiz": "Alternative mit Inferenz in der EU"
       }
     ],
     "schwierig": [
@@ -131,6 +217,18 @@
         "preisCacheRead": 0.2,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
+      },
+      {
+        "providerId": "mistral",
+        "providerTyp": "openai-compatible",
+        "model": "mistral-large-4",
+        "label": "Mistral Large 4",
+        "preisIn": 1.36,
+        "preisOut": 4.18,
+        "preisCacheWrite": 1.36,
+        "preisCacheRead": 0.14,
+        "waehrung": "USD",
+        "notiz": "Alternative mit Inferenz in der EU"
       }
     ],
     "fallback": [
@@ -157,6 +255,18 @@
         "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
+      },
+      {
+        "providerId": "mistral",
+        "providerTyp": "openai-compatible",
+        "model": "mistral-large-4",
+        "label": "Mistral Large 4",
+        "preisIn": 1.36,
+        "preisOut": 4.18,
+        "preisCacheWrite": 1.36,
+        "preisCacheRead": 0.14,
+        "waehrung": "USD",
+        "notiz": "Alternative mit Inferenz in der EU"
       }
     ],
     "chat_research": [
@@ -183,6 +293,18 @@
         "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
+      },
+      {
+        "providerId": "mistral",
+        "providerTyp": "openai-compatible",
+        "model": "mistral-large-4",
+        "label": "Mistral Large 4",
+        "preisIn": 1.36,
+        "preisOut": 4.18,
+        "preisCacheWrite": 1.36,
+        "preisCacheRead": 0.14,
+        "waehrung": "USD",
+        "notiz": "Alternative mit Inferenz in der EU"
       }
     ],
     "chat_synthesis": [
@@ -209,6 +331,18 @@
         "preisCacheRead": 0.2,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
+      },
+      {
+        "providerId": "mistral",
+        "providerTyp": "openai-compatible",
+        "model": "mistral-large-4",
+        "label": "Mistral Large 4",
+        "preisIn": 1.36,
+        "preisOut": 4.18,
+        "preisCacheWrite": 1.36,
+        "preisCacheRead": 0.14,
+        "waehrung": "USD",
+        "notiz": "Alternative mit Inferenz in der EU"
       }
     ],
     "chat_title": [
@@ -235,6 +369,18 @@
         "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
+      },
+      {
+        "providerId": "mistral",
+        "providerTyp": "openai-compatible",
+        "model": "mistral-large-4",
+        "label": "Mistral Large 4",
+        "preisIn": 1.36,
+        "preisOut": 4.18,
+        "preisCacheWrite": 1.36,
+        "preisCacheRead": 0.14,
+        "waehrung": "USD",
+        "notiz": "Alternative mit Inferenz in der EU"
       }
     ],
     "akte_vorschlag": [
@@ -261,6 +407,18 @@
         "preisCacheRead": 0.01,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
+      },
+      {
+        "providerId": "mistral",
+        "providerTyp": "openai-compatible",
+        "model": "mistral-large-4",
+        "label": "Mistral Large 4",
+        "preisIn": 1.36,
+        "preisOut": 4.18,
+        "preisCacheWrite": 1.36,
+        "preisCacheRead": 0.14,
+        "waehrung": "USD",
+        "notiz": "Alternative mit Inferenz in der EU"
       }
     ],
     "embedding": [

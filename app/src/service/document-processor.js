@@ -76,6 +76,17 @@ export function releaseInFlight(onedriveFileId) {
   _inFlightIds.delete(onedriveFileId);
 }
 
+// Phase-0-Uploads in die Inbox, deren Datei-ID noch nicht registriert ist.
+// Die ID entsteht erst mit dem Upload; dazwischen ist die Datei in der Inbox
+// schon sichtbar. Der Watcher prüft das unmittelbar vor seinem Claim (ohne
+// await dazwischen) und lässt den Durchgang dann aus, statt dem Upload die
+// Datei wegzuschnappen – dessen Job endete sonst ohne Ergebnis als „fertig“.
+let _inboxUploadsOhneClaim = 0;
+
+export function inboxUploadLaeuft() {
+  return _inboxUploadsOhneClaim > 0;
+}
+
 // ── Error-Klassen ────────────────────────────────────────────────────────────
 
 // CancellationError kommt aus jobs/tracker.js — dort auch von lib/llm.js
@@ -373,19 +384,29 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       const inboxFolderId = getFolders(settings).inbox;
       if (!inboxFolderId) throw new Error('Inbox-Ordner der Ablage nicht konfiguriert');
 
-      const uploaded = await storage.uploadNew(
-        input.pdfBuffer,
-        input.filename || `scan_${Date.now()}.pdf`,
-        inboxFolderId
-      );
-      onedriveFileId = uploaded.id;
-
       // ─── In-Flight-Sperre (Pfad B): ID erst nach Upload bekannt ───
-      // Der Watcher könnte die soeben hochgeladene Datei bereits gefunden haben.
-      if (!claimInFlight(onedriveFileId)) {
+      // Der Claim folgt synchron auf das Upload-Ergebnis, noch bevor der Zähler
+      // sinkt; der Watcher sieht also entweder den Zähler oder den Claim.
+      let geclaimt;
+      _inboxUploadsOhneClaim++;
+      try {
+        const uploaded = await storage.uploadNew(
+          input.pdfBuffer,
+          input.filename || `scan_${Date.now()}.pdf`,
+          inboxFolderId
+        );
+        onedriveFileId = uploaded.id;
+        geclaimt = claimInFlight(onedriveFileId);
+      } finally {
+        _inboxUploadsOhneClaim--;
+      }
+
+      // Sollte trotzdem ein anderer Weg die Datei schon halten, verarbeitet er sie.
+      if (!geclaimt) {
         console.log(`[doc-processor] Doppelverarbeitung verhindert nach Upload: ${onedriveFileId} wird bereits verarbeitet`);
         appLog('WARN', 'doc-processor', `Doppelverarbeitung verhindert (Race Condition nach Upload) für OneDrive-ID: ${onedriveFileId}`);
-        tracker.complete(jobId);
+        tracker.setStep(jobId, stepOffset + 0, 'Wird von einer parallelen Verarbeitung übernommen');
+        tracker.complete(jobId, { uebernommen: true });
         return; // Datei im Inbox belassen – der andere Prozess verarbeitet sie
       }
       _lockedId = onedriveFileId;
@@ -998,8 +1019,11 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       })));
 
       const arzWorkflowResult = await dbWriter.query(
+        // bre_unbeachtlich als NULLIF: nur ein gesetztes Häkchen zählt als
+        // zu erhaltender Workflowzustand (der Default false nicht).
         `SELECT abrechnungsperiode_pkv, abrechnungsperiode_beihilfe,
-                pkv_satz_override, beihilfe_satz_override
+                pkv_satz_override, beihilfe_satz_override,
+                NULLIF(bre_unbeachtlich, false) AS bre_unbeachtlich
            FROM postbuch.arztrechnung WHERE postid = $1`,
         [resolvedMatchID]
       );
@@ -1060,7 +1084,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       const hatArzWorkflow = preservedArzWorkflow
         && Object.values(preservedArzWorkflow).some(v => v != null);
       if (hatArzWorkflow && zielRechnungstabelle !== 'arztrechnung') {
-        throw new Error('Wiederverarbeitung gesperrt: Abrechnungsperioden oder Satz-Overrides können beim Wechsel aus dem Arztrechnungs-Typ nicht erhalten werden.');
+        throw new Error('Wiederverarbeitung gesperrt: Abrechnungsperioden, Satz-Overrides oder die Markierung „für die Beitragsrückerstattung unbeachtlich“ können beim Wechsel aus dem Arztrechnungs-Typ nicht erhalten werden.');
       }
       // Eine Ersetzungskante (Korrekturrechnung) übersteht die Ersetzung der
       // Dokumentzeile von selbst (FK prüft erst beim Commit). Sie setzt aber
@@ -1158,10 +1182,8 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     }
     endPhase('QR-Codes');
 
-    // Auch die Neuanlage ist eine einzige DB-Transaktion. Zurückgestellte
-    // Constraint-Trigger (Differenzposition der Arztrechnung) laufen sonst im
-    // Autocommit nach jeder einzelnen Zeile statt erst nach dem vollständigen
-    // Detail-Insert, und ein Fehler hinterließe Teilzeilen.
+    // Auch die Neuanlage ist eine einzige DB-Transaktion, damit ein Fehler
+    // mitten im Detail-Insert keine Teilzeilen hinterlässt.
     if (!replacementClient) {
       neuanlageClient = await pool.connect();
       try {
@@ -1380,7 +1402,8 @@ export async function processDocument(input, jobId, stepOffset = 0) {
                 SET abrechnungsperiode_pkv = $1,
                     abrechnungsperiode_beihilfe = $2,
                     pkv_satz_override = $3,
-                    beihilfe_satz_override = $4
+                    beihilfe_satz_override = $4,
+                    bre_unbeachtlich = COALESCE($6::boolean, false)
               WHERE postid = $5`,
             [
               preservedArzWorkflow.abrechnungsperiode_pkv,
@@ -1388,6 +1411,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
               preservedArzWorkflow.pkv_satz_override,
               preservedArzWorkflow.beihilfe_satz_override,
               finalPostID,
+              preservedArzWorkflow.bre_unbeachtlich,
             ]
           );
           const hatArzWorkflow = Object.values(preservedArzWorkflow).some(v => v != null);

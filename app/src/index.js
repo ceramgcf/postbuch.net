@@ -43,6 +43,7 @@ import taxonomieRouter from './routes/taxonomie.js';
 import scannerTuningRouter from './routes/scanner-tuning.js';
 import { requireBearer } from './middleware/mcp-auth.js';
 import { startTokenKeepAlive } from './lib/storage/onedrive.js';
+import { initOnedriveZugriff } from './service/onedrive-zugriff.js';
 import { getActiveBackend } from './lib/storage/index.js';
 import { startPolling as startOnedrivePolling } from './service/onedrive-watcher.js';
 import { heileAblageWurzel } from './service/storage-setup.js';
@@ -66,6 +67,7 @@ import {
 } from './service/pipeline-file-journal.js';
 import { starteErstattungsbescheidVerarbeitung } from './service/document-inserter.js';
 import { startHelpEmbeddingJob } from './service/help-corpus.js';
+import { leseAgentStatus } from './lib/update-agent-datei.js';
 
 function recoverPipeline(settings) {
   return recoverPendingPipelineFiles(settings, {
@@ -200,7 +202,9 @@ app.use('/api/webhooks', webhooksRouter);
 
 // Interne Config-Route für Scanner + Cleaner (keine Session-Auth).
 // Sicherheit: in web/nginx.conf mit 404 geblockt, damit sie nur über das Docker-Netz
-// erreichbar ist. Sie verteilt u. a. den webhook_token an den Cleaner.
+// erreichbar ist. Sie bündelt die Dienst-Geheimnisse (webhook_token für den Cleaner,
+// scanner_token für den Scanner) – jeder Container im Compose-Netz kann sie lesen,
+// deshalb gehören dort keine fremden Container hinein.
 app.get('/api/internal/config', async (req, res) => {
   try {
     const { loadDynamicSettings } = await import('./config.js');
@@ -208,6 +212,7 @@ app.get('/api/internal/config', async (req, res) => {
     res.json({
       webhook_token: s.webhook_token ?? null,
       scanner: {
+        token:        s.scanner_token        ?? null,
         device_url:   s.scanner_device_url   ?? null,
         default_dpi:  s.scanner_default_dpi  ?? 300,
         default_mode: s.scanner_default_mode ?? 'gray',
@@ -237,8 +242,18 @@ app.get('/api/internal/config', async (req, res) => {
   }
 });
 // ── Öffentliche Metadaten-Endpunkte (kein Login nötig) ─────────────────────
-app.get('/api/public/scanner-port', (_req, res) => {
-  res.json({ port: process.env.SCANNER_PORT || '8080' });
+// Port und Freigabe des Scan-Webhooks; der Token kommt nur über
+// /api/import/scanner-webhook (angemeldet, nicht lesezugriff).
+app.get('/api/public/scanner-port', async (_req, res) => {
+  // Schaltet der Host-Agent die Freigabe um, bleibt die ENV des app-Containers
+  // alt; sein Heartbeat liest die .env bei jedem Lauf und hat daher Vorrang.
+  const agent = await leseAgentStatus().catch(() => null);
+  const ausAgent = agent?.vorhanden ? agent.freigaben?.scanner : null;
+  const bind = (process.env.SCANNER_BIND || '0.0.0.0').trim();
+  res.json({
+    port: process.env.SCANNER_PORT || '8080',
+    freigegeben: ausAgent ? ausAgent !== 'lokal' : !['127.0.0.1', 'localhost', '::1'].includes(bind),
+  });
 });
 // Setup-Restore: nur bei gesetztem Einmal-Flag; Upload zusätzlich mit dem
 // aktuellen Adminpasswort geschützt. Die GET-Seite enthält keine Secrets.
@@ -326,6 +341,8 @@ app.listen(PORT, () => {
   // abgleichen. Betrifft nur pfadbasierte Backends und korrigiert einen
   // Altbestand, bei dem beide Werte getrennt gepflegt wurden.
   heileAblageWurzel().catch(err => console.warn('[storage] Pfadgrenze nicht abgleichbar:', err.message));
+  // Offene Umstellung des OneDrive-Zugriffs hält die Pipeline weiter an.
+  initOnedriveZugriff().catch(err => console.warn('[onedrive] Zugriffsumstellung nicht lesbar:', err.message));
   // OneDrive-Polling starten (falls in _settings aktiviert)
   startOnedrivePolling();
   // Backup-Cron-Job starten (falls in _settings aktiviert)

@@ -23,6 +23,7 @@ const KOPFTEXT = 'Mit der Bitte um Prüfung, ob für die folgenden von der Beihi
   + 'Positionen ein ergänzender Erstattungsanspruch bei Ihnen besteht, z. B. im Rahmen des Beihilfeergänzungstarifs, '
   + 'und mit der Bitte um entsprechende Veranlassung:';
 const FUSSTEXT = 'Anlagen: Beihilfebescheid(e), betroffene Rechnungen.';
+const FUSSTEXT_TEILWEISE_VORNE = 'Anlagen: Beihilfebescheid(e), betroffene Rechnungen, soweit nicht bereits vorne in dieser Einreichung enthalten.';
 
 const COLS = [
   { label: 'Rechnungsdatum',    w: 85,  value: (r) => fmtDate(r.rechnungsdatum) },
@@ -63,9 +64,12 @@ function drawTableHeader(doc, y) {
  * @param {Array<{person, rechnungsdatum, rechnungsbetrag, bescheiddatum, bescheidposition, kuerzungsbetrag, erlaeuterung}>} opts.zeilen
  *   `person` wird mitgegeben, aber bewusst nicht als eigene Spalte gerendert.
  * @param {Date}   [opts.erstelltAm]
+ * @param {boolean} [opts.rechnungenTeilweiseVorne]  mindestens eine betroffene
+ *   Rechnung wird vorne regulär eingereicht und hängt deshalb nicht noch einmal
+ *   als Anlage hinten an – die Fußzeile sagt das dann.
  * @returns {Promise<Buffer>}
  */
-export async function generateVorblatt({ zeilen, erstelltAm = new Date() }) {
+export async function generateVorblatt({ zeilen, erstelltAm = new Date(), rechnungenTeilweiseVorne = false }) {
   return new Promise((resolve, reject) => {
     const doc = new PDFDocument({ margin: 0, size: [A4_W, A4_H], autoFirstPage: true });
     const chunks = [];
@@ -127,7 +131,8 @@ export async function generateVorblatt({ zeilen, erstelltAm = new Date() }) {
 
     y += 14;
     if (y > A4_H - MARGIN - 20) { doc.addPage(); y = MARGIN; }
-    doc.font(FONT).fontSize(8).fillColor('#666666').text(FUSSTEXT, MARGIN, y, { width: CW });
+    doc.font(FONT).fontSize(8).fillColor('#666666')
+       .text(rechnungenTeilweiseVorne ? FUSSTEXT_TEILWEISE_VORNE : FUSSTEXT, MARGIN, y, { width: CW });
 
     doc.end();
   });

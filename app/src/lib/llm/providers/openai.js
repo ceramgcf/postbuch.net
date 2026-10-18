@@ -1,9 +1,9 @@
 /**
  * lib/llm/providers/openai.js — OpenAI-kompatible Chat-Completions
  *
- * Deckt OpenAI, Ollama, LM Studio, vLLM, LiteLLM, OpenRouter, Groq, Together
- * und DeepSeek ab. Der einzige echte Unterschied zwischen ihnen ist die
- * `baseUrl` — plus zwei Dialekt-Abweichungen bei Ollama.
+ * Deckt OpenAI, Mistral, Ollama, LM Studio, vLLM, LiteLLM, OpenRouter, Groq,
+ * Together und DeepSeek ab. Der einzige echte Unterschied zwischen ihnen ist
+ * die `baseUrl` — plus wenige Dialekt-Abweichungen (siehe applyDialect).
  *
  * Bewusst KEIN `openai`-npm-Paket: das vorhandene fetch ist schlanker und
  * baseURL-fähig, und der net-guard muss ohnehin dazwischen liegen.
@@ -12,7 +12,10 @@
 import { createHash, createHmac } from 'node:crypto';
 import { guardedFetch, readLimitedText, TIMEOUT_COMPLETION_MS, NetGuardError } from '../../net-guard.js';
 import { chatCompletionsUrl, embeddingsUrl, kannPdfEmpfangen, permanentError } from '../registry.js';
-import { resolveReasoningEffort, learnReasoningCapability } from '../thinking-policy.js';
+import {
+  resolveReasoningEffort, learnReasoningCapability, istExtraktion, openaiExtraktionsEffort, openaiEffortAbgelehnt,
+  extraktionsModus,
+} from '../thinking-policy.js';
 
 const OPENAI_PROMPT_CACHE_TTL = '30m';
 const CACHE_CAPABILITY_TTL_MS = 60 * 60 * 1000;
@@ -50,9 +53,10 @@ export function markOpenAIPromptCacheUnsupported(provider, model) {
 
 /** Nur der erwartete Parameterfehler darf ohne Cache-Policy wiederholt werden. */
 export function isOpenAIPromptCacheUnsupportedError(status, text) {
-  return status === 400
+  // 422 + „extra inputs“: Pydantic-Validierung (u. a. Mistral, vLLM).
+  return (status === 400 || status === 422)
     && /prompt_cache_(?:options|key|breakpoint)/i.test(String(text || ''))
-    && /(?:unknown|unrecognized|unsupported|not supported|invalid (?:request )?parameter)/i.test(String(text || ''));
+    && /(?:unknown|unrecognized|unsupported|not supported|invalid (?:request )?parameter|extra inputs|extra_forbidden)/i.test(String(text || ''));
 }
 
 /**
@@ -81,17 +85,36 @@ export function isOpenAIReasoningEffortToolError(status, text) {
  * Cache-Mode kommt nur der stabile System-Prefix mit Key und Breakpoint hinzu.
  */
 export function openAIPromptCachePolicy({ provider, model, system, cacheSystem = false } = {}) {
+  if (provider?.dialekt === 'mistral') return mistralPromptCachePolicy({ provider, model, system, cacheSystem });
   if (!supportsOpenAIPromptCacheControl(provider) || isPromptCacheKnownUnsupported(provider, model)) return null;
   const policy = { prompt_cache_options: { mode: 'explicit', ttl: OPENAI_PROMPT_CACHE_TTL } };
   if (!cacheSystem || !system) return policy;
 
-  // Routing-Key ohne Dokumentinhalt oder Personen-/Mandantendaten. Das HMAC
-  // trennt API-Credentials, ohne den geheimen Schlüssel preiszugeben.
+  return { ...policy, prompt_cache_key: classificationCacheKey(provider, model, system) };
+}
+
+/**
+ * Routing-Key ohne Dokumentinhalt oder Personen-/Mandantendaten. Das HMAC
+ * trennt API-Credentials, ohne den geheimen Schlüssel preiszugeben.
+ */
+function classificationCacheKey(provider, model, system) {
   const material = `classification\u0000${model}\u0000${system}`;
-  const digest = provider.apiKey
+  const digest = provider?.apiKey
     ? createHmac('sha256', provider.apiKey).update(material).digest('hex')
     : createHash('sha256').update(material).digest('hex');
-  return { ...policy, prompt_cache_key: `postbuch:classification:${digest.slice(0, 24)}` };
+  return `postbuch:classification:${digest.slice(0, 24)}`;
+}
+
+/**
+ * Mistral cacht Prompt-Präfixe ohne Breakpoints und ohne Schreibaufpreis
+ * (gecachte Tokens kosten 10 %); `prompt_cache_key` erhöht nur die
+ * Trefferchance. Deshalb nur im Cache-Mode mit stabilem System-Prefix, sonst
+ * gar kein Feld. Die Usage meldet Treffer wie OpenAI unter
+ * prompt_tokens_details.cached_tokens, extractOpenAIUsage passt unverändert.
+ */
+function mistralPromptCachePolicy({ provider, model, system, cacheSystem }) {
+  if (!cacheSystem || !system || isPromptCacheKnownUnsupported(provider, model)) return null;
+  return { prompt_cache_key: classificationCacheKey(provider, model, system) };
 }
 
 /** Normalisiert OpenAI-Usage auf disjunkte Kostenbestandteile. */
@@ -124,6 +147,9 @@ export function extractOpenAIUsage(usage) {
  *     HTTP-Referer/X-Title sind optional (nur einzelne Modelle verlangen
  *     HTTP-Referer zur Attribution).
  *   • LM Studio braucht bei Bild-Blöcken eine andere Kodierung, siehe bildBlock().
+ *   • Mistral kennt nur `max_tokens`, sonst OpenAI-Konvention. Der JSON-Modus
+ *     verlangt laut Mistral, dass „JSON“ im Prompt steht – sonst droht ein
+ *     endloser Whitespace-Strom. Wer jsonMode setzt, nennt JSON im Prompt.
  */
 function applyDialect(body, dialekt, { maxTokens, jsonMode }) {
   if (dialekt === 'ollama') {
@@ -131,9 +157,39 @@ function applyDialect(body, dialekt, { maxTokens, jsonMode }) {
     if (jsonMode) body.format = 'json';
     return body;
   }
-  body.max_completion_tokens = maxTokens;
+  Object.assign(body, maxTokensFeld(dialekt, maxTokens));
   if (jsonMode) body.response_format = { type: 'json_object' };
   return body;
+}
+
+/** Feldname der Antwort-Obergrenze je Dialekt (auch für den Chat-Agenten). */
+export function maxTokensFeld(dialekt, n) {
+  return dialekt === 'ollama' || dialekt === 'mistral' ? { max_tokens: n } : { max_completion_tokens: n };
+}
+
+/**
+ * Text einer Chat-Completions-Nachricht (oder eines Stream-Deltas).
+ *
+ * OpenAI liefert `content` als String. Mistral liefert bei Reasoning
+ * (`reasoning_effort: "high"`, GLM-Modelle immer) eine Liste von Teilen:
+ * `{type:'thinking', thinking:[{type:'text',text}]}` und `{type:'text',text}`.
+ * Nur die `text`-Teile sind Antwort; der Gedankengang wird verworfen bzw. an
+ * `onThinking` gereicht. `null` heißt: kein auswertbarer Inhalt.
+ */
+export function antwortText(content, onThinking) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return null;
+  let text = '';
+  for (const teil of content) {
+    if (teil?.type === 'text' && typeof teil.text === 'string') text += teil.text;
+    else if (teil?.type === 'thinking' && onThinking) {
+      const gedanke = Array.isArray(teil.thinking)
+        ? teil.thinking.map((t) => (typeof t?.text === 'string' ? t.text : '')).join('')
+        : (typeof teil.thinking === 'string' ? teil.thinking : '');
+      if (gedanke) onThinking(gedanke);
+    }
+  }
+  return text;
 }
 
 /**
@@ -201,7 +257,9 @@ export async function callOpenAI(model, prompt, opts, provider) {
     for (const b of bilder) userContent.push(bildBlock(b.buffer, b.mime, provider?.dialekt));
   }
   const makeBody = (policy, reasoningEffort) => {
-    const explicitSystemCache = policy?.prompt_cache_key != null;
+    // Breakpoint-Marker gibt es nur in OpenAIs Cache-API; Mistrals Policy
+    // trägt nur den Key und bekommt eine schlichte System-Message.
+    const explicitSystemCache = policy?.prompt_cache_options != null && policy?.prompt_cache_key != null;
     // Auch beim Legacy-Fallback bleibt der stabile Teil ganz vorn als
     // System-Message. So kann dessen automatische Cachelogik den Prefix noch
     // erkennen; nur die neuen OpenAI-Marker werden entfernt.
@@ -240,13 +298,16 @@ export async function callOpenAI(model, prompt, opts, provider) {
     method: 'POST', headers, body: JSON.stringify(body),
   }, { allowPrivate: provider?.allowPrivate === true, timeoutMs: TIMEOUT_COMPLETION_MS });
 
-  // reasoning_effort wird NUR für den benannten Sonderfall (Kostenträger-
-  // Profilierung) überhaupt versucht — alle anderen Aufrufer dieser Funktion
-  // (Klassifikation, Dokument-Parsing, …) bleiben unverändert ohne dieses
-  // Feld, siehe lib/llm/thinking-policy.js.
+  // Die Kostenträger-Profilierung denkt bewusst (gelernte Fähigkeit in
+  // llm_reasoning_capability). Alles andere ist Extraktion: reasoning_effort
+  // 'low' bzw. 'none' oder der passende erlaubte Wert, siehe lib/llm/thinking-policy.js.
+  const extraktion = istExtraktion(zweck);
+  const modus = extraktion ? extraktionsModus(provider?.id, model, zweck) : null;
   let reasoningEffort;
   let reasoningProbe = false;
-  if (zweck === 'profilierung') {
+  if (extraktion) {
+    reasoningEffort = openaiExtraktionsEffort(provider?.id, model, modus);
+  } else {
     ({ effort: reasoningEffort, probe: reasoningProbe } =
       await resolveReasoningEffort(provider, model, 'plain', false, zweck));
   }
@@ -262,9 +323,20 @@ export async function callOpenAI(model, prompt, opts, provider) {
     ({ response } = await post(makeBody(cachePolicy, reasoningEffort)));
     text = await readLimitedText(response);
   }
+  // Extraktion: abgelehnten Wert merken und sofort mit dem passenden erlaubten
+  // (oder ohne) wiederholen; die Anfrage wurde nicht verarbeitet.
+  if (extraktion && !response.ok && reasoningEffort != null && /reasoning_effort/i.test(text)) {
+    reasoningEffort = openaiEffortAbgelehnt(provider?.id, model, modus, reasoningEffort, text);
+    ({ response } = await post(makeBody(cachePolicy, reasoningEffort)));
+    text = await readLimitedText(response);
+    if (!response.ok && reasoningEffort != null && /reasoning_effort/i.test(text)) {
+      reasoningEffort = openaiEffortAbgelehnt(provider?.id, model, modus, reasoningEffort, '');
+      ({ response } = await post(makeBody(cachePolicy, reasoningEffort)));
+      text = await readLimitedText(response);
+    }
   // reasoning_effort selbst verursacht den Fehler — lernen und sofort ohne
   // erneut versuchen, damit dieser Profilierungslauf trotzdem fertig wird.
-  if (!response.ok && reasoningEffort != null && /reasoning_effort/i.test(text)) {
+  } else if (!response.ok && reasoningEffort != null && /reasoning_effort/i.test(text)) {
     await learnReasoningCapability(provider, model, 'plain', 'unsupported');
     reasoningEffort = undefined;
     ({ response } = await post(makeBody(cachePolicy, reasoningEffort)));
@@ -279,7 +351,7 @@ export async function callOpenAI(model, prompt, opts, provider) {
   }
 
   const data = JSON.parse(text);
-  let antwort = data.choices?.[0]?.message?.content;
+  let antwort = antwortText(data.choices?.[0]?.message?.content);
   if (typeof antwort !== 'string') {
     throw new Error(`Unerwartetes Antwortformat von ${provider?.label || 'OpenAI'}: ${JSON.stringify(data).slice(0, 200)}`);
   }

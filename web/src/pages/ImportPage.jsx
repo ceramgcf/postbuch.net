@@ -12,7 +12,7 @@ import { useAuth } from '@/hooks/useAuth';
 import {
   Upload, Scan, FileText, Trash2, Play, X, CheckCircle2, AlertTriangle, AlertCircle,
   ArrowUp, ArrowDown, Layers, Inbox, Loader2, StopCircle, GripVertical,
-  FileUp, ArrowLeft, Copy, Check, Info, Coins, PackageOpen, Lightbulb, ArrowRight,
+  FileUp, ArrowLeft, Copy, Check, Info, Coins, PackageOpen, Lightbulb, ArrowRight, RefreshCw,
 } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import PersonenZuordnung, { KEINE } from '@/components/import/PersonenZuordnung';
@@ -229,7 +229,11 @@ function OptionGroup({ options, value, onChange, disabled }) {
 // ── Webhook-URL-Feld ─────────────────────────────────────────────────────────
 
 function WebhookUrlField({ source, dpi, mode, size }) {
+  const { canWrite, isAdmin } = useAuth();
+  const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
+  const [erneuernFragen, setErneuernFragen] = useState(false);
+  const [erneuert, setErneuert] = useState(false);
 
   const { data: portData } = useQuery({
     queryKey: ['scanner-port'],
@@ -237,16 +241,50 @@ function WebhookUrlField({ source, dpi, mode, size }) {
     staleTime: Infinity,
     retry: false,
   });
+  const freigegeben = portData?.freigegeben !== false;
+
+  // Wer die URL kennt, kann scannen – sie gibt es daher nur mit Schreibrecht.
+  const { data: tokenData } = useQuery({
+    queryKey: ['scanner-webhook'],
+    queryFn: () => api.import.scannerWebhook(),
+    enabled: canWrite && freigegeben,
+    staleTime: Infinity,
+    retry: false,
+  });
+
+  const erneuern = useMutation({
+    mutationFn: () => api.import.scannerWebhookErneuern(),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['scanner-webhook'], data);
+      setErneuernFragen(false);
+      setErneuert(true);
+    },
+  });
 
   const url = useMemo(() => {
-    if (!source || !dpi || !mode || !portData?.port) return '';
+    if (!source || !dpi || !mode || !portData?.port || !tokenData?.token) return '';
     const base = `http://${window.location.hostname}:${portData.port}/scan/${source.endpoint}`;
     const params = new URLSearchParams();
     params.set('dpi', String(dpi));
     params.set('mode', mode);
     if (source.size && size) params.set('size', size);
+    params.set('token', tokenData.token);
     return `${base}?${params.toString()}`;
-  }, [source, dpi, mode, size, portData?.port]);
+  }, [source, dpi, mode, size, portData?.port, tokenData?.token]);
+
+  if (!canWrite) return null;
+
+  if (!freigegeben) {
+    return (
+      <div className="space-y-1.5">
+        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Webhook-URL</label>
+        <p className="text-xs text-muted-foreground">
+          Der Scan-Webhook ist für andere Geräte im Netz nicht freigegeben. Freigeben kann ihn die
+          Administration unter Einstellungen → Scanner.
+        </p>
+      </div>
+    );
+  }
 
   const handleCopy = () => {
     navigator.clipboard.writeText(url).then(() => {
@@ -262,7 +300,7 @@ function WebhookUrlField({ source, dpi, mode, size }) {
         <div className="relative group">
           <Info className="h-3.5 w-3.5 text-muted-foreground/60 cursor-help" />
           <div className="absolute left-0 bottom-full mb-1.5 z-50 w-80 rounded-lg border border-border bg-background px-3 py-2.5 text-xs text-muted-foreground shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none">
-            Über diese URL kann ein Scan jederzeit auch außerhalb dieser Anwendung ausgelöst werden, sofern der Aufruf aus demselben Netzwerk erfolgt. Sie bildet eine Schnittstelle für andere Anwendungen (z. B. Heimautomatisierung oder Skripte).
+            Über diese URL kann ein Scan jederzeit auch außerhalb dieser Anwendung ausgelöst werden, sofern der Aufruf aus demselben Netzwerk erfolgt. Sie bildet eine Schnittstelle für andere Anwendungen (z. B. Heimautomatisierung oder Skripte). Sie enthält einen geheimen Token – wer sie kennt, kann scannen.
             {source?.session && (
               <>
                 <br /><br />
@@ -294,6 +332,42 @@ function WebhookUrlField({ source, dpi, mode, size }) {
           {copied ? <Check className="h-3.5 w-3.5 text-emerald-600" /> : <Copy className="h-3.5 w-3.5" />}
         </button>
       </div>
+      {isAdmin && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          {erneuernFragen ? (
+            <>
+              <span>Bisher kopierte Webhook-URLs funktionieren danach nicht mehr.</span>
+              <button
+                type="button"
+                onClick={() => erneuern.mutate()}
+                disabled={erneuern.isPending}
+                className="font-medium text-foreground underline-offset-2 hover:underline disabled:opacity-50"
+              >
+                Token erneuern
+              </button>
+              <button
+                type="button"
+                onClick={() => setErneuernFragen(false)}
+                className="underline-offset-2 hover:underline"
+              >
+                Abbrechen
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => { setErneuert(false); setErneuernFragen(true); }}
+              className="inline-flex items-center gap-1 underline-offset-2 hover:text-foreground hover:underline"
+            >
+              <RefreshCw className="h-3 w-3" /> Token erneuern
+            </button>
+          )}
+          {erneuert && !erneuernFragen && (
+            <span>Neuer Token aktiv. Der Scanner-Dienst übernimmt ihn innerhalb von 30 Sekunden.</span>
+          )}
+          {erneuern.isError && <span className="text-destructive">{erneuern.error?.message || 'Erneuern fehlgeschlagen.'}</span>}
+        </div>
+      )}
     </div>
   );
 }
@@ -812,7 +886,8 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
   // Im Replace-Modus ist nur die Sammlung sinnvoll (eine neue PDF, ggf. aus
   // mehreren Quellen gemergt). Batch (jede PDF eigenständig in die Pipeline)
   // ergibt für einen bestehenden Eintrag keinen Sinn und wird ausgeblendet.
-  const [mode, setMode] = useState('collection'); // 'collection' | 'batch'
+  // Sonst ist Batch die Vorgabe.
+  const [mode, setMode] = useState(replaceForPostId ? 'collection' : 'batch'); // 'collection' | 'batch'
   const [items, setItems] = useState([]);         // [{ id, file, name, size }]
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState(null); // { type: 'error'|'success', msg }
@@ -998,32 +1073,13 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
         <CardDescription className="text-xs">
           {replaceForPostId
             ? `Lade eine PDF – oder mehrere, die in der gewählten Reihenfolge zu einer Datei zusammengeführt werden – als Ersatz für ${replaceForPostId} hoch. Keine Pipeline, keine KI.`
-            : 'Eine oder mehrere PDFs direkt in die Pipeline geben – entweder als Sammlung (in eine Datei gemergt) oder als Batch (jede einzeln).'}
+            : 'Eine oder mehrere PDFs direkt in die Pipeline geben – entweder als Batch (jede einzeln) oder als Sammlung (in eine Datei gemergt).'}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Modus-Toggle (im Replace-Modus deaktiviert: nur Sammlung sinnvoll) */}
         {!replaceForPostId && (
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setMode('collection')}
-              disabled={busy}
-              className={[
-                'flex-1 rounded-lg border px-3 py-2 text-left transition-all',
-                mode === 'collection'
-                  ? 'border-primary bg-primary/10 text-primary shadow-sm shadow-primary/10'
-                  : 'border-border/60 bg-background hover:border-primary/40 hover:bg-primary/5',
-              ].join(' ')}
-            >
-              <div className="flex items-center gap-2 font-medium text-sm">
-                <Layers className="h-4 w-4" />
-                Sammlung
-              </div>
-              <div className="text-xs text-muted-foreground mt-0.5">
-                Reihenfolge festlegen, zu einem PDF mergen und verarbeiten
-              </div>
-            </button>
             <button
               type="button"
               onClick={() => setMode('batch')}
@@ -1041,6 +1097,25 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
               </div>
               <div className="text-xs text-muted-foreground mt-0.5">
                 Jede PDF einzeln in die Pipeline geben (kein Merge)
+              </div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('collection')}
+              disabled={busy}
+              className={[
+                'flex-1 rounded-lg border px-3 py-2 text-left transition-all',
+                mode === 'collection'
+                  ? 'border-primary bg-primary/10 text-primary shadow-sm shadow-primary/10'
+                  : 'border-border/60 bg-background hover:border-primary/40 hover:bg-primary/5',
+              ].join(' ')}
+            >
+              <div className="flex items-center gap-2 font-medium text-sm">
+                <Layers className="h-4 w-4" />
+                Sammlung
+              </div>
+              <div className="text-xs text-muted-foreground mt-0.5">
+                Reihenfolge festlegen, zu einem PDF mergen und verarbeiten
               </div>
             </button>
           </div>

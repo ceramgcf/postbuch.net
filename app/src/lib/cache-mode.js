@@ -7,6 +7,9 @@
  * gilt global für ALLE Eingänge (Import-Seite, Scanner, OneDrive, extern), weil
  * jede Verarbeitung durch analyzeDocument() läuft.
  *
+ * In der einfachen Modellwahl (llm_modellwahl = 'einfach') entfällt der Mode:
+ * Das Analysemodell ist ohnehin fest, Prompt-Caching dort immer an.
+ *
  * Zustand liegt in _settings:
  *   llm_cache_mode_enabled : bool  — wird der Mode überhaupt angeboten? (Optionen → KI)
  *   llm_cache_mode         : { active, tier, activated_at, last_activity_at }
@@ -76,8 +79,11 @@ function resolveTierModel(settings, tier) {
  * @param {object} [settings] - bereits geladene Settings (für Modell-Namen)
  */
 export async function getCacheMode(settings = null) {
-  const enabled  = (await readSetting('llm_cache_mode_enabled')) === true;
-  const auto     = (await readSetting('llm_cache_mode_auto')) === true;
+  // In der einfachen Modellwahl ist das Modell fest und das Caching immer an;
+  // der Mode wirkt dort nicht (lib/llm.js) und wird auch nicht angeboten.
+  const einfach  = (await readSetting('llm_modellwahl')) === 'einfach';
+  const enabled  = !einfach && (await readSetting('llm_cache_mode_enabled')) === true;
+  const auto     = !einfach && (await readSetting('llm_cache_mode_auto')) === true;
   const autoTier = (await readSetting('llm_cache_mode_auto_tier')) || 'mittel';
   const state = (await readSetting('llm_cache_mode')) || {};
   const expired = isExpired(state);
@@ -87,6 +93,7 @@ export async function getCacheMode(settings = null) {
   const last = state.last_activity_at ? Date.parse(state.last_activity_at) : null;
   const expiresAt = active && last ? new Date(last + CACHE_MODE_TIMEOUT_MS).toISOString() : null;
   return {
+    modellwahl: einfach ? 'einfach' : 'gestaffelt',
     enabled,   // steuert die Sichtbarkeit des Import-Panels (manuelles Anbieten)
     auto,
     autoTier: CACHE_TIERS.includes(autoTier) ? autoTier : 'mittel',
@@ -133,6 +140,9 @@ export async function touchCacheMode() {
  * "angeboten?"-Flag und gültige Tiers.
  */
 export async function setCacheMode({ active, tier }) {
+  if (active && (await readSetting('llm_modellwahl')) === 'einfach') {
+    throw new Error('In der einfachen Modellwahl ist das Caching immer an; der Cache-Mode entfällt.');
+  }
   const enabled = (await readSetting('llm_cache_mode_enabled')) === true;
   if (active && !enabled) {
     throw new Error('Cache-Mode ist in den KI-Optionen nicht aktiviert.');

@@ -649,7 +649,7 @@ export default function AkteDetailPage() {
                     });
                   }}
                   className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold
-                    bg-gradient-to-r from-violet-500 via-purple-500 to-cyan-500
+                    bg-linear-to-r from-violet-500 via-purple-500 to-cyan-500
                     text-white shadow-md hover:shadow-lg hover:opacity-90
                     disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200
                     hover:from-violet-400 hover:via-purple-400 hover:to-cyan-400"

@@ -45,6 +45,10 @@
  * Grenze IST der Ordner, in dem die Struktur liegt. Ein zweiter Ort mit
  * Schreibrecht führt zwangsläufig zu einer Grenze ohne Inhalt.
  *
+ * Optional, nur OneDrive:
+ *   wurzelDirektErlaubt()                    → boolean  Struktur darf direkt in
+ *                                              getRoot() liegen (Wurzel „/“)
+ *
  * Zwei Zusagen, auf die sich JEDER Aufrufer verlassen darf:
  *
  *   • **Namen werden adapterseitig normalisiert.** Dateinamen stammen aus

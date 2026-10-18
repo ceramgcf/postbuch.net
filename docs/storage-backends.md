@@ -52,35 +52,73 @@ ein Ändern dieser Zeile wirkungslos.
 
 ## OneDrive
 
-> [!WARNING]
->
-> **postbuch.net erhält Zugriff auf dein gesamtes OneDrive – nicht nur auf den
-> postbuch-Ordner.**
->
-> Die Verbindung verlangt die Graph-Berechtigung `Files.ReadWrite.All`: lesen,
-> ändern und löschen in **allen** Ordnern des verbundenen Kontos. Das ist
-> Absicht. Nur so liegen die Dokumente im gewöhnlichen Dateibaum (z. B.
-> `/postbuch/…`) und bleiben ohne postbuch.net erreichbar – über die
-> OneDrive-App, den Explorer oder onedrive.com. Die engere Alternative
-> (`Files.ReadWrite.AppFolder`) würde die Dateien in einen abgeschotteten
-> App-Ordner sperren; genau das soll nicht passieren.
->
-> **Folge:** Das ausgestellte Token liegt unverschlüsselt in der Datenbank
-> (`_settings.onedrive_tokens`) – und damit auch in jeder Backup-Datei. Wer
-> Zugriff auf den Server, auf die Datenbank oder auf ein Datenbank-Backup hat,
-> hat vollen Zugriff auf dein komplettes OneDrive, auch auf alles, was mit
-> postbuch.net nichts zu tun hat. Siehe
-> [Sicherheit](sicherheit.md#der-zugriff-auf-die-dateiablage-ist-ein-vollzugriff).
+Neue Verbindungen nutzen den **App-Ordner** (`Files.ReadWrite.AppFolder`):
+Microsoft legt in deinem OneDrive unter `Apps/` einen Ordner für deine
+App-Registrierung an, und postbuch.net arbeitet nur darin. Der Ordner ist für
+dich ein gewöhnlicher Ordner in der OneDrive-App, im Explorer und auf
+onedrive.com. Die Ablage liegt direkt in diesem App-Ordner, ein eigener
+Wurzelordner ist nicht nötig. Nur wer mehrere Instanzen mit derselben
+App-Registrierung betreibt, wählt bei der Einrichtung über **Stattdessen einen
+Unterordner verwenden** für jede Instanz einen eigenen Unterordner im
+App-Ordner. Instanzen mit eigener App-Registrierung haben ohnehin jeweils
+ihren eigenen App-Ordner.
 
-Wer diesen Vollzugriff nicht erteilen will, verwendet entweder ein eigenes
-Microsoft-Konto nur für postbuch.net oder einen
-[eigenen WebDAV-Speicher](#eigener-webdav-speicher). Ganz auf eine Dateiablage zu
-verzichten ist nicht möglich. Eine OneDrive-Verbindung lässt sich für Wartung,
+Ältere Verbindungen nutzen den **Vollzugriff** (`Files.ReadWrite.All`) auf alle
+Ordner des Kontos; der postbuch-Ordner kann dann an beliebiger Stelle liegen.
+Das Token liegt in beiden Fällen in der Datenbank (`_settings.onedrive_tokens`)
+und damit auch in jeder Backup-Datei, siehe
+[Sicherheit](sicherheit.md#wie-weit-der-zugriff-auf-die-dateiablage-reicht).
+Ganz auf eine Dateiablage zu verzichten ist nicht möglich. Eine OneDrive-Verbindung lässt sich für Wartung,
 Neuverbindung oder einen Backend-Wechsel unter
 ![Einstellungen-Symbol](icons/settings.svg) **Einstellungen → Dateiablage →
 Verbindung trennen** und zusätzlich im Microsoft-Konto unter _Datenschutz → Apps
 und Dienste_ widerrufen. Solange keine funktionsfähige Dateiablage verbunden ist,
 stehen die Dokumentfunktionen von postbuch.net still.
+
+### Zugriffsumfang umstellen
+
+Unter ![Einstellungen-Symbol](icons/settings.svg) **Einstellungen → Dateiablage
+→ Zugriffsumfang** stellst du zwischen App-Ordner und Vollzugriff um. Die
+Umstellung läuft automatisch, braucht aber einmal eine neue Anmeldung bei
+Microsoft. Bis dahin pausiert die Verarbeitung neuer Dokumente.
+
+**Auf den App-Ordner:**
+
+1. postbuch.net verschiebt den Inhalt deines Ablageordners direkt in den
+   App-Ordner unter `Apps/`; der leere Ablageordner kommt in den
+   OneDrive-Papierkorb. Dateien, Ordner und ihre Verknüpfungen in postbuch.net
+   bleiben erhalten. Der App-Ordner muss dafür leer sein. Hast du einzelne
+   Ablageordner in OneDrive gelöscht, legt postbuch.net sie bei Bedarf neu
+   an; fehlt ein Systemordner wie `_inbox`, legst du die Ordnerstruktur
+   vorher mit dem Setup-Assistenten neu an. Bricht das
+   Verschieben ab, setzt **Verschieben fortsetzen** in der Karte dort fort.
+2. Die bisherige Anmeldung wird gelöscht.
+3. Im Microsoft-Konto unter
+   [Apps und Dienste](https://account.live.com/consent/Manage) bei deiner
+   App-Registrierung den Zugriff entfernen. Sonst behält Microsoft die frühere
+   Zustimmung zum Vollzugriff.
+4. In der App-Registrierung unter **API-Berechtigungen** `Files.ReadWrite.All`
+   durch `Files.ReadWrite.AppFolder` ersetzen.
+5. In postbuch.net neu verbinden. Danach prüft postbuch.net alle Ablageordner,
+   eine Stichprobe der Dokumente und ob der Zugriff außerhalb des App-Ordners
+   gesperrt ist. Erlaubt Microsoft noch mehr, meldet die Karte das, und du
+   wiederholst Schritt 3 und die Anmeldung.
+
+**Zurück zum Vollzugriff:**
+
+1. Die bisherige Anmeldung wird gelöscht.
+2. In der App-Registrierung `Files.ReadWrite.All` eintragen, in postbuch.net
+   neu verbinden und dem Zugriff auf alle Dateien zustimmen.
+3. postbuch.net legt am früheren Ort des Ablageordners wieder einen
+   Ablageordner an – gibt es den Ort nicht mehr, auf der obersten Ebene deines
+   OneDrive –, verschiebt den Inhalt des App-Ordners hinein und prüft ihn. Der
+   Ordner bekommt den früheren Namen, ohne einen solchen heißt er `postbuch`. Liegt die
+   Ablage in einem Unterordner des App-Ordners, wird dieser als Ganzes
+   zurückgeschoben.
+
+Liegt die Ablage direkt in der obersten Ebene deines OneDrive statt in einem
+eigenen Ordner, lässt sie sich nicht als Ganzes verschieben. Lege sie dann
+zuerst per Ablage-Migration in einen eigenen Ordner.
 
 Die Einrichtung ist unter
 [OneDrive-App registrieren](onedrive-app-registrierung.md) beschrieben. Im
@@ -194,7 +232,10 @@ und Datenvolumen, ist aber der einzige belastbare Weg.
 ## Die Ordnerstruktur
 
 Konfiguriert wird **nur der Wurzelordner** (Standard `postbuch`, mehrstufige
-Pfade wie `archiv/postbuch` sind erlaubt) – festgelegt im Pflichtschritt
+Pfade wie `archiv/postbuch` sind erlaubt; bei OneDrive im App-Ordner liegt die
+Struktur standardmäßig direkt im App-Ordner, als Wurzel `/`; diese Wurzel gibt
+es nur dort) – festgelegt im
+Pflichtschritt
 ![Ordner-Symbol](icons/folder-open.svg) **Ordner** des
 [Einrichtungsassistenten](installation.md#der-einrichtungsassistent). Alles
 darunter verwaltet postbuch.net selbst. Die Verbindungskarte des

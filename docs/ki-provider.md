@@ -31,13 +31,16 @@ Beim Anlegen hilft eine Vorlage:
 
 | Vorlage           | Typ               | Adresse                                |
 | ----------------- | ----------------- | -------------------------------------- |
-| OpenAI            | OpenAI-kompatibel | `https://api.openai.com/v1`            |
 | Anthropic         | Anthropic         | `https://api.anthropic.com`            |
 | AWS Bedrock       | Bedrock           | – (Region statt URL)                   |
 | Ollama            | OpenAI-kompatibel | `http://host.docker.internal:11434/v1` |
 | LM Studio         | OpenAI-kompatibel | `http://host.docker.internal:1234/v1`  |
+| Mistral AI        | OpenAI-kompatibel | `https://api.eu.mistral.ai/v1`         |
 | OpenRouter        | OpenAI-kompatibel | `https://openrouter.ai/api/v1`         |
 | Benutzerdefiniert | OpenAI-kompatibel | frei                                   |
+
+Für OpenAI gibt es keine Vorlage: Der eingebaute Provider `openai` deckt diesen
+Zugang bereits vollständig ab.
 
 `host.docker.internal` ist dabei aus Sicht des Containers das der Weg zu einem
 Dienst, der auf demselben Rechner läuft. Läuft der Provider auf einem anderen
@@ -74,6 +77,25 @@ extrahierten Text. In diesem Fall wird die OCR-Textebene nie entfernt – sie is
 dann die einzige Informationsquelle. Solche Modelle werden nicht empfohlen, weil
 sie die Klassifikation stark verschlechtern.
 
+### Mistral AI
+
+Die Vorlage **Mistral AI** trägt den EU-Endpunkt von Mistral ein. Dort laufen die
+Modelle nur in Rechenzentren in der EU und im EFTA-Raum; Mistral berechnet dafür
+einen Aufpreis von 10 %. Wer darauf verzichten will, trägt stattdessen
+`https://api.mistral.ai/v1` ein. Nicht jedes Modell ist auf dem EU-Endpunkt
+verfügbar – **Testen** zeigt, welche es dort gibt.
+
+Ein PDF nimmt Mistral nicht direkt entgegen. Die Vorlage schaltet deshalb
+**Bilder verstehen** ein: postbuch.net wandelt jedes Dokument in Seitenbilder
+um, und die Bildmodelle von Mistral (Mistral Small, Medium und Large sowie
+Ministral) sehen das Dokument so, wie es aussieht. Prompt-Caching und
+Embeddings (`mistral-embed`) sind ebenfalls eingeschaltet.
+
+Die Fähigkeiten gelten für den ganzen Provider, nicht pro Modell. Reine
+Textmodelle wie Codestral oder die GLM-Modelle von Z.ai können keine Bilder
+lesen. Wer sie nutzen will, legt dafür einen zweiten Mistral-Provider ohne
+**Bilder verstehen** an.
+
 ### Schlüssel
 
 Der Schlüssel eines Providers wird gespeichert, aber **nie wieder ausgeliefert**
@@ -98,11 +120,31 @@ betroffenen Stellen. Erst danach lässt sich das Löschen erzwingen.
 
 ---
 
-## Modellstufen
+## Modellwahl
 
-postbuch.net benutzt nicht ein Modell, sondern mehrere – nach Schwierigkeit
-gestaffelt. Das ist der wichtigste Kostenhebel: Der Großteil der Post ist
-einfach, und einfache Post braucht kein teures Modell.
+Oben in der **Modell-Konfiguration** steht, wie postbuch.net Dokumente
+analysiert. Die Wahl gilt sofort; die Modelle der jeweils anderen Wahl bleiben
+gespeichert und gelten beim Zurückschalten wieder.
+
+| Modellwahl                       | Ablauf                                                                                                   |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| **Ein Modell für alles**         | Das **Analysemodell** liest jedes Dokument, egal wie lang oder schwierig. Scheitert es, springt der **Letzte Fallback** ein. |
+| **Nach Schwierigkeit gestaffelt** | Eine Voranalyse schätzt jedes Dokument ein und wählt danach eine der Modellstufen (siehe unten).          |
+
+Neue Instanzen starten mit **Ein Modell für alles**. Eine Instanz, die schon vor
+dieser Wahl eingerichtet war, behält die Staffelung, bis jemand umschaltet.
+
+Ein Modell für alles kommt ohne Voranalyse aus, das spart einen Aufruf je
+Dokument. Weil das Modell fest ist, nutzt postbuch.net dabei immer
+Prompt-Caching, sofern der Provider es kann (siehe [Cache-Mode](#cache-mode)).
+Funktionen, die sonst eine bestimmte Stufe verwenden, etwa die Auswertung von
+Erstattungsbescheiden, nutzen dann ebenfalls das Analysemodell.
+
+### Modellstufen
+
+Bei gestaffelter Modellwahl benutzt postbuch.net nicht ein Modell, sondern
+mehrere – nach Schwierigkeit gestaffelt. So bekommt einfache Post ein
+günstiges Modell und nur schwierige Post ein teures.
 
 | Stufe                | Wofür                                                                                                                         |
 | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
@@ -127,8 +169,8 @@ rückt automatisch das nächste Glied nach. Ein Konfigurationsfehler (falscher
 Schlüssel, unbekanntes Modell) wird dabei als dauerhaft erkannt und nicht
 sinnlos wiederholt.
 
-Darunter, in einem eigenen Block, stehen vier Modelle, die **nicht** an dieser
-Kette hängen:
+Darunter, in einem eigenen Block, stehen in beiden Modellwahlen vier Modelle,
+die **nicht** an der Dokumentanalyse hängen:
 
 | Klasse                    | Wofür                                                         |
 | ------------------------- | ------------------------------------------------------------- |
@@ -140,9 +182,10 @@ Kette hängen:
 Jede Zeile wird als **Provider + Modell** gespeichert, nie nur als Modellname.
 Zwei lokale Server mit demselben `llama3.3` wären sonst nicht unterscheidbar.
 
-Im Einrichtungsassistenten müssen **alle zehn Klassen** auf einen erreichbaren
-Provider zeigen – die sechs der Pipeline ebenso wie die vier für Büroassistent
-und Akten-Vorschlag. Zusätzlich ist ein nutzbares Embedding-Modell Pflicht;
+Im Einrichtungsassistenten müssen **alle Klassen der gewählten Modellwahl** auf
+einen erreichbaren Provider zeigen: bei einem Modell für alles Analysemodell und
+Letzter Fallback, gestaffelt die sechs Stufen, dazu jeweils die vier für
+Büroassistent und Akten-Vorschlag. Zusätzlich ist ein nutzbares Embedding-Modell Pflicht;
 Sprachmodell und Embedding werden getrennt geprüft.
 
 ### Empfehlungen
@@ -150,7 +193,9 @@ Sprachmodell und Embedding werden getrennt geprüft.
 Über der Modell-Konfiguration steht eine kuratierte Empfehlungsliste. Sie wird
 **mit dem Release ausgeliefert** und nur mit neuen Releases aktualisiert. Die
 Informationen können veraltet sein und erfolgen ohne Gewähr. Die Übernahme ist
-ein bewusster Klick, keine Automatik. Kandidaten, die auf deiner Instanz nicht
+ein bewusster Klick, keine Automatik. Die Liste zeigt nur die Klassen der
+gewählten Modellwahl; „Alle übernehmen" stellt die ausgeblendeten Stufen nicht
+um. Kandidaten, die auf deiner Instanz nicht
 verwendbar sind, erscheinen mit Grund (z. B. „Provider nicht konfiguriert") –
 eine stumm gekürzte Liste sähe aus wie ein Defekt.
 
@@ -180,8 +225,8 @@ Maßgeblich ist deshalb immer die Abrechnung des Providers.
 
 | Vorgang                                | Welche externen KI-Aufrufe entstehen?                                                                                                                                 | Grober Richtwert                                                                                                                                           |
 | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dokument importieren                   | Kurze Voranalyse, eigentliche PDF-/Textanalyse und ein Embedding; bei ungültiger Antwort zusätzlich ein Reparatur- oder Fallback-Aufruf                               | meist **1–20 ct je Dokument**; mit sehr günstigen Modellen auch darunter, bei langen oder schwierigen Dokumenten, Retries und teuren Modellen auch darüber |
-| Dokument erneut verarbeiten            | Erneute Analyse und neues Embedding; bei einer fest gewählten Modellstufe entfällt nur die Voranalyse                                                                 | ungefähr wie ein neuer Import                                                                                                                              |
+| Dokument importieren                   | Eigentliche PDF-/Textanalyse und ein Embedding, bei gestaffelter Modellwahl vorher eine kurze Voranalyse; bei ungültiger Antwort zusätzlich ein Reparatur- oder Fallback-Aufruf | meist **1–20 ct je Dokument**; mit sehr günstigen Modellen auch darunter, bei langen oder schwierigen Dokumenten, Retries und teuren Modellen auch darüber |
+| Dokument erneut verarbeiten            | Erneute Analyse und neues Embedding; bei einer fest gewählten Modellstufe entfällt die Voranalyse                                                                    | ungefähr wie ein neuer Import                                                                                                                              |
 | Erstattungsbescheid                    | Zusätzlich zum Import eine eigene Detailauswertung und, falls Kürzungen vorliegen, möglicherweise ein weiterer Zuordnungsaufruf                                       | oft zusätzlich **1–15 ct**                                                                                                                                 |
 | Eine Antwort des Assistenten           | Mehrere Recherche-Runden, Embedding-Suchen, gegebenenfalls PDF-Vision, Schlussantwort und beim ersten Beitrag ein kurzer Titel-Aufruf                                 | häufig **1–15 ct**, bei breiten Fragen oder PDF-Vision auch **25 ct und mehr**                                                                             |
 | Semantisch suchen                      | Die Anfrage wird für Dokumente und Akten separat eingebettet; „mehr laden" kann erneut aufrufen                                                                       | normalerweise zusammen **unter 0,01 ct je Suche**                                                                                                          |
@@ -285,6 +330,15 @@ Beim Verarbeiten mehrerer Dokumente hintereinander lohnt es sich, dasselbe
 Modell zu benutzen und den gemeinsamen Prompt-Anteil zwischenspeichern zu
 lassen. Genau das macht der **Cache-Mode**: festes Klassifikationsmodell statt
 Staffelung, dazu Prompt-Caching, sofern der Provider es kann.
+
+Den Cache-Mode gibt es nur bei gestaffelter [Modellwahl](#modellwahl). Mit
+einem Modell für alles ist das Modell ohnehin fest und das Prompt-Caching immer
+an; Karte und Import-Schalter entfallen dann.
+
+Ob der Cache tatsächlich greift, entscheidet der Anbieter. Manche Modelle
+cachen Anfragen mit Bild- oder PDF-Anhang gar nicht, auch wenn ihre Preisliste
+einen Cache-Preis nennt; bei Scans bleibt dann nur das feste Modell. Ob Token
+aus dem Cache kamen, zeigt das Token-Log in der Spalte **Cache↓**.
 
 | Einstellung                   | Wirkung                                                                                                                                                             |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

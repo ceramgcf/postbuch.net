@@ -42,7 +42,9 @@ import ProviderCard from '@/components/settings/ProviderCard';
 import EmbeddingCard from '@/components/settings/EmbeddingCard';
 import EmpfehlungenCard from '@/components/settings/EmpfehlungenCard';
 import ModelSelector from '@/components/settings/ModelSelector';
-import { MODEL_CLASSES } from '@/components/settings/modelClasses';
+import { MODEL_CLASSES, modellwahlAus, klassenFuer } from '@/components/settings/modelClasses';
+import { ModellwahlAuswahl } from '@/components/settings/ModellwahlAuswahl';
+import { WurzelordnerFeld, useAppOrdner, standardWurzel, wurzelLabel, pfadUnterWurzel } from '@/components/settings/WurzelordnerFeld';
 
 /**
  * `pruefungen` verknüpft den Schritt mit den serverseitigen Istprüfungen aus
@@ -270,6 +272,7 @@ export default function EinrichtungPage() {
   const hostconfig = status?.hostconfig;
   const agent = status?.pruefungen?.hostAgent;
   const backend = settings?.storage_backend?.value === 'nextcloud' ? 'nextcloud' : 'onedrive';
+  const appOrdner = useAppOrdner(backend);
   // Der Server beantwortet dieselbe Frage in `pruefungen.ablage.gewaehlt` und
   // ist die Wahrheit – sonst zeigte das UI nach einer zurückgenommenen Wahl
   // weiter die Backend-Karte, weil noch eine Client-ID im Formular steht.
@@ -330,11 +333,11 @@ export default function EinrichtungPage() {
 
   useEffect(() => {
     const w = wurzelQuery.data;
-    if (!w) return;
+    if (!w || !settings || !appOrdner.bereit) return;
     // rootPath === null heißt: auf dieser Instanz ist noch nichts eingerichtet.
-    // Nur dann ist 'postbuch' die richtige Vorgabe.
-    setRootPath((alt) => alt || w.rootPath || 'postbuch');
-  }, [wurzelQuery.data]);
+    // Nur dann gilt die Vorgabe: direkt im App-Ordner bzw. 'postbuch'.
+    setRootPath((alt) => alt || w.rootPath || standardWurzel(appOrdner));
+  }, [wurzelQuery.data, settings, appOrdner.bereit, appOrdner.aktiv]);
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['einrichtung'] });
@@ -926,27 +929,33 @@ export default function EinrichtungPage() {
         <Abschnitt
           icon={FolderOpen}
           titel="Wurzelordner"
-          beschreibung="Unterhalb dieses Ordners legt postbuch.net seine komplette Struktur an. Alles andere entsteht automatisch."
+          beschreibung={appOrdner.aktiv
+            ? 'Hier legt postbuch.net seine komplette Struktur an. Bei OneDrive ist das der eigene App-Ordner unter Apps/, alles andere entsteht automatisch.'
+            : 'Unterhalb dieses Ordners legt postbuch.net seine komplette Struktur an. Alles andere entsteht automatisch.'}
         >
           <Feld
             label="Wurzelordner"
             hinweis={wurzelQuery.isPending
               ? 'Der eingerichtete Wurzelordner wird aus der Dateiablage gelesen…'
               : eingerichtet
-                ? `Diese Instanz arbeitet derzeit in „${eingerichtet}".`
-                : 'Auf dieser Instanz ist noch keine Struktur angelegt. „postbuch" ist die Vorgabe.'}
+                ? `Diese Instanz arbeitet derzeit in „${wurzelLabel(eingerichtet, appOrdner)}".`
+                : appOrdner.aktiv
+                  ? 'Auf dieser Instanz ist noch keine Struktur angelegt.'
+                  : 'Auf dieser Instanz ist noch keine Struktur angelegt. „postbuch" ist die Vorgabe.'}
           >
-            <div className="flex flex-wrap gap-2">
-              <Input
-                className="max-w-xs font-mono"
-                value={rootPath}
-                onChange={(e) => { setRootPath(e.target.value); setWurzelWarnung(null); }}
-                placeholder={wurzelQuery.isPending ? 'wird gelesen…' : 'postbuch'}
-                aria-label="Wurzelordner"
-              />
+            <div className="flex flex-wrap items-start gap-2">
+              <div className="w-full max-w-md">
+                <WurzelordnerFeld
+                  appOrdner={appOrdner}
+                  value={rootPath}
+                  onChange={(v) => { setRootPath(v); setWurzelWarnung(null); }}
+                  placeholder={wurzelQuery.isPending ? 'wird gelesen…' : undefined}
+                  disabled={ordnerAnlegen.isPending || !!ordnerJobId || !!umzugJobId}
+                />
+              </div>
               {/* Solange der eingerichtete Wurzelordner nicht feststeht, bleibt der
                   Knopf zu – er löst einen Umzug des gesamten Bestands aus. */}
-              <Button onClick={() => ordnerAnlegen.mutate()} disabled={ordnerAnlegen.isPending || !!ordnerJobId || !!umzugJobId || wurzelQuery.isPending || !rootPath.trim()}>
+              <Button onClick={() => ordnerAnlegen.mutate()} disabled={ordnerAnlegen.isPending || !!ordnerJobId || !!umzugJobId || wurzelQuery.isPending || !appOrdner.bereit || !rootPath.trim()}>
                 <FolderOpen className="h-4 w-4 mr-1.5" />
                 {ordnerAnlegen.isPending || ordnerJobId || umzugJobId ? 'Wird verarbeitet…' : 'Ordnerstruktur neu anlegen'}
               </Button>
@@ -957,7 +966,7 @@ export default function EinrichtungPage() {
               text={wurzelWarnung.error}
               frage="Sollen die Daten wirklich dorthin umgezogen werden?"
               bestaetigen="Ja, Dateiablage umziehen"
-              abbrechen={`Abbrechen, bei „${wurzelWarnung.bisher}“ bleiben`}
+              abbrechen={`Abbrechen, bei „${wurzelLabel(wurzelWarnung.bisher, appOrdner)}“ bleiben`}
               laeuft={ordnerAnlegen.isPending}
               onBestaetigen={() => ordnerAnlegen.mutate(true)}
               onAbbrechen={() => { setRootPath(wurzelWarnung.bisher); setWurzelWarnung(null); }}
@@ -1090,7 +1099,9 @@ export default function EinrichtungPage() {
   function inhaltBackup() {
     const p = status?.pruefungen?.backup;
     const wurzel = wurzelQuery.data?.rootPath;
-    const backupPfad = wurzel === undefined || wurzel === null ? null : [wurzel, '_backup'].filter(Boolean).join('/');
+    const backupPfad = wurzel === undefined || wurzel === null ? null
+      : appOrdner.aktiv && appOrdner.name ? `Apps/${appOrdner.name}/${pfadUnterWurzel(wurzel, '_backup')}`
+        : pfadUnterWurzel(wurzel, '_backup');
     return (
       <div className="space-y-4">
         <StatusZeilen status={status} nur={['backup']} aktuellerSchritt="backup" onSchritt={geheZuSchritt} />
@@ -1106,7 +1117,8 @@ export default function EinrichtungPage() {
             </p>
             <p>
               <span className="font-medium">Was:</span> die Datenbank – also Postnummern, Zuordnungen,
-              Auswertungen, Abrechnungen, Menschen und alle Einstellungen samt hinterlegter Zugangsdaten.
+              Auswertungen, Abrechnungen, Menschen und alle Einstellungen. Hinterlegte Zugangsdaten
+              (OneDrive-Anmeldung, KI-Schlüssel, Tokens) stecken nur in verschlüsselten Backups.
               Wer die Datei hat, hat diese Daten.
             </p>
             <p>
@@ -1166,7 +1178,7 @@ export default function EinrichtungPage() {
               ) : p?.verschluesselungEntschieden && !nachtraeglichVerschluesseln ? (
                 <>
                   <Testergebnis>
-                    Backups werden bewusst unverschlüsselt gespeichert. Lässt sich jederzeit unter
+                    Backups werden bewusst unverschlüsselt und ohne Zugangsdaten gespeichert. Lässt sich jederzeit unter
                     Einstellungen → Backup nachträglich aktivieren.
                   </Testergebnis>
                   <Button variant="outline" size="sm" onClick={() => setNachtraeglichVerschluesseln(true)}>
@@ -1260,7 +1272,7 @@ export default function EinrichtungPage() {
 
                   {ohneVerschluesselungFrage && (
                     <Rueckfrage
-                      text="Backups liegen dann unverschlüsselt in deiner Dateiablage (OneDrive/Nextcloud) – wer Zugriff auf dieses Konto hat, kann sie lesen. Die Verschlüsselung lässt sich jederzeit später unter Einstellungen → Backup nachholen."
+                      text="Backups liegen dann unverschlüsselt in deiner Dateiablage (OneDrive/Nextcloud) – wer Zugriff auf dieses Konto hat, kann sie lesen. Zugangsdaten wie OneDrive-Anmeldung und KI-Schlüssel enthalten sie dann nicht. Die Verschlüsselung lässt sich jederzeit später unter Einstellungen → Backup nachholen."
                       frage="Backups wirklich ohne Verschlüsselung speichern?"
                       bestaetigen="Ja, ohne Verschlüsselung fortfahren"
                       abbrechen="Abbrechen"
@@ -1317,7 +1329,7 @@ export default function EinrichtungPage() {
   const fortschritt = Math.round(((aktuell + 1) / SCHRITTE.length) * 100);
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-muted/40 to-background">
+    <div className="min-h-screen bg-linear-to-b from-muted/40 to-background">
       <header className="sticky top-0 z-20 border-b bg-background/85 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center gap-3 px-3 py-2.5 sm:px-6">
           <Logo size={34} />
@@ -1476,7 +1488,8 @@ function KiSchritt({ status, pruefen, onSchritt }) {
 
   const klassenStatus = llmPruefung?.modellklassen || [];
   const statusMap = Object.fromEntries(klassenStatus.map((x) => [x.key, x]));
-  const sortiert = [...MODEL_CLASSES].sort((a, b) => {
+  const modellwahl = modellwahlAus(settings);
+  const sortiert = klassenFuer(modellwahl).sort((a, b) => {
     const ao = statusMap[a.key]?.ok === false ? 0 : 1;
     const bo = statusMap[b.key]?.ok === false ? 0 : 1;
     return ao - bo;
@@ -1554,6 +1567,12 @@ function KiSchritt({ status, pruefen, onSchritt }) {
         gesperrt={!llmBereit}
         sperrgrund="Wird frei, sobald ein Sprachmodell-Provider den Test bestanden hat."
       >
+        {!settingsLoading && (
+          <ModellwahlAuswahl
+            wert={modellwahl}
+            onGespeichert={async () => { await refetchHealth(); pruefen.mutate(false); }}
+          />
+        )}
         {settingsLoading ? (
           <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground"><Spinner className="h-4 w-4" />Lade Modelle…</div>
         ) : sortiert.map((cls) => {

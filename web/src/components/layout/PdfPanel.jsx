@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Document, Page, pdfjs } from 'react-pdf';
+import { PDFJS_DOCUMENT_OPTIONS } from '@/lib/pdfjs-worker';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { Progress } from '@/components/ui/progress';
@@ -223,7 +224,7 @@ export function PdfPanel({ postid, onClose, refreshKey = 0 }) {
 
   // no-store on the backend prevents caching; localKey/refreshKey force-reload after explicit actions
   const pdfUrl = `${api.files.pdfUrl(postid)}${(refreshKey || localKey) ? `?v=${refreshKey}_${localKey}` : ''}`;
-  const pdfOptions = useMemo(() => ({ withCredentials: true }), []);
+  const pdfOptions = PDFJS_DOCUMENT_OPTIONS;
 
   // Dokumentwechsel oder Neuladen (z. B. nach Rotation): alten pdf.js-Handle
   // verwerfen, sonst druckt der Button kurzzeitig noch den vorherigen Stand.
@@ -424,6 +425,7 @@ export function PdfPanel({ postid, onClose, refreshKey = 0 }) {
           </div>
         )}
         <Document
+          suspense={false}
           key={postid}
           file={pdfUrl}
           onLoadSuccess={onDocumentLoadSuccess}

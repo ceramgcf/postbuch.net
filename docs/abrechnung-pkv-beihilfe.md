@@ -29,7 +29,7 @@ für Person X beim Kostenträger Y im Zug Nr. 3 eingereicht habe". Perioden sind
 pro Mensch **und** pro Kostenträger getrennt – Beihilfe-Periode 3 hat nichts mit
 PKV-Periode 3 zu tun.
 
-Jede Periode hat genau einen von vier Zuständen:
+Jede Periode hat genau einen von fünf Zuständen:
 
 | Status          | Bedeutung                                                   |
 | --------------- | ----------------------------------------------------------- |
@@ -37,6 +37,7 @@ Jede Periode hat genau einen von vier Zuständen:
 | `EINGEREICHT`   | eingereicht, Bescheid steht aus                             |
 | `ABGESCHLOSSEN` | ein Erstattungsbescheid ist eingetroffen und zugeordnet     |
 | `AUSGELASSEN`   | bewusst nicht eingereicht (z. B. Betrag unter Selbstbehalt) |
+| `ZURÜCKGEHALTEN` | nur PKV: für die [Beitragsrückerstattung](#beitragsrückerstattung-überwachen) eines Behandlungsjahres zurückgehalten |
 
 Sobald du für einen Menschen PKV oder Beihilfe einschaltest, legt postbuch.net
 automatisch Periode 1 im Status `SAMMELT` an. Der bei Periodenanlage gültige
@@ -57,8 +58,8 @@ und Verwendungszweck aus.
 Außerdem werden alle **Einzelpositionen** mit GOÄ-/GOZ-Ziffer, Faktor,
 Begründung und Betrag erfasst und ausgewiesen. Sie lassen sich anschließend von
 Hand korrigieren, ergänzen oder löschen; ergibt ihre Summe nicht den
-Rechnungsbetrag, gleicht eine Zeile **automatisch ermittelter Differenzbetrag**
-den Unterschied aus ([Einzelpositionen der Rechnung](dokumentansicht.md#einzelpositionen-der-rechnung)).
+Rechnungsbetrag, zeigt die Karte darunter die **Abweichung zum Rechnungsbetrag**
+an ([Einzelpositionen der Rechnung](dokumentansicht.md#einzelpositionen-der-rechnung)).
 
 ![Fachblock Einzelpositionen Arztrechnung](screenshots/dokument-detail-rechnungsblock-arzt-ep.jpg)
 
@@ -122,7 +123,8 @@ Abrechnungsperiode übersprungen – siehe unten
 
 Wenn der Sammelkorb voll genug ist:
 ![Abrechnung-Symbol](icons/calendar-range.svg) **Analyse →
-Abrechnungsperioden**, dort die Periode abschließen:
+Abrechnungsperioden**, dort die Periode über ![Einreichen-Symbol](icons/send.svg)
+**Einreichen** einreichen:
 
 ![Start-Karte des Abrechnungsassistenten](screenshots/einreichungsassistent.png)
 
@@ -156,7 +158,9 @@ um einen gesetzten Seitenbereich noch einmal gegenzuprüfen.
 - ![Bestätigen-Symbol](icons/check.svg) **Bestätigen** setzt die Perioden auf
   `EINGEREICHT`, legt für jede betroffene Person × Kostenträger automatisch die
   nächste `SAMMELT`-Periode an (Nummer + 1, mit dem heute gültigen Satz) und
-  räumt die Zwischen-PDFs weg.
+  räumt die Zwischen-PDFs weg. Für die
+  [Beitragsrückerstattung](#beitragsrückerstattung-überwachen) zurückgehaltene
+  Rechnungen wandern dabei in `ZURÜCKGEHALTEN`-Perioden.
 - ![Verwerfen-Symbol](icons/x.svg) **Verwerfen** löscht die Zwischen-PDFs und
   lässt die Perioden unangetastet.
 
@@ -222,7 +226,12 @@ Erstattungsanspruchs / Nur als Prüfanlage beigefügt – keine erneute regulär
 Einreichung", damit beim Kostenträger nichts als doppelte reguläre Einreichung
 missverstanden wird. Der Balken erweitert die Seite nicht, sondern verkleinert
 den Originalinhalt geringfügig – die Anlage bleibt dadurch genauso groß
-formatiert (A4 bzw. A6) wie regulär eingereichte Dokumente. Nach dem Bestätigen
+formatiert (A4 bzw. A6) wie regulär eingereichte Dokumente.
+
+Liegt eine betroffene Rechnung in derselben Einreichung schon vorne im
+PKV-Paket, hängt sie im Prüfblock nicht noch einmal an. Die Fußzeile des
+Vorblatts nennt die Rechnungen dann nur „soweit nicht bereits vorne in dieser
+Einreichung enthalten“. Nach dem Bestätigen
 der Session gehen die vorgemerkten Kürzungen automatisch auf „eingereicht" über,
 siehe [Kürzungen ansehen](#kürzungen-ansehen).
 
@@ -399,6 +408,101 @@ Rechnung zu. Das geht nicht automatisch, sondern nur manuell.
 > selbst abgerechnet oder erneut geteilt –, bleibt dabei unangetastet; das
 > vermerkt das Anwendungsprotokoll.
 
+## Beitragsrückerstattung überwachen
+
+Viele PKV-Tarife zahlen eine **Beitragsrückerstattung** (BRE), wenn in einem
+Kalenderjahr keine Rechnung eingereicht wird. Ob sich das Einreichen lohnt,
+hängt davon ab, wie viel Erstattung im Jahr zusammenkommt. postbuch.net kann das
+je Behandlungsjahr mitrechnen und Rechnungen so lange zurückhalten, bis sich
+das Einreichen lohnt.
+
+### Einschalten
+
+Unter ![Einstellungen-Symbol](icons/settings.svg) **Einstellungen → Personen &
+Zugänge** bei einem privat versicherten Menschen (nicht bei Tieren) das Häkchen
+**Beitragsrückerstattung überwachen** setzen und eintragen:
+
+- **Erwartete BRE (€)** – die erwartete Beitragsrückerstattung; Pflicht,
+  sobald die Überwachung an ist,
+- **Sicherheitsabschlag (%)** – zur Berücksichtigung von steuerlichen Effekten.
+
+Eine BRE ist netto weniger wert als ihr Betrag: Sie mindert im Jahr der
+Auszahlung die Krankenversicherungsbeiträge, die du als Sonderausgaben absetzen
+kannst, und damit deine Steuererstattung. Deshalb ist es in der Regel günstiger,
+schon deutlich unterhalb der BRE einzureichen. Der Abschlag zieht diesen Effekt
+ab; als Anhaltspunkt dient dein persönlicher Grenzsteuersatz.
+
+Daraus ergibt sich die **Schwelle** = BRE × (1 − Abschlag/100), die der Dialog
+direkt anzeigt – bei 650 € BRE und 40 % Abschlag also 390 €. Sie gilt für
+neue Zurückhalte-Perioden; bestehende behalten ihre beim Anlegen gespeicherte
+Schwelle. Überwachte Menschen tragen in der Liste das Kennzeichen **BRE**.
+
+### Behandlungsjahr und „BRE-unbeachtlich“
+
+Maßgeblich ist das **Behandlungsjahr**, nicht das Rechnungsdatum: postbuch.net
+nimmt die Behandlungsdaten der Einzelpositionen. Fehlen sie, gilt das Jahr des
+Rechnungsdatums, die Rechnung zeigt dann „(geschätzt)“. Eine Rechnung mit
+Positionen aus zwei Jahren gehört zu beiden. Ohne jedes Datum steht dort
+„Behandlungsjahr unbekannt“, und die Rechnung wird immer eingereicht.
+
+Im Rechnungsblock einer PKV-Arztrechnung steht dazu das Häkchen
+**BRE-unbeachtlich (z. B. Vorsorge)**. Solche Rechnungen
+gefährden die BRE nicht und werden immer eingereicht. Das Häkchen lässt sich
+auch an bereits eingereichten Rechnungen setzen – etwa wenn die PKV eine
+Rechnung aus Kulanz nicht auf die BRE anrechnet. Setzt du es an einer
+zurückgehaltenen Rechnung, wandert sie sofort in die aktuelle
+PKV-Sammelperiode. Bei Menschen ohne Überwachung steht daneben der Hinweis „Die
+Beitragsrückerstattung dieser Person wird nicht überwacht.“
+
+### Zurückhalten beim Einreichen
+
+Der [Abrechnungs-Assistent](#4-periode-einreichen--der-abrechnungs-assistent)
+zeigt für jede überwachte Person einen Kasten **Beitragsrückerstattung**:
+
+- Ein Jahr gilt als **verwirkt**, sobald eine nicht BRE-unbeachtliche Rechnung
+  dieses Jahres bei der PKV eingereicht ist. Rechnungen verwirkter Jahre gehen
+  immer mit.
+- Rechnungen offener Jahre hält der Assistent zurück. Infozeilen nennen je
+  Jahr, wie viele Rechnungen zurückgehalten werden und wie viel erwartete
+  Erstattung von der Schwelle schon erreicht ist.
+- **BRE _Jahr_ aufgeben** schlägt der Assistent vor, sobald die erwartete
+  Erstattung aller dann einreichbaren Rechnungen die Schwelle übersteigt. Der
+  Vorschlag ist vorausgewählt und nennt den Vorteil in Euro. Unter **Details**
+  lässt sich jedes offene Jahr frei an- und abwählen, mit Schwelle und
+  Rechenweg der gewählten Kombination.
+
+Beim **Bestätigen** landen die zurückgehaltenen Rechnungen je Jahr in einer
+eigenen PKV-Periode im Status `ZURÜCKGEHALTEN` mit dem Kennzeichen **BRE
+_Jahr_** – je Person und Jahr höchstens eine. Bleibt in der Sammelperiode nach
+dem Zurückhalten nichts zum Einreichen übrig, wird sie nicht eingereicht; ist
+gar nichts einzureichen, lehnt der Assistent den Start mit einem Hinweis ab.
+Hängt an einer zurückgehaltenen Rechnung eine
+[PKV-Prüfvormerkung](#beihilfe-kürzung-zur-pkv-prüfung-vormerken), zieht sie
+mit um. Die Beihilfe ist davon nicht berührt: Dort wird jede Rechnung normal
+eingereicht.
+
+### Zurückgehaltene Perioden
+
+Auf der Periodenseite zeigt jede `ZURÜCKGEHALTEN`-Periode einen **Ring**: die
+erwartete Erstattung im Verhältnis zur Schwelle (orange darunter, grün
+erreicht, grau verwirkt). Schraffiert dargestellt ist der Anteil von
+Rechnungen über mehrere Behandlungsjahre – er zählt nur, wenn alle ihre Jahre
+aufgegeben werden. Aufgeklappt steht daneben der Betrag, etwa „450 / 480 €“.
+Verbindlich ist der Vorschlag im Assistenten.
+
+Auslassen, Zusammenführen, Löschen und Statuswechsel von Hand sind an diesen
+Perioden gesperrt, und eine Rechnung lässt sich nicht von Hand hineinlegen.
+Stattdessen gibt es:
+
+- ![Einreichen-Symbol](icons/send.svg) **Einreichen** – öffnet den
+  Assistenten mit dieser Periode und dem Jahr vorausgewählt,
+- ![Bearbeiten-Symbol](icons/pencil.svg) **Bearbeiten** – Erstattungssatz und
+  **BRE-Schwelle (€)** dieser Periode ändern; **Aus BRE berechnen** rechnet
+  einen BRE-Betrag mit dem Sicherheitsabschlag der Person in die Schwelle um.
+
+Schaltest du die Überwachung aus, hält der Assistent nichts Neues zurück;
+bestehende `ZURÜCKGEHALTEN`-Perioden lassen sich weiter mit einreichen.
+
 ## Kürzungen ansehen
 
 ![Kürzungen-Symbol](icons/scissors.svg) **Analyse → Kürzungen** listet alles,
@@ -499,9 +603,14 @@ Die Periodenseite zeigt je Person und Kostenträger alle Perioden mit Status,
 Anzahl Rechnungen, Summe, erwarteter und tatsächlicher Erstattung. Für den Fall,
 dass etwas schiefging, gibt es manuelle Eingriffe:
 
+In der eingeklappten Zeile stehen nur die Symbole; klappst du eine Periode auf,
+tragen sie zusätzlich ihre Beschriftung. Ist eine Spalte schmal – etwa neben einer aufgeklappten
+Periode oder auf dem Smartphone –, zeigen zugeklappte Zeilen nur Nummer, Status
+und Beträge.
+
 | Aktion                                                                  | Wirkung                                                               |
 | ----------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| ![Abschließen-Symbol](icons/check-circle-2.svg) **Abschließen**        | springt direkt in den [Abrechnungs-Assistenten](#4-periode-einreichen--der-abrechnungs-assistent), um eine SAMMELT-Periode einzureichen |
+| ![Einreichen-Symbol](icons/send.svg) **Einreichen**                     | springt direkt in den [Abrechnungs-Assistenten](#4-periode-einreichen--der-abrechnungs-assistent), um eine SAMMELT-Periode einzureichen |
 | ![Zurück-Symbol](icons/rotate-ccw.svg) **Zurückstufen**                 | `EINGEREICHT` → `SAMMELT`, falls du doch nicht eingereicht oder die Einreichung zurückgezogen hast |
 | ![Überspringen-Symbol](icons/skip-forward.svg) **Verzichten (AUSGELASSEN)** | Periode wird nicht eingereicht; eine neue Sammelperiode entsteht      |
 | ![Wiederholen-Symbol](icons/rotate-ccw.svg) **Verzicht aufheben**       | `AUSGELASSEN` → `SAMMELT`                                              |

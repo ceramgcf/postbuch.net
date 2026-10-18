@@ -5,10 +5,10 @@ import path from 'node:path';
 import db from '../db.js';
 import { loadDynamicSettings } from '../config.js';
 import { quelleAusCapabilities } from '../lib/scanner-capabilities.js';
+import { scannerFetch } from '../lib/scanner-dienst.js';
 
 const router = Router();
 const ROOT = '/data/scanner_test';
-const SCANNER_URL = process.env.SCANNER_URL || 'http://scanner:8080';
 const CLEANER_URL = process.env.CLEANER_URL || 'http://cleaner:8090';
 const SLOTS = [1, 2, 3];
 
@@ -105,7 +105,7 @@ router.post('/pages/:slot/scan', async (req, res) => {
     const timeout = setTimeout(() => controller.abort(), 120_000);
     let response;
     try {
-      response = await fetch(`${SCANNER_URL}/scan/test/single?${query}`, { signal: controller.signal });
+      response = await scannerFetch(`/scan/test/single?${query}`, { signal: controller.signal });
     } finally {
       clearTimeout(timeout);
     }

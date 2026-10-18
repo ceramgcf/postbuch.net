@@ -15,7 +15,7 @@
 import { loadDynamicSettings } from '../config.js';
 import { subscriptionFeatureUnlocked } from './claude-subscription.js';
 import { listProviders, getProvider, modelsUrl, kannDokumentSehen } from './llm/registry.js';
-import { MODEL_CLASSES } from './llm/model-classes.js';
+import { MODEL_CLASSES, aktiveModellklassen, modellwahl } from './llm/model-classes.js';
 import { gleichesModell } from './llm/modell-id.js';
 import { guardedFetchJson, clientSafeError, TIMEOUT_PROBE_MS } from './net-guard.js';
 import { resolveModelConfig } from './llm.js';
@@ -201,7 +201,7 @@ export async function buildAiHealth({ fresh = false } = {}) {
   // der nur "auf Vorrat" hinterlegt oder dessen Provider inaktiv geschaltet
   // ist, soll die Pipeline nicht fälschlich als kaputt melden.
   const benutzteProviderIds = new Set(
-    MODEL_CLASSES.map((cls) => resolveModelConfig(settings[cls.settingKey], cls.provider, cls.model).providerId)
+    aktiveModellklassen(settings).map((cls) => resolveModelConfig(settings[cls.settingKey], cls.provider, cls.model).providerId)
   );
 
   const berichte = {};
@@ -240,11 +240,14 @@ export async function buildAiHealth({ fresh = false } = {}) {
   // sechs — die vier Chat-/Akten-Klassen fehlten still, obwohl sie genauso
   // konfigurierbar sind und genauso auf einen Text-only-Provider zeigen können.
   const models = {};
+  const aktiveKeys = new Set(aktiveModellklassen(settings).map((c) => c.key));
   for (const cls of MODEL_CLASSES) {
     const cfg = resolveModelConfig(settings[cls.settingKey], cls.provider, cls.model);
     const b = berichte[cfg.providerId];
     models[cls.key] = {
       ...cfg,
+      // false = Klasse der gerade nicht gewählten Modellwahl (ausgeblendet).
+      aktiv: aktiveKeys.has(cls.key),
       providerLabel: b?.label || cfg.providerId,
       caps: b?.caps || null,
       available: modelAvailable(cfg.providerId, cfg.model),
@@ -270,6 +273,7 @@ export async function buildAiHealth({ fresh = false } = {}) {
     },
     providers: berichte,
     models,
+    modellwahl: modellwahl(settings),
   };
 }
 
@@ -305,5 +309,6 @@ export async function buildAiHealthRedacted() {
     subscription: full.subscription,
     providers,
     models:       full.models,
+    modellwahl:   full.modellwahl,
   };
 }

@@ -2,6 +2,11 @@
 scan_service.py — Scanner-Webhook-Service
 
 Alle Endpunkte als GET mit Query-Parametern.
+
+Jeder Aufruf braucht den Scanner-Token der App: Header `X-Scanner-Token` oder
+Query-Parameter `token`. Ohne geladenen Token antwortet der Dienst mit 503,
+mit falschem oder fehlendem Token mit 401. Der Token kommt per Polling aus
+/api/internal/config; die Import-Seite der App zeigt die URL samt Token.
 Es kann nur eine Flachbett-Session gleichzeitig existieren (kein Session-ID nötig).
 
 Endpunkte:
@@ -35,6 +40,7 @@ Das PDF landet erst im Ausgabeordner, wenn die Session abgeschlossen ist.
 
 import datetime
 import glob
+import hmac
 import http.client
 import os
 import ssl
@@ -85,6 +91,8 @@ _cfg = {
     # Voll qualifizierte SANE-Device-ID, die scanimage --device akzeptiert.
     # Wird in _apply_scanner_config() aus device_url abgeleitet.
     "sane_device":  None,
+    # Scanner-Token aus der App; None = noch nicht geladen → jeder Aufruf 503.
+    "token":        None,
 }
 
 
@@ -140,7 +148,11 @@ def _fetch_config():
         with urllib.request.urlopen(f"{APP_URL}/api/internal/config", timeout=5) as r:
             import json
             data = json.loads(r.read())
-        _apply_scanner_config(data.get("scanner", {}))
+        scanner = data.get("scanner", {})
+        token = scanner.get("token")
+        with _cfg_lock:
+            _cfg["token"] = token if isinstance(token, str) and token else None
+        _apply_scanner_config(scanner)
         return True
     except Exception as exc:
         print(f"[config] fetch fehlgeschlagen: {exc}")
@@ -178,6 +190,27 @@ PAPER_SIZES = {
     "a5": ("148", "210"),
     "a6": ("105", "148"),
 }
+
+# ---------------------------------------------------------------------------
+# Token-Prüfung (gilt für jeden Pfad)
+# ---------------------------------------------------------------------------
+
+@app.before_request
+def _token_pruefen():
+    erwartet = _get_cfg("token")
+    if not erwartet:
+        return jsonify({"status": "error", "msg": "Scanner-Token noch nicht geladen"}), 503
+    geliefert = request.headers.get("X-Scanner-Token") or request.args.get("token") or ""
+    if not hmac.compare_digest(geliefert.encode("utf-8"), erwartet.encode("utf-8")):
+        return jsonify({"status": "error", "msg": "Nicht autorisiert"}), 401
+    return None
+
+
+@app.after_request
+def _nicht_cachen(response):
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
 
 # Singleton Flachbett-Session (nur eine gleichzeitig)
 _session: dict = {}       # leer = keine aktive Session
@@ -759,4 +792,8 @@ def scan_legacy():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
+    # waitress statt Flask-Entwicklungsserver: ein Prozess (die Flachbett-Session
+    # ist ein In-Prozess-Singleton mit Lock), mehrere Threads. waitress schreibt
+    # kein Zugriffsprotokoll, der Query-Token landet also nicht im Log.
+    from waitress import serve
+    serve(app, host="0.0.0.0", port=8080, threads=4)

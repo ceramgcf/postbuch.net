@@ -68,9 +68,11 @@ Modell der Preis oder meldet der Provider keine Token, ist die angezeigte Summe
 unvollständig; endgültig maßgeblich ist die Abrechnung des KI-Anbieters.
 
 **Kann ich die Kosten senken?**
-Ja, an drei Stellen: eine günstigere Modellstufe für einfache Dokumente, der
-Cache-Mode beim Massenimport, und ein selbst betriebenes Modell. Alle drei
-sind in [KI-Anbieter](ki-provider.md) beschrieben.
+Ja, an drei Stellen: ein günstiges Analysemodell bzw. bei gestaffelter
+Modellwahl eine günstigere Modellstufe für einfache Dokumente, Prompt-Caching
+(mit einem Modell für alles immer an, sonst über den Cache-Mode beim
+Massenimport) und ein selbst betriebenes Modell. Alle drei sind in
+[KI-Anbieter](ki-provider.md) beschrieben.
 
 ## Daten und Datenschutz
 
@@ -110,16 +112,15 @@ nicht in der Datenbank und nicht in einem eigenen Format (eine begrenzte,
 regenerierbare Zwischenkopie kürzlich geöffneter PDFs kann kurzzeitig dort
 liegen). Siehe [Dateiablage-Backends](storage-backends.md).
 
-**Warum will postbuch.net Zugriff auf mein ganzes OneDrive?**
-Weil genau das die Voraussetzung dafür ist, dass die Antwort auf die vorige
-Frage stimmt. Die Berechtigung `Files.ReadWrite.All` erlaubt Zugriff auf alle
-Ordner des Kontos; die engere Alternative wäre ein abgeschotteter App-Ordner,
-in dem deine Dokumente ohne postbuch.net nicht mehr sinnvoll zugänglich wären.
-Die Kehrseite: Das Token liegt unverschlüsselt in der Datenbank und in jedem
-Backup – wer Server, Datenbank oder Backup-Datei hat, hat dein komplettes
-OneDrive. Wer das nicht möchte, nimmt ein separates Microsoft-Konto nur für
-postbuch.net oder einen eigenen WebDAV-Speicher. Einzelheiten:
-[Sicherheit](sicherheit.md#der-zugriff-auf-die-dateiablage-ist-ein-vollzugriff).
+**Sieht postbuch.net mein ganzes OneDrive?**
+Neue Verbindungen nicht: Sie nutzen die Berechtigung
+`Files.ReadWrite.AppFolder`, und postbuch.net arbeitet nur in seinem eigenen
+App-Ordner unter `Apps/`. Ältere Verbindungen verwenden noch
+`Files.ReadWrite.All` mit Zugriff auf alle Ordner. Sie lassen sich unter
+**Einstellungen → Dateiablage → Zugriffsumfang** auf den App-Ordner umstellen;
+die Ablage zieht dabei automatisch mit um. In beiden Fällen liegt das Token in
+der Datenbank und in jedem Backup. Einzelheiten:
+[Sicherheit](sicherheit.md#wie-weit-der-zugriff-auf-die-dateiablage-reicht).
 
 **Was passiert, wenn das OneDrive-Client-Secret abläuft?**
 Neue Instanzen verwenden standardmäßig den Gerätecode und haben gar kein

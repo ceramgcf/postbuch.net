@@ -20,13 +20,17 @@ sehr genaue Beschreibung von Dateien, die möglicherweise nicht mehr existieren.
 
 **Enthalten:** sämtliche Dokumentdaten (Titel, Beträge, Daten, Klassifikation,
 Zuordnung zu Personen, Akten, Verbleib, Fristen, Abrechnungsperioden,
-Einreichungen, Erstattungen), alle Personen und Zugänge samt Passwort-Hashes,
-der komplette Inhalt von `_settings` – und damit **alle Zugangsdaten dieser
-Instanz**: die Verbindung zur Dateiablage (OAuth-Token bzw. WebDAV-
-App-Passwort) und jeder hinterlegte KI-Schlüssel. Mit der standardmäßig
-aktiven [Backup-Verschlüsselung](#backup-verschlüsselung) ist die gesamte Datei
-passwortgeschützt; wer die Verschlüsselung abschaltet, erhält all das im
-Klartext.
+Einreichungen, Erstattungen), alle Personen und Zugänge samt Passwort-Hashes
+und alle Einstellungen aus `_settings`.
+
+**Zugangsdaten nur verschlüsselt:** Mit der standardmäßig aktiven
+[Backup-Verschlüsselung](#backup-verschlüsselung) ist die gesamte Datei
+passwortgeschützt und enthält auch **alle Zugangsdaten dieser Instanz**: die
+Verbindung zur Dateiablage (OAuth-Token, Client-Secret bzw. WebDAV-
+App-Passwort), jeden hinterlegten KI-Schlüssel, Discord-Zugang,
+Webhook- und Scanner-Token, den privaten Schlüssel für Push-Mitteilungen und
+das Sitzungsgeheimnis. Ein unverschlüsseltes Backup lässt genau diese Einträge
+weg; alles andere steht darin im Klartext.
 
 **Nicht enthalten:** die PDF-Originale. Die Tabelle `post_files` ist nur ein
 Abrufcache und wird per `--exclude-table-data` bewusst ohne Inhalt gesichert.
@@ -37,20 +41,20 @@ Web-Sitzungen: Ein Restore bringt keine alten Anmeldungen zurück. Nicht
 enthalten ist außerdem die Datei `.env` des Servers.
 
 Daraus folgt die zweite Warnung, die postbuch.net über jeder Backup-Ansicht
-zeigt: **Die Backup-Datei ist ein Generalschlüssel.** Wer sie samt Passwort –
-oder bei abgeschalteter Verschlüsselung auch ohne – hat, hat Zugriff auf deine
-Cloud. Sie gehört nicht in einen Support-Chat, nicht in ein
+zeigt: **Die Backup-Datei ist ein Generalschlüssel.** Wer ein verschlüsseltes
+Backup samt Passwort hat, hat Zugriff auf deine Cloud; ein unverschlüsseltes
+liest jeder, der die Datei hat, wenn auch ohne Zugangsdaten. Sie gehört nicht in einen Support-Chat, nicht in ein
 Ticketsystem und nicht in einen öffentlich erreichbaren Ordner.
 
 > [!CAUTION]
 >
-> Bei OneDrive reicht dieser Zugriff über den postbuch-Ordner hinaus: Das
-> gespeicherte Token trägt die Berechtigung `Files.ReadWrite.All` und öffnet
-> damit **das komplette Laufwerk** des verbundenen Microsoft-Kontos, auch alle
-> Ordner, die mit postbuch.net nichts zu tun haben. Wer die Backup-Datei
-> weitergibt, gibt sein ganzes OneDrive weiter. Dasselbe gilt sinngemäß für ein
-> WebDAV-App-Passwort. Hintergrund:
-> [Sicherheit](sicherheit.md#der-zugriff-auf-die-dateiablage-ist-ein-vollzugriff).
+> Bei OneDrive mit Vollzugriff reicht dieser Zugriff über den postbuch-Ordner
+> hinaus: Das gespeicherte Token trägt dann die Berechtigung
+> `Files.ReadWrite.All` und öffnet **das komplette Laufwerk** des verbundenen
+> Microsoft-Kontos. Mit App-Ordner bleibt es auf die Ablage beschränkt. Für ein
+> WebDAV-App-Passwort gilt, dass es meist das ganze Cloud-Konto öffnet.
+> Hintergrund:
+> [Sicherheit](sicherheit.md#wie-weit-der-zugriff-auf-die-dateiablage-reicht).
 
 ---
 
@@ -208,8 +212,9 @@ beim Erstellen dieser Datei gültig war. Die Karte weist beim Ändern darauf hin
 Verschlüsselung lässt sich sowohl im Einrichtungsassistenten als auch später in
 den Einstellungen ausdrücklich ablehnen bzw. wieder abschalten – jeweils erst
 nach einer Bestätigung, dass Backups dann unverschlüsselt in der Dateiablage liegen.
-Das ist jederzeit nachholbar, ändert aber nichts an bereits geschriebenen
-Dateien. Beim Abschalten bleiben Schlüsselbund, Passwort und Schlüsseldatei
+Solche Backups enthalten keine Zugangsdaten (siehe
+[Was im Dump steht](#was-im-dump-steht)). Das ist jederzeit nachholbar, ändert
+aber nichts an bereits geschriebenen Dateien. Beim Abschalten bleiben Schlüsselbund, Passwort und Schlüsseldatei
 erhalten: Bereits verschlüsselte Backups lassen sich weiter wiederherstellen,
 und beim Wiedereinschalten verwendet postbuch.net denselben DEK weiter.
 
@@ -265,6 +270,9 @@ Die Backup-Verschlüsselung dreht ein Restore dabei nicht zurück: Schalter,
 Passwort und DEK der laufenden Instanz bleiben stehen, weil sie zur
 Schlüsseldatei in der Dateiablage passen. Die Schlüssel aus dem eingespielten
 Stand kommen zusätzlich in den Schlüsselbund.
+Enthält das Backup keine Zugangsdaten, weil es unverschlüsselt ist, behält die
+Instanz ihre eigenen: Ablage, KI und Tokens funktionieren nach dem Restore
+weiter. Zugangsdaten, die ein Backup mitbringt, gelten dagegen wie gesichert.
 Bricht irgendein Schritt ab, rollt PostgreSQL komplett zurück und die Datenbank
 steht unverändert da. Danach beendet sich der App-Container absichtlich und wird
 von Docker neu gestartet, damit Verbindungen, Sitzungen und Zwischenspeicher
@@ -307,6 +315,12 @@ begrenzt Fehlversuche. Nach erfolgreichem Einspielen werden alle im Dump
 enthaltenen Sitzungen verworfen und das Sitzungsgeheimnis der neuen Instanz
 gesetzt – angemeldet wird sich also mit dem Passwort, das beim Installieren
 vergeben wurde, nicht mit dem der alten Instanz.
+
+Ein unverschlüsseltes Backup bringt keine Zugangsdaten mit. Die neue Instanz
+behält dann ihre eigenen Tokens; Dateiablage, KI-Schlüssel und Discord werden
+danach in den Einstellungen neu hinterlegt bzw. neu verbunden. Kopierte
+Webhook-URLs und Scanner-Kurzbefehle der alten Instanz gelten nicht mehr, und
+Push-Mitteilungen werden auf jedem Gerät neu eingeschaltet.
 
 Ist das eingespielte Backup verschlüsselt, blendet die Seite zusätzlich ein Feld
 **Backup-Passwort** und die Auswahl **Schlüsseldatei (optional)** ein und
@@ -475,8 +489,10 @@ Ein vollständiger Wiederaufbau in der Reihenfolge, in der er funktioniert:
    verschlüsselt, das zuletzt gesetzte Backup-Passwort und `schluessel.json`
    aus dem Backup-Ordner bereithalten – oder das beim Erstellen gültige
    Passwort (siehe [Beim Neuaufsetzen](#beim-neuaufsetzen)).
-3. **Dateiablage verbinden** – der Dump bringt die Zugangsdaten mit, bei OneDrive
-   kann je nach Alter des Backups eine neue Anmeldung nötig sein.
+3. **Dateiablage verbinden** – ein verschlüsselter Dump bringt die Zugangsdaten
+   mit, bei OneDrive kann je nach Alter des Backups eine neue Anmeldung nötig
+   sein. Nach einem unverschlüsselten Dump werden Dateiablage und KI-Schlüssel
+   neu eingetragen.
 4. **Dokumente prüfen.** Sind die Originale in der Dateiablage unverändert vorhanden,
    ist man fertig.
 5. Wurden die Dokumente aus einem Backup in die Dateiablage zurückgespielt, sind ihre

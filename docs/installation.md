@@ -61,6 +61,8 @@ Vorabversionen lassen sich später in der Oberfläche einschalten (siehe
 | **Backup einspielen?** | Für Umzüge und Neuaufbau: Der Stack startet leer und zeigt am Ende die Adresse `.../setup/restore`, unter der ein Datenbank-Backup hochgeladen wird. Von dort geht es auch ohne Backup in den Einrichtungsassistenten.                                                         |
 | **Admin-Passwort**     | Das Kennwort für den Benutzer `admin`. Es landet als `APP_PASSWORD` in der `.env`.                                                                                                                           |
 | **DuckDNS/HTTPS**      | Eine kostenlose DuckDNS-Subdomain mit Token; Caddy holt das Zertifikat selbst. Für OneDrive nachdrücklich empfohlen, für Browserzugriff optional, für eine dauerhaft installierte PWA und Push erforderlich. |
+| **Nur über HTTPS?**    | Nur mit DuckDNS: Bei „j" wird Port 3420 an den Rechner selbst gebunden (`WEB_BIND=127.0.0.1`), die Oberfläche ist dann nur noch über die HTTPS-Adresse erreichbar. Standard ist „N". Später umschaltbar unter Einstellungen → Allgemein → Erreichbarkeit. |
+| _(automatisch)_        | `SCANNER_BIND=127.0.0.1`: Der [Scan-Webhook](dokumente-importieren.md#weg-5-scan-webhook-im-eigenen-netz) ist zunächst nur auf dem Rechner selbst erreichbar. Freigeben unter Einstellungen → Scanner. |
 
 Dateiablage, OneDrive/Nextcloud, KI samt Embedding, Scanner, Benachrichtigungen und
 Backup-Einstellungen konfigurierst du nach dem ersten Admin-Login im
@@ -84,6 +86,7 @@ install.sh                                  # geführte Installation oder Update
 install.sh --update                         # Update mit Rückfragen
 install.sh --update --yes --non-interactive # Update ohne Rückfragen (Agent)
 install.sh --rollback                       # auf ein vorhandenes Backup zurückrollen
+install.sh --postgres-umzug                 # Datenbank von PostgreSQL 16 auf 18 umziehen
 install.sh --dry-run                        # bis einschließlich Backup laufen, dann abbrechen
 install.sh --erwarte-sha256=<hex>           # Tarball muss diese Prüfsumme haben
 install.sh --quelle=<https-url>             # abweichende Bezugsquelle
@@ -153,6 +156,15 @@ docker compose --profile scanner up -d   # Scanner + Cleaner
 docker compose --profile caddy   up -d   # Reverse-Proxy mit automatischem HTTPS
 ```
 
+Welche Schnittstellen die veröffentlichten Ports belegen, steuern zwei Werte in
+der `.env`: `WEB_BIND` für die Oberfläche (Port 3420) und `SCANNER_BIND` für den
+Scan-Webhook. Leer bedeutet alle Schnittstellen, `127.0.0.1` nur den Rechner
+selbst. Caddy und die App sprechen `web` und `scanner` über das Docker-Netz an
+und sind davon nicht betroffen. Mit Host-Agent schaltet der Admin beide Werte
+auch in der Oberfläche um, siehe
+[Oberfläche nur über HTTPS](sicherheit.md#oberfläche-nur-über-https) und
+[Scanner-Dienst](sicherheit.md#scanner-dienst).
+
 > [!NOTE]
 >
 > **ENV liefert Startwerte und Laufzeitwerte.**
@@ -184,7 +196,8 @@ Er hat zehn Schritte:
 3. ![Personen-Symbol](icons/users.svg) **Personen** – Menschen anlegen, Zugänge vergeben
 4. ![Dateiablage-Symbol](icons/cloud.svg) **Dateiablage** – Backend wählen, OneDrive per Gerätecode verbinden oder Nextcloud
    anmelden
-5. ![Ordner-Symbol](icons/folder-open.svg) **Ordner** – Wurzelordner festlegen, Ordnerstruktur anlegen,
+5. ![Ordner-Symbol](icons/folder-open.svg) **Ordner** – Wurzelordner festlegen (bei OneDrive im App-Ordner
+   liegt die Ablage direkt im App-Ordner, ein Name ist nicht nötig), Ordnerstruktur anlegen,
    Dateiablage-Selbsttest (empfohlen, keine Pflicht)
 6. ![KI-Symbol](icons/bot.svg) **KI** – Anbieter verbinden, alle Modellklassen und das Embedding wählen
 7. ![Scanner-Symbol](icons/scan-line.svg) **Scanner** – Netzwerkscanner suchen und einbinden (optional)
@@ -345,15 +358,13 @@ Danach ist noch außerhalb von postbuch.net zu erledigen:
 
 ## OneDrive-OAuth: die Sonderfälle
 
-> [!WARNING]
+> [!NOTE]
 >
-> Die Anmeldung erteilt postbuch.net die Berechtigung `Files.ReadWrite.All` –
-> Vollzugriff auf **alle** Ordner des Microsoft-Kontos, nicht nur auf den
-> postbuch-Ordner. Das ist nötig, damit die Dokumente im gewöhnlichen Dateibaum
-> liegen und ohne postbuch.net erreichbar bleiben; die Kehrseite ist ein
-> Generalschlüssel zu deinem OneDrive, der unverschlüsselt in der Datenbank und
-> in jedem Backup liegt. Bevor du verbindest:
-> [Sicherheit](sicherheit.md#der-zugriff-auf-die-dateiablage-ist-ein-vollzugriff).
+> Neue Verbindungen erteilen postbuch.net nur die Berechtigung
+> `Files.ReadWrite.AppFolder`: Zugriff auf den eigenen App-Ordner unter
+> `Apps/`, nicht auf den Rest des OneDrive. Das Token liegt in der Datenbank
+> und in jedem Backup. Mehr dazu:
+> [Sicherheit](sicherheit.md#wie-weit-der-zugriff-auf-die-dateiablage-reicht).
 
 Beim Browser-Redirect geht der OAuth-Callback von Microsoft an
 `<APP_BASE_URL>/api/onedrive-auth/callback`. Diese Adresse muss in der Azure App

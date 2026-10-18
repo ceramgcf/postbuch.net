@@ -31,7 +31,7 @@ import db from '../../db.js';
 import { appLog } from '../../app-log.js';
 import { holeFeed, feedQuelleFingerprint } from '../postbuch-feed.js';
 import { validiereEmpfehlungen, EMPFEHLUNGEN_PFAD, EMBEDDING_KLASSE } from './empfehlungen-feed.js';
-import { MODEL_CLASSES } from './model-classes.js';
+import { MODEL_CLASSES, aktiveModellklassen } from './model-classes.js';
 import {
   EMBEDDING_DEFAULT, embeddingConfig, probeEmbeddingDimension, signatureOf,
 } from '../embedding.js';
@@ -81,9 +81,6 @@ const EMBEDDING_CLASS = {
   provider: EMBEDDING_DEFAULT.providerId,
   model: EMBEDDING_DEFAULT.model,
 };
-
-/** Alle anzeigbaren Klassen in Reihenfolge — Modellkette zuerst. */
-const ALLE_KLASSEN = [...MODEL_CLASSES, EMBEDDING_CLASS];
 
 // ── _settings-Zugriff ────────────────────────────────────────────────────────
 
@@ -253,7 +250,9 @@ export async function aufloesen({ fresh = false } = {}) {
   const berichte = health.providers || {};
   const feedKlassen = cache.klassen || {};
 
-  const klassen = ALLE_KLASSEN.map((cls) => {
+  // Nur Klassen der aktuellen Modellwahl: „Alle übernehmen" soll keine
+  // ausgeblendeten Stufen umstellen.
+  const klassen = [...aktiveModellklassen(settings), EMBEDDING_CLASS].map((cls) => {
     const istEmbedding = cls.key === EMBEDDING_KLASSE;
     // Das Embedding-Modell steht nicht in einem Modellkey, sondern in
     // `llm_embedding` samt geprobter Dimension — die hier bewusst nicht mit

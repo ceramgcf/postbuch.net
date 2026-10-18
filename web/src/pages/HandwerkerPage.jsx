@@ -1,4 +1,4 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useSearchParams, useLocation, useNavigate } from 'react-router';
 import { useHandwerker } from '@/hooks/usePostbuch';
 import { useGemerkteFilter } from '@/hooks/useGemerkteFilter';
@@ -63,13 +63,16 @@ export default function HandwerkerPage() {
     setSearchParams(next, { replace: true });
   };
 
-  // Apply default URL params on first data load so the URL reflects the filter
-  if (data && alleJahre.length > 0 && !searchParams.get('jahre') && !defaultsApplied.current) {
+  // Gemerkte bzw. Standardfilter beim ersten Datenstand in die URL schreiben.
+  // Im Effect, nicht beim Rendern: Kommen die Daten aus dem Cache (Wechsel
+  // innerhalb der App), verwirft der Router eine Navigation im ersten Render.
+  useEffect(() => {
+    if (!data || alleJahre.length === 0 || searchParams.get('jahre') || defaultsApplied.current) return;
     defaultsApplied.current = true;
     const wiederhergestellt = searchParams.size === 0 ? gemerkt.laden(alleJahre) : null;
     if (wiederhergestellt) setSearchParams(wiederhergestellt, { replace: true });
     else setzeParam('jahre', defaultJahre.join(','));
-  }
+  });
 
   const toggleJahr = (jahr) => {
     const next = selectedJahre.includes(jahr)

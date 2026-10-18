@@ -7,7 +7,10 @@
 
 import { guardedFetch, readLimitedText, TIMEOUT_COMPLETION_MS, NetGuardError } from '../../net-guard.js';
 import { joinUrl, permanentError } from '../registry.js';
-import { resolveThinkingPolicy } from '../thinking-policy.js';
+import {
+  resolveThinkingPolicy, istExtraktion, anthropicExtraktionsFelder, anthropicExtraktionsStufe,
+  anthropicNaechsteStufe, anthropicStufeBestaetigt, extraktionsModus,
+} from '../thinking-policy.js';
 
 export const ANTHROPIC_VERSION = '2023-06-01';
 
@@ -98,14 +101,14 @@ export async function callAnthropic(model, prompt, { pdf, pdfs, system, maxToken
   };
   const sys = buildSystemParam(system, cacheSystem);
   if (sys) body.system = sys;
-  // Thinking-Felder werden NUR für den benannten Sonderfall (Kostenträger-
-  // Profilierung) überhaupt gesetzt — alle anderen Aufrufer dieser Funktion
-  // bleiben unverändert ohne Wire-Feld, siehe lib/llm/thinking-policy.js.
-  if (zweck === 'profilierung') {
-    Object.assign(body, buildThinkingBodyFields(resolveThinkingPolicy({ model, zweck })));
-  }
+  // Die Kostenträger-Profilierung denkt bewusst; alles andere ist Extraktion
+  // mit niedrigem Effort bzw. ohne Nachdenken (siehe lib/llm/thinking-policy.js).
+  const extraktion = istExtraktion(zweck);
+  const modus = extraktion ? extraktionsModus(provider?.id, model, zweck) : null;
+  let stufe = extraktion ? anthropicExtraktionsStufe(provider?.id, model, modus) : null;
+  if (!extraktion) Object.assign(body, buildThinkingBodyFields(resolveThinkingPolicy({ model, zweck })));
 
-  const { response } = await guardedFetch(messagesUrl(provider), {
+  const post = () => guardedFetch(messagesUrl(provider), {
     method: 'POST',
     headers: {
       'x-api-key': apiKey,
@@ -113,10 +116,21 @@ export async function callAnthropic(model, prompt, { pdf, pdfs, system, maxToken
       'anthropic-beta': 'pdfs-2024-09-25',
       'content-type': 'application/json',
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(extraktion ? { ...body, ...anthropicExtraktionsFelder(stufe) } : body),
   }, { allowPrivate: provider?.allowPrivate === true, timeoutMs: TIMEOUT_COMPLETION_MS });
 
-  const text = await readLimitedText(response);
+  let { response } = await post();
+  let text = await readLimitedText(response);
+  // Abgelehnte Thinking-Stufe: nächste Stufe sofort versuchen (die Anfrage wurde
+  // nicht verarbeitet, es fallen keine Token an).
+  while (extraktion && !response.ok) {
+    const naechste = anthropicNaechsteStufe(provider?.id, model, modus, stufe, response.status, text);
+    if (naechste == null) break;
+    stufe = naechste;
+    ({ response } = await post());
+    text = await readLimitedText(response);
+  }
+  if (extraktion && response.ok) anthropicStufeBestaetigt(provider?.id, model, modus, stufe);
   if (!response.ok) {
     throw new NetGuardError(`Anthropic API ${response.status}: ${text.slice(0, 300)}`, {
       zielIstPrivat: provider?.allowPrivate === true,

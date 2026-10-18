@@ -1,0 +1,35 @@
+# Statische Code-Analyse (CodeQL) für JavaScript und Python.
+# Läuft nur im öffentlichen Repo; dort ist CodeQL kostenlos. Im privaten
+# Master-Repo bleibt der Job durch die Bedingung unten aus.
+name: CodeQL
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    if: github.repository == 'ceramgcf/postbuch.net'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}

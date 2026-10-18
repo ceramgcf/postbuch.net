@@ -6,7 +6,9 @@
  *   POST /api/abrechnungsperiode/start                     — Session sofort eröffnen (building),
  *                                                              gibt { jobId, sessionId } zurück;
  *                                                              409 mit code=ABRECHNUNG_SESSION_KONFLIKT
- *                                                              bei paralleler Session auf dasselbe Ziel
+ *                                                              bei paralleler Session auf dasselbe Ziel;
+ *                                                              optional bre_aufgeben { person: [Jahre] }
+ *                                                              (Beitragsrückerstattung, service/bre.js)
  *   GET  /api/abrechnungsperiode/progress/:jobId           — SSE-Stream mit echtem Fortschritt
  *   GET  /api/abrechnungsperiode/sessions                  — Offene Sessions (Wiederaufnahme)
  *   GET  /api/abrechnungsperiode/sessions/:id              — Session-Details
@@ -22,6 +24,7 @@
  *   POST /api/abrechnungsperiode/periode/merge             — COLLECTING in höchste mergen
  *   POST /api/abrechnungsperiode/periode/null-ap           — COLLECTING löschen, AP der Rechnungen nullen
  *   POST /api/abrechnungsperiode/periode/restore           — Gelöschte COLLECTING wiederherstellen (Undo)
+ *   POST /api/abrechnungsperiode/periode/bearbeiten        — Satz bzw. BRE-Schwelle einer offenen Periode ändern
  */
 
 import { EventEmitter } from 'events';
@@ -47,6 +50,7 @@ import {
   mergePerioden,
   restoreCollectingFromMerge,
   nullAPForCollectingPeriode,
+  bearbeitePeriode,
 } from '../service/abrechnungsperiode.js';
 import { appLog } from '../app-log.js';
 
@@ -57,6 +61,10 @@ const jobStore = new Map(); // jobId → { emitter, done, total, label, result, 
 
 function createJob(jobId) {
   const emitter = new EventEmitter();
+  // Ein 'error'-Event ohne Listener wirft in Node und beendet den Prozess.
+  // Hängt beim Fehlschlag kein SSE-Client am Job, steht der Fehler trotzdem
+  // in job.error und wird beim nächsten Abruf ausgeliefert.
+  emitter.on('error', () => {});
   jobStore.set(jobId, { emitter, done: 0, total: 0, label: 'Starte…', result: null, error: null });
   setTimeout(() => jobStore.delete(jobId), 15 * 60 * 1000);
 }
@@ -74,12 +82,36 @@ function progressCallback(jobId) {
 
 const router = Router();
 
+/**
+ * bre_aufgeben aus dem Request: { person: [Jahr, …] }. Liefert null, wenn
+ * nichts angegeben ist, false bei falscher Form. Welche Jahre tatsächlich
+ * zur Entscheidung stehen, schneidet service/bre.js (normalisiereAufgeben) zu.
+ */
+function parseBreAufgeben(roh) {
+  if (roh == null) return null;
+  if (typeof roh !== 'object' || Array.isArray(roh)) return false;
+  const ergebnis = {};
+  for (const [person, jahre] of Object.entries(roh)) {
+    if (!Array.isArray(jahre) || jahre.length > 50) return false;
+    if (!jahre.every((j) => Number.isInteger(j) && j >= 2000 && j <= 2999)) return false;
+    ergebnis[person] = [...new Set(jahre)].sort((a, b) => a - b);
+  }
+  return ergebnis;
+}
+
 // POST /api/abrechnungsperiode/start
 // Body: { persons, kostentraeger }  ODER  { selections: [{person, kostentraeger, periode}, ...] }
-// Gibt sofort { jobId } zurück. Fortschritt per GET /progress/:jobId (SSE).
+//       optional bre_aufgeben: { <person>: [Jahr, …] } – Jahre, deren
+//       Beitragsrückerstattung aufgegeben wird. Fehlt der Eintrag einer
+//       überwachten Person, gilt der Vorschlag der Bewertung.
+// Gibt sofort { jobId, sessionId, bre } zurück. Fortschritt per GET /progress/:jobId (SSE).
 router.post('/start', async (req, res) => {
   try {
     const { persons, kostentraeger, selections } = req.body;
+    const breAufgeben = parseBreAufgeben(req.body?.bre_aufgeben);
+    if (breAufgeben === false) {
+      return res.status(400).json({ error: 'bre_aufgeben muss je Person eine Liste von Jahren sein' });
+    }
 
     if (Array.isArray(selections) && selections.length > 0) {
       for (const s of selections) {
@@ -122,10 +154,15 @@ router.post('/start', async (req, res) => {
     let sessionId;
     let allDocs;
     let targets;
+    let breEntscheidung;
     try {
-      ({ sessionId, allDocs, targets } = await beginAbrechnungsSession({ persons, kostentraeger, selections }));
+      ({ sessionId, allDocs, targets, breEntscheidung } = await beginAbrechnungsSession({
+        persons, kostentraeger, selections, breAufgeben,
+      }));
     } catch (err) {
-      const status = err.code === 'ABRECHNUNG_SESSION_KONFLIKT' ? 409 : 400;
+      const status = err.code === 'ABRECHNUNG_SESSION_KONFLIKT'
+        ? 409
+        : (Number.isInteger(err.status) && err.status >= 400 && err.status < 500 ? err.status : 400);
       return res.status(status).json({ error: err.message, code: err.code });
     }
 
@@ -133,7 +170,7 @@ router.post('/start', async (req, res) => {
     createJob(jobId);
     appLog('INFO', 'abrechnungsperiode', `Start-Job ${jobId} angelegt für Session ${sessionId}`, { jobId, memory: process.memoryUsage() });
 
-    res.json({ jobId, sessionId });
+    res.json({ jobId, sessionId, bre: breEntscheidung || null });
 
     // Phase 5-6: PDFs bauen + hochladen — läuft nach der Antwort weiter (Fire-and-forget).
     buildAbrechnungsSessionArtefakte(sessionId, allDocs, targets, progressCallback(jobId))
@@ -144,7 +181,11 @@ router.post('/start', async (req, res) => {
         appLog('INFO', 'abrechnungsperiode', `Start-Job ${jobId} abgeschlossen`, { jobId, memory: process.memoryUsage() });
       })
       .catch((err) => {
-        appLog('ERROR', 'abrechnungsperiode', `Start-Job ${jobId} fehlgeschlagen: ${err.message}`, { jobId, memory: process.memoryUsage(), stack: err.stack });
+        if (err.code === 'ABRECHNUNG_SESSION_ABGEBROCHEN') {
+          appLog('INFO', 'abrechnungsperiode', `Start-Job ${jobId} abgebrochen (Session verworfen)`, { jobId });
+        } else {
+          appLog('ERROR', 'abrechnungsperiode', `Start-Job ${jobId} fehlgeschlagen: ${err.message}`, { jobId, memory: process.memoryUsage(), stack: err.stack });
+        }
         const job = jobStore.get(jobId);
         if (job) { job.error = err.message; job.emitter.emit('error', err.message); }
       });
@@ -442,6 +483,41 @@ router.post('/periode/restore', async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: err.message, code: err.code });
+  }
+});
+
+// POST /api/abrechnungsperiode/periode/bearbeiten
+// Body: { person, kostentraeger, periode, satz?, bre_schwelle? }
+// satz: 0–100 oder null (Satz entfernen); bre_schwelle: Betrag ab 0, nur für
+// ZURÜCKGEHALTEN-Perioden. Nicht angegebene Felder bleiben unverändert.
+router.post('/periode/bearbeiten', async (req, res) => {
+  try {
+    const args = parsePerioden(req.body);
+    const body = req.body || {};
+    let satz;
+    if (body.satz !== undefined) {
+      if (body.satz === null || body.satz === '') satz = null;
+      else {
+        satz = Number(body.satz);
+        if (!Number.isFinite(satz) || satz < 0 || satz > 100) {
+          return res.status(400).json({ error: 'Satz muss zwischen 0 und 100 liegen' });
+        }
+      }
+    }
+    let breSchwelle;
+    if (body.bre_schwelle !== undefined) {
+      breSchwelle = Number(body.bre_schwelle);
+      if (body.bre_schwelle === null || body.bre_schwelle === '' || !Number.isFinite(breSchwelle)
+          || breSchwelle < 0 || breSchwelle > 9999999999) {
+        return res.status(400).json({ error: 'Schwelle muss ein Betrag ab 0 sein' });
+      }
+      breSchwelle = Math.round(breSchwelle * 100) / 100;
+    }
+    const periode = await bearbeitePeriode({ ...args, satz, breSchwelle });
+    res.json({ ok: true, periode });
+  } catch (err) {
+    const status = Number.isInteger(err.status) && err.status >= 400 && err.status < 500 ? err.status : 400;
+    res.status(status).json({ error: err.message, code: err.code });
   }
 });
 

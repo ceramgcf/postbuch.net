@@ -125,20 +125,74 @@ installierte PWA braucht außerdem eine gleichbleibend erreichbare Adresse, weil
 sie an den bisherigen Origin gebunden bleibt. Eine Instanz, die über das
 Internet erreichbar sein soll, gehört deshalb ausnahmslos hinter TLS.
 
+### Oberfläche nur über HTTPS
+
+Mit Caddy lässt sich Port 3420 im Netz ganz schließen. Die Oberfläche hört dann
+nur noch auf dem Rechner selbst und ist ausschließlich über die HTTPS-Adresse
+erreichbar, auch zu Hause. Geschaltet wird das unter
+![Globus-Symbol](icons/globe.svg) **Einstellungen → Allgemein → Erreichbarkeit**
+mit **Nur noch über HTTPS erreichbar machen**; **Im Heimnetz wieder öffnen**
+nimmt es zurück. Beide Knöpfe erscheinen nur, wenn du gerade über HTTPS
+angemeldet bist, und nur für den Admin. Die Umstellung führt der Host-Agent
+auf dem Server aus: Er setzt `WEB_BIND` in der `.env`
+und erstellt den Web-Container neu, in der Regel innerhalb einer Minute.
+
+Nach dem Schließen zeigt die Karte einen Countdown von zwei Minuten. In dieser
+Zeit bestätigst du mit **Bestätigen**, dass du über HTTPS weiter hineinkommst.
+Ohne Bestätigung öffnet der Host-Agent den Zugang im Heimnetz von selbst wieder.
+Der Installer fragt dieselbe Einstellung bei einer Einrichtung mit DuckDNS ab.
+Ohne Host-Agent gilt `WEB_BIND` in der `.env`: `127.0.0.1` für nur über HTTPS,
+leer für alle Schnittstellen.
+
+### Notausgang
+
+Fällt HTTPS später aus, etwa weil DuckDNS, der Router oder das Zertifikat nicht
+mehr mitspielen, kommst du über die Oberfläche nicht mehr hinein. Dann öffnet
+ein Skript auf dem Server den Zugang im Heimnetz wieder. Per SSH oder direkt am
+Gerät im Installationsordner ausführen:
+
+```bash
+cd ~/postbuch && ./scripts/zugang-heimnetz-oeffnen.sh
+```
+
+Das Skript setzt `WEB_BIND` in der `.env` zurück, erstellt nur den
+Web-Container neu und nennt danach die Adresse, unter der die Oberfläche wieder
+erreichbar ist, zum Beispiel `http://192.168.178.20:3420`. Daten und andere
+Dienste bleiben unberührt. Darf dein Benutzer Docker nicht direkt verwenden,
+fragt es nach dem `sudo`-Passwort.
+
+### Scanner-Dienst
+
+Mit dem Profil `scanner` kommt ein zweiter Port hinzu (`SCANNER_PORT`,
+Standard 8080) für den
+[Scan-Webhook](dokumente-importieren.md#weg-5-scan-webhook-im-eigenen-netz). Jeder
+Aufruf braucht den Scanner-Token; ohne gültigen Token antwortet der Dienst mit
+`401`, solange er noch keinen Token von der App bezogen hat, mit `503`.
+Neuinstallationen binden den Port nur an den Rechner selbst. Für andere Geräte
+im Netz gibt ihn der Admin unter ![Scanner-Symbol](icons/scan-line.svg)
+**Einstellungen → Scanner** mit **Freigeben** frei; **Schließen** nimmt das
+zurück. Auch das erledigt der Host-Agent über `SCANNER_BIND` in der `.env`.
+Ohne Host-Agent gilt der Wert dort direkt: leer für freigegeben, `127.0.0.1`
+für geschlossen.
+
+### Interne Pfade
+
 **Nicht von außen erreichbar**, obwohl sie am selben Port hängen:
 
 | Pfad                   | Absicherung                                                                                                         |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | `/api/webhooks/*`      | nginx antwortet von außen mit `404`; zusätzlich Token-Prüfung per `X-Webhook-Token` (zeitkonstanter Vergleich)      |
-| `/api/internal/config` | nginx antwortet von außen mit `404`; nur im Docker-Netz erreichbar, verteilt u. a. den Webhook-Token an den Cleaner |
+| `/api/internal/config` | nginx antwortet von außen mit `404`; nur im Docker-Netz erreichbar, verteilt Webhook- und Scanner-Token an Cleaner und Scanner |
 
 Der 404-Block ist dabei nicht das einzige Schloss, sondern das zweite: Der
 Webhook prüft seinen Token unabhängig davon, weil `/api/` sonst pauschal
-durchgereicht wird.
+durchgereicht wird. Fehlt der Token in der Datenbank, weist der Webhook jeden
+Aufruf mit `503` ab.
 
 Vor dem allgemeinen Cookie-Session-Schutz liegen mehrere eigenständig
 abgesicherte Routen: `/api/health` für die Gesundheitsprüfung,
-`/api/public/scanner-port` für die Auskunft über den Scanner-Port, `/api/auth`
+`/api/public/scanner-port` für die Auskunft über Scanner-Port und Freigabe (ohne
+Token), `/api/auth`
 für Login und Sitzungsprüfung, `/api/onedrive-auth`
 für den Microsoft-OAuth-Flow mit eigener State-Prüfung, `/api/webhooks/*` mit
 Token-Prüfung, `/api/mcp` mit Bearer-Token und `/api/internal/config` für den
@@ -211,27 +265,35 @@ verbotene Name durchrutscht.
 
 **Die Backup-Datei** ist standardmäßig verschlüsselt: Mit aktivierter
 [Backup-Verschlüsselung](backup-wiederherstellung.md#backup-verschlüsselung)
-liegt jede Sicherung passwortgeschützt in der Dateiablage. Wird die Verschlüsselung
-im Einrichtungsassistenten bewusst abgelehnt oder später unter Einstellungen →
-Backup deaktiviert, enthält die Backup-Datei stattdessen all das im Klartext
-und ist damit ein Generalschlüssel für die Instanz _und_ für die
-dahinterliegende Cloud – siehe
+liegt jede Sicherung samt dieser Zugangsdaten passwortgeschützt in der
+Dateiablage. Wird die Verschlüsselung im Einrichtungsassistenten bewusst
+abgelehnt oder später unter Einstellungen → Backup deaktiviert, lässt
+postbuch.net die Zugangsdaten aus dem Backup weg; alle übrigen Daten stehen
+darin im Klartext. Beim Einspielen eines solchen Backups behält die Instanz
+ihre eigenen Zugangsdaten – siehe
 [Backup und Wiederherstellung](backup-wiederherstellung.md).
 
-### Der Zugriff auf die Dateiablage ist ein Vollzugriff
+### Wie weit der Zugriff auf die Dateiablage reicht
 
 Das ist der Punkt mit der größten Tragweite in diesem Kapitel, deshalb steht er
 ausdrücklich da:
 
-**Bei OneDrive** verlangt postbuch.net die Graph-Berechtigung
-`Files.ReadWrite.All` – lesen, ändern und löschen in **allen** Ordnern des
-verbundenen Microsoft-Kontos, nicht nur im postbuch-Ordner. Das ist eine
-bewusste Entscheidung: Nur mit dieser Berechtigung liegen die Dokumente im
-gewöhnlichen Dateibaum und bleiben auch ohne postbuch.net erreichbar, über die
-OneDrive-App, den Explorer oder onedrive.com. Die engere Alternative
-(`Files.ReadWrite.AppFolder`) würde die Dateien in einen abgeschotteten
-App-Ordner sperren – der Preis dafür wäre, dass sie ohne diese Anwendung nicht
-mehr sinnvoll zugänglich sind.
+**Bei OneDrive** gibt es zwei Zugriffsumfänge:
+
+- **App-Ordner** (`Files.ReadWrite.AppFolder`, Standard für neue
+  Verbindungen): postbuch.net arbeitet nur in seinem eigenen App-Ordner unter
+  `Apps/`. Microsoft ordnet diesen Ordner deiner App-Registrierung zu. Für dich
+  ist er ein gewöhnlicher Ordner, sichtbar über die OneDrive-App, den Explorer
+  und onedrive.com; postbuch.net kommt nicht aus ihm heraus.
+- **Vollzugriff** (`Files.ReadWrite.All`): lesen, ändern und löschen in
+  **allen** Ordnern des verbundenen Microsoft-Kontos. Dafür kann der
+  postbuch-Ordner an beliebiger Stelle im OneDrive liegen. Bestehende
+  Verbindungen behalten diesen Umfang, bis du sie umstellst.
+
+Welcher Umfang gilt, zeigt ![Einstellungen-Symbol](icons/settings.svg)
+**Einstellungen → Dateiablage → Zugriffsumfang**. Dort lässt er sich in beide
+Richtungen umstellen, siehe
+[Zugriffsumfang umstellen](storage-backends.md#zugriffsumfang-umstellen).
 
 **Bei einem WebDAV-Speicher** gilt dasselbe in anderer Form: Das App-Passwort
 gilt für alle Dateien des Cloud-Kontos. Dass postbuch.net nur unterhalb seines
@@ -242,22 +304,21 @@ Daraus folgt, was jeder Betreiber wissen muss:
 
 - Das Token bzw. App-Passwort steht **unverschlüsselt in der Datenbank**
   (`_settings.onedrive_tokens` bzw. die WebDAV-Zugangsdaten).
-- Ein Datenbank-Backup enthält es damit ebenfalls.
-- **Wer Zugriff auf den Server, auf die Datenbank oder auf eine Backup-Datei
-  hat, hat vollen Zugriff auf die gesamte Dateiablage** – bei OneDrive also auf dein
-  komplettes Laufwerk, einschließlich aller Ordner, die mit postbuch.net nichts
-  zu tun haben.
+- Ein verschlüsseltes Datenbank-Backup enthält es ebenfalls.
+- **Wer Zugriff auf den Server, auf die Datenbank oder auf ein verschlüsseltes
+  Backup samt Passwort hat, hat vollen Zugriff auf die gesamte Dateiablage** – bei OneDrive mit
+  App-Ordner auf alle Dokumente darin, mit Vollzugriff auf dein komplettes
+  Laufwerk, einschließlich aller Ordner, die mit postbuch.net nichts zu tun
+  haben.
 
 Gegenmaßnahmen, in dieser Reihenfolge:
 
 1. Instanz im eigenen Netz oder hinter einem VPN betreiben, nicht offen im
    Internet (siehe
    [Was von außen erreichbar ist](#was-von-außen-erreichbar-ist)).
-2. Backup-Dateien so behandeln wie das Cloud-Passwort selbst, oder die
-   [Backup-Verschlüsselung](backup-wiederherstellung.md#backup-verschlüsselung)
-   aktivieren.
-3. Ein eigenes Microsoft-Konto nur für postbuch.net verwenden – dann ist der
-   Generalschlüssel ein Schlüssel zu einem Konto, in dem sonst nichts liegt.
+2. Das Backup-Passwort so behandeln wie das Cloud-Passwort selbst.
+3. Bei OneDrive den App-Ordner verwenden oder ein eigenes Microsoft-Konto nur
+   für postbuch.net – dann reicht das Token nicht über die Ablage hinaus.
 4. Oder einen eigenen WebDAV-Speicher nutzen: der Zugriff lässt sich dort
    einzeln widerrufen, und der Server gehört dir.
 
@@ -304,7 +365,7 @@ Diese Punkte sind bewusst gewählt, nicht übersehen:
 - **Kein Schutz gegen einen kompromittierten Server.** Wer Zugriff auf den Host
   hat, hat Zugriff auf `.env`, Datenbank und alle Token – und damit auf die
   gesamte Dateiablage, nicht nur auf den postbuch-Ordner (siehe
-  [Der Zugriff auf die Dateiablage ist ein Vollzugriff](#der-zugriff-auf-die-dateiablage-ist-ein-vollzugriff)).
+  [Wie weit der Zugriff auf die Dateiablage reicht](#wie-weit-der-zugriff-auf-die-dateiablage-reicht)).
 - **Keine Zwei-Faktor-Authentifizierung.** Das Passwort ist der einzige Faktor;
   auch deshalb wird dringend davon abgeraten, die Instanz aus dem Internet
   erreichbar zu machen.

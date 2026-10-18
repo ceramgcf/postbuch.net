@@ -20,7 +20,7 @@
  */
 
 import { Router }   from 'express';
-import archiver     from 'archiver';
+import { ZipArchive } from 'archiver';
 import ExcelJS      from 'exceljs';
 import PDFDocument  from 'pdfkit';
 import { fileURLToPath } from 'url';
@@ -555,7 +555,7 @@ router.post('/', async (req, res) => {
         'Cache-Control':       'no-store',
       });
 
-      const archive = archiver('zip', { zlib: { level: 1 } });
+      const archive = new ZipArchive({ zlib: { level: 1 } });
       archive.pipe(res);
 
       const coverFilename = akte ? 'Übersicht.pdf' : 'Deckblatt.pdf';
@@ -581,7 +581,7 @@ router.post('/', async (req, res) => {
         'Content-Disposition': `attachment; filename="Dokumentenuebergabe_${exportedAt.toISOString().slice(0, 10)}.zip"`,
         'Cache-Control':       'no-store',
       });
-      const archive = archiver('zip', { zlib: { level: 1 } });
+      const archive = new ZipArchive({ zlib: { level: 1 } });
       archive.pipe(res);
       await appendArchive(archive, docs, { instanceName, exportedAt });
       await archive.finalize();
@@ -623,7 +623,7 @@ async function runZipJob(jobId, { docs, akte, exportedAt, instanceName }) {
 
   const tmpPath = `/tmp/export-${jobId}.zip`;
   const output  = createWriteStream(tmpPath);
-  const archive = archiver('zip', { zlib: { level: 1 } });
+  const archive = new ZipArchive({ zlib: { level: 1 } });
   archive.pipe(output);
   archive.append(coverPdf, { name: akte ? 'Übersicht.pdf' : 'Deckblatt.pdf' });
 
@@ -695,7 +695,7 @@ async function runZipArchivJob(jobId, { docs, exportedAt, instanceName }) {
   const job = jobs.get(jobId);
   const tmpPath = `/tmp/export-${jobId}.zip`;
   const output  = createWriteStream(tmpPath);
-  const archive = archiver('zip', { zlib: { level: 1 } });
+  const archive = new ZipArchive({ zlib: { level: 1 } });
   archive.pipe(output);
   try {
     await appendArchive(archive, docs, { instanceName, exportedAt, onStep: (s) => { job.step = s; } });

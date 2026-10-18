@@ -304,6 +304,18 @@ export function useSetArztrechnungSatz() {
   });
 }
 
+/** Beitragsrückerstattung: Rechnung als unbeachtlich markieren (kann die Periode wechseln). */
+export function useSetArztrechnungBre() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ postid, bre_unbeachtlich }) => api.postbuch.setBreUnbeachtlich(postid, bre_unbeachtlich),
+    onSuccess: (_data, { postid }) => {
+      qc.invalidateQueries({ queryKey: ['postbuch', 'detail', postid] });
+      qc.invalidateQueries({ queryKey: ['analyse'] });
+    },
+  });
+}
+
 export function useUpdateHandwerker() {
   const qc = useQueryClient();
   return useMutation({
@@ -331,7 +343,8 @@ export function useUpdateArztrechnung() {
 }
 
 // Einzelpositionen einer Arztrechnung: anlegen, ändern, löschen. Die
-// Differenzposition berechnet der Server mit, daher immer das Detail neu laden.
+// Abweichung zum Rechnungsbetrag berechnet der Server beim Laden des Details,
+// daher immer das Detail neu laden.
 function useArztPositionMutation(mutationFn) {
   const qc = useQueryClient();
   return useMutation({

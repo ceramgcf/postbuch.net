@@ -21,6 +21,7 @@ import { pinDokument, unpinDokument, listePins } from '../service/dokument-pin.j
 import { verschiebeInPapierkorb } from '../service/document-delete.js';
 import { setzeBescheidwirkungZurueck } from '../service/periodenabschluss.js';
 import { sperrePerioden } from '../service/perioden-sperre.js';
+import { setzeBreUnbeachtlich } from '../service/bre.js';
 import { istGueltigerStatus } from '../lib/post-status.js';
 import { effektiveGruppe } from '../lib/taxonomie.js';
 import { UNBEZAHLT_SQL_CONDITION } from '../lib/rechnungs-filter.js';
@@ -559,6 +560,13 @@ router.get('/:postid', async (req, res) => {
       SELECT a.*, per.ist_tier AS behandelte_person_ist_tier,
              per.pkv_satz AS personen_pkv_satz, per.beihilfe_satz AS personen_beihilfe_satz,
              per.pkv AS personen_pkv, per.beihilfe AS personen_beihilfe,
+             per.bre_ueberwachen AS personen_bre_ueberwachen,
+             postbuch.arz_behandlungsjahre(a.postid) AS bre_jahre,
+             (a.rechnungsdatum IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM arztrechnung_einzelposition e
+                 WHERE e.postid = a.postid AND e.behandlungs_datum IS NOT NULL
+             )) AS bre_jahr_geschaetzt,
+             ap_pkv.bre_jahr AS abrechnungsperiode_pkv_bre_jahr,
              ap_pkv.status AS abrechnungsperiode_pkv_status,
              ap_bh.status AS abrechnungsperiode_beihilfe_status
       FROM arztrechnung a
@@ -580,6 +588,18 @@ router.get('/:postid', async (req, res) => {
         [postid]
       );
       arztrechnung.einzelpositionen = posResult.rows;
+      // Abweichung der Positionssumme vom Rechnungsbetrag, nur berechnet, nie
+      // gespeichert. null ohne Positionen oder ohne Rechnungsbetrag.
+      const abw = await query(
+        `SELECT CASE WHEN a.gesamtbetrag IS NULL OR count(e.subid) = 0 THEN NULL
+                     ELSE a.gesamtbetrag - COALESCE(sum(e.betrag), 0) END AS abweichung
+           FROM arztrechnung a
+           LEFT JOIN arztrechnung_einzelposition e ON e.postid = a.postid
+          WHERE a.postid = $1
+          GROUP BY a.gesamtbetrag`,
+        [postid]
+      );
+      arztrechnung.positionen_abweichung = abw.rows[0]?.abweichung ?? null;
 
       // Verknüpfte Erstattungen über erstattungsbescheid_einzelposition
       const ebResult = await query(`
@@ -1292,6 +1312,32 @@ router.patch('/:postid/arztrechnung/satz', async (req, res) => {
   }
 });
 
+// PATCH /api/postbuch/:postid/arztrechnung/bre
+// Markiert eine Arztrechnung als für die Beitragsrückerstattung unbeachtlich
+// (oder wieder beachtlich). Liegt sie in einer ZURÜCKGEHALTEN-Periode und wird
+// unbeachtlich, zieht sie samt offenen PKV-Prüfvormerkungen in die aktuelle
+// PKV-Sammelperiode (service/bre.js).
+// Body: { bre_unbeachtlich: boolean } → { ok, bre_unbeachtlich, verschobenNach }
+router.patch('/:postid/arztrechnung/bre', async (req, res) => {
+  const { postid } = req.params;
+  if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
+  const wert = req.body?.bre_unbeachtlich;
+  if (typeof wert !== 'boolean') {
+    return res.status(400).json({ error: 'bre_unbeachtlich muss true oder false sein' });
+  }
+  try {
+    const ergebnis = await setzeBreUnbeachtlich(postid, wert);
+    uiLog('UPDATE', 'arztrechnung_bre', postid, `bre_unbeachtlich=${wert}`);
+    res.json({ ok: true, ...ergebnis });
+  } catch (err) {
+    if (Number.isInteger(err.status) && err.status >= 400 && err.status < 500) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
+    console.error('PATCH /api/postbuch/:postid/arztrechnung/bre error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
 // PATCH /api/postbuch/:postid/arztrechnung/abrechnungsperiode
 // Ordnet die Arztrechnung einer COLLECTING-Periode zu oder löst die Zuordnung.
 // Body: { kostentraeger: 'PKV'|'Beihilfe', periode: number|null }
@@ -1672,10 +1718,10 @@ router.patch('/:postid/arztrechnung', async (req, res) => {
 });
 
 // ── Einzelpositionen einer Arztrechnung manuell pflegen ──────────────────────
-// Die Differenzposition (ist_differenz) pflegt ausschließlich der DB-Trigger
-// fn_arz_differenz_abgleichen beim Commit; sie ist hier weder bearbeit- noch
-// löschbar. Neue Positionen erhalten die nächste freie subid, bestehende
-// subids werden nie umnummeriert (Kürzungen und SymLinks verweisen darauf).
+// Neue Positionen erhalten die nächste freie subid, bestehende subids werden
+// nie umnummeriert (Kürzungen und SymLinks verweisen darauf). Eine Abweichung
+// der Positionssumme vom Rechnungsbetrag wird nicht gespeichert, sondern beim
+// Laden des Details berechnet (positionen_abweichung).
 
 const POSITION_TEXT_FELDER = ['goa_goz_gebueh_pzn', 'leistung', 'begruendung'];
 
@@ -1779,16 +1825,12 @@ router.patch('/:postid/arztrechnung/positionen/:subid', async (req, res) => {
     await client.query('BEGIN');
     await sperreArztrechnung(client, postid);
     const pos = await client.query(
-      `SELECT ist_differenz FROM arztrechnung_einzelposition WHERE postid = $1 AND subid = $2 FOR UPDATE`,
+      `SELECT 1 FROM arztrechnung_einzelposition WHERE postid = $1 AND subid = $2 FOR UPDATE`,
       [postid, Number(subid)]
     );
     if (pos.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Position nicht gefunden' });
-    }
-    if (pos.rows[0].ist_differenz) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ error: 'Der automatisch ermittelte Differenzbetrag wird selbst berechnet und kann nicht bearbeitet werden.' });
     }
     await client.query(
       `UPDATE arztrechnung_einzelposition SET ${spalten.map((k, i) => `${k} = $${i + 3}`).join(', ')}
@@ -1817,16 +1859,12 @@ router.delete('/:postid/arztrechnung/positionen/:subid', async (req, res) => {
     await client.query('BEGIN');
     await sperreArztrechnung(client, postid);
     const pos = await client.query(
-      `SELECT ist_differenz FROM arztrechnung_einzelposition WHERE postid = $1 AND subid = $2 FOR UPDATE`,
+      `SELECT 1 FROM arztrechnung_einzelposition WHERE postid = $1 AND subid = $2 FOR UPDATE`,
       [postid, Number(subid)]
     );
     if (pos.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Position nicht gefunden' });
-    }
-    if (pos.rows[0].ist_differenz) {
-      await client.query('ROLLBACK');
-      return res.status(409).json({ error: 'Der automatisch ermittelte Differenzbetrag verschwindet von selbst, sobald die Positionen den Rechnungsbetrag ergeben.' });
     }
     const kuerzungen = await client.query(
       `SELECT DISTINCT postid FROM erstattungsbescheid_kuerzung

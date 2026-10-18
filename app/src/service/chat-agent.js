@@ -45,7 +45,7 @@ import { resolveThinkingPolicy, resolveReasoningEffort, learnReasoningCapability
 import {
   extractOpenAIUsage, openAIPromptCachePolicy,
   isOpenAIPromptCacheUnsupportedError, markOpenAIPromptCacheUnsupported,
-  isOpenAIReasoningEffortToolError,
+  isOpenAIReasoningEffortToolError, maxTokensFeld as maxTokensFeldFuerDialekt, antwortText,
 } from '../lib/llm/providers/openai.js';
 import { guardedFetch, readLimitedText, TIMEOUT_COMPLETION_MS } from '../lib/net-guard.js';
 import { embedText } from '../lib/embedding.js';
@@ -1246,10 +1246,17 @@ Formatierung:
 Antwortsprache: Deutsch. Antworte direkt, präzise und vollständig — dies ist bereits deine finale Antwort an den Nutzer, kein Zwischenbericht.`;
 }
 
-// Ollama will `max_tokens`, alle anderen OpenAI-kompatiblen Ziele
-// `max_completion_tokens` (siehe lib/llm/providers/openai.js).
+// Ollama und Mistral wollen `max_tokens`, alle anderen OpenAI-kompatiblen
+// Ziele `max_completion_tokens` (siehe lib/llm/providers/openai.js).
 function maxTokensFeld(prov, n) {
-  return prov?.dialekt === 'ollama' ? { max_tokens: n } : { max_completion_tokens: n };
+  return maxTokensFeldFuerDialekt(prov?.dialekt, n);
+}
+
+// Mistral liefert bei Reasoning `content` als Liste mit thinking-/text-Teilen.
+// Für den Gesprächsverlauf zählt nur der Antworttext; die tool_calls bleiben.
+function normalisiereNachricht(msg) {
+  if (!Array.isArray(msg?.content)) return msg;
+  return { ...msg, content: antwortText(msg.content) || '' };
 }
 
 // ── Research-Loop: Anthropic-Format (Direct + Bedrock) ───────────────────────
@@ -1487,7 +1494,7 @@ async function runOpenAIResearchLoop(prov, model, systemPrompt, initialMessages,
       ...(openAIPromptCachePolicy({ provider: prov, model }) || {}),
     }, keys, ctx);
 
-    const msg = data.choices?.[0]?.message;
+    const msg = normalisiereNachricht(data.choices?.[0]?.message);
     if (!msg) throw new Error('Unerwartetes OpenAI-Antwortformat (keine message)');
     messages.push(msg);
     if (msg.content) lastText = msg.content;
@@ -1510,7 +1517,7 @@ async function runOpenAIResearchLoop(prov, model, systemPrompt, initialMessages,
       model, ...maxTokensFeld(prov, 4096), messages, tool_choice: 'none', tools: OPENAI_TOOLS,
       ...(openAIPromptCachePolicy({ provider: prov, model }) || {}),
     }, keys, ctx);
-    const msg = data.choices?.[0]?.message;
+    const msg = normalisiereNachricht(data.choices?.[0]?.message);
     if (msg?.content) lastText = msg.content;
   }
 
@@ -1638,7 +1645,7 @@ async function streamOpenAI(prov, model, prompt, system, keys, onToken, viaMcp) 
       if (json === '[DONE]') continue;
       try {
         const evt = JSON.parse(json);
-        const delta = evt.choices?.[0]?.delta?.content;
+        const delta = antwortText(evt.choices?.[0]?.delta?.content);
         if (delta) onToken(delta);
         if (evt.usage) {
           usage.input_tokens  = evt.usage.prompt_tokens     ?? usage.input_tokens;

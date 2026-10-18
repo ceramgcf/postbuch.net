@@ -5,6 +5,25 @@ function personenQuery(personen) {
   return personen?.length ? `?${new URLSearchParams({ personen: personen.join(',') })}` : '';
 }
 
+/**
+ * Meldungstext für eine fehlgeschlagene Antwort. Die App liefert `{ error }`
+ * als JSON; kommt stattdessen eine HTML-Fehlerseite (nginx, z. B. 502 während
+ * eines App-Neustarts), wird sie nie roh angezeigt.
+ */
+function fehlertext(status, text, payload) {
+  if (payload?.error) return payload.error;
+  const t = (text || '').trim();
+  if (t && !t.startsWith('<')) return t;
+  if (status === 502 || status === 503 || status === 504) {
+    return 'Der Server ist gerade nicht erreichbar, etwa während eines Neustarts. Bitte in ein paar Sekunden erneut versuchen.';
+  }
+  return `Serverfehler (HTTP ${status})`;
+}
+
+function parseJson(text) {
+  try { return text ? JSON.parse(text) : null; } catch { return null; }
+}
+
 async function request(path, options = {}) {
   const { noRedirect, ...fetchOptions } = options;
   const res = await fetch(`${BASE}${path}`, {
@@ -21,12 +40,11 @@ async function request(path, options = {}) {
       window.location.href = '/login';
     }
     const text = await res.text().catch(() => '');
-    let payload = null;
-    try { payload = text ? JSON.parse(text) : null; } catch { /* keine JSON-Antwort */ }
+    const payload = parseJson(text);
 
     // Status und geparster Body am Error: der Login braucht `verbleibendeVersuche`
     // bzw. `retryAfterSec` aus der Antwort, nicht nur den Meldungstext.
-    const err = new Error(payload?.error || text || `HTTP ${res.status}`);
+    const err = new Error(fehlertext(res.status, text, payload));
     err.status = res.status;
     err.payload = payload;
     throw err;
@@ -43,9 +61,7 @@ async function downloadDatei(path) {
   }
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    let payload = null;
-    try { payload = text ? JSON.parse(text) : null; } catch { /* keine JSON-Antwort */ }
-    throw new Error(payload?.error || text || `HTTP ${res.status}`);
+    throw new Error(fehlertext(res.status, text, parseJson(text)));
   }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
@@ -119,6 +135,11 @@ export const api = {
     setSatz: (postid, data) => request(`/postbuch/${postid}/arztrechnung/satz`, {
       method: 'PATCH',
       body: JSON.stringify(data),
+    }),
+    /** Beitragsrückerstattung: Rechnung als unbeachtlich markieren → { bre_unbeachtlich, verschobenNach } */
+    setBreUnbeachtlich: (postid, breUnbeachtlich) => request(`/postbuch/${postid}/arztrechnung/bre`, {
+      method: 'PATCH',
+      body: JSON.stringify({ bre_unbeachtlich: !!breUnbeachtlich }),
     }),
     updateHandwerker: (postid, data) => request(`/postbuch/${postid}/handwerkerrechnung`, {
       method: 'PATCH',
@@ -264,8 +285,8 @@ export const api = {
         throw new Error('Nicht authentifiziert');
       }
       if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `HTTP ${res.status}`);
+        const text = await res.text().catch(() => '');
+        throw new Error(fehlertext(res.status, text, parseJson(text)));
       }
       return res.json();
     },
@@ -304,6 +325,8 @@ export const api = {
   },
   import: {
     scannerPort: () => request('/public/scanner-port'),
+    scannerWebhook: () => request('/import/scanner-webhook'),
+    scannerWebhookErneuern: () => request('/import/scanner-webhook/erneuern', { method: 'POST' }),
     scan: (body) => request('/import/scan', {
       method: 'POST',
       body: JSON.stringify(body),
@@ -387,6 +410,8 @@ export const api = {
     periodenPins: (person, kostentraeger, periode) =>
       request(`/analyse/perioden/${encodeURIComponent(person)}/${encodeURIComponent(kostentraeger)}/${encodeURIComponent(periode)}/pins`),
     collectingPerioden: () => request('/analyse/perioden/collecting'),
+    /** Bewertung der Beitragsrückerstattung für eine Person (Abrechnungsassistent) */
+    breVorschau: (person) => request(`/analyse/bre-vorschau?person=${encodeURIComponent(person)}`),
   },
   stats: {
     dashboard: (personen) => request(`/stats/dashboard${personenQuery(personen)}`),
@@ -550,6 +575,9 @@ export const api = {
     }),
     hostconfig: (typ, wert, secret) => request('/updates/hostconfig', {
       method: 'POST', body: JSON.stringify({ typ, wert, ...(secret ? { secret } : {}) }),
+    }),
+    hostconfigBestaetigen: (nonce) => request('/updates/hostconfig/bestaetigen', {
+      method: 'POST', body: JSON.stringify({ nonce }),
     }),
     // text/plain, nicht JSON – deshalb an `request` vorbei.
     log: async () => {
@@ -801,6 +829,14 @@ export const api = {
     deviceStart: () => request('/onedrive-auth/device/start', { method: 'POST' }),
     deviceStatus: (flowId) => request(`/onedrive-auth/device/status/${encodeURIComponent(flowId)}`),
     deviceCancel: (flowId) => request(`/onedrive-auth/device/${encodeURIComponent(flowId)}`, { method: 'DELETE' }),
+    // Zugriffsumfang: App-Ordner oder Vollzugriff, samt Umstellung hin und zurück.
+    zugriff: () => request('/onedrive-auth/zugriff'),
+    zugriffUmstellen: (ziel) => request('/onedrive-auth/zugriff/umstellen', {
+      method: 'POST',
+      body: JSON.stringify({ ziel }),
+    }),
+    zugriffFortsetzen: () => request('/onedrive-auth/zugriff/fortsetzen', { method: 'POST' }),
+    zugriffQuittieren: () => request('/onedrive-auth/zugriff/quittieren', { method: 'POST' }),
     setAuthMode: (mode) => request('/settings/onedrive/auth-mode', {
       method: 'PUT',
       body: JSON.stringify({ mode }),
@@ -900,7 +936,8 @@ export const api = {
     list: () => request('/personen'),
   },
   abrechnungsperiode: {
-    // POST /start → gibt sofort { jobId } zurück; Fortschritt per SSE unter progressUrl()
+    // POST /start → gibt sofort { jobId, sessionId, bre } zurück; Fortschritt per SSE unter progressUrl().
+    // payload darf bre_aufgeben: { [person]: number[] } enthalten.
     start: (payload) => request('/abrechnungsperiode/start', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -943,6 +980,12 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ person, kostentraeger, periode }),
       }),
+    /** Satz (0–100 oder null) bzw. BRE-Schwelle einer offenen Periode ändern; undefined = unverändert */
+    bearbeiten: (person, kostentraeger, periode, { satz, breSchwelle } = {}) =>
+      request('/abrechnungsperiode/periode/bearbeiten', {
+        method: 'POST',
+        body: JSON.stringify({ person, kostentraeger, periode, satz, bre_schwelle: breSchwelle }),
+      }),
     restore: (person, kostentraeger, periode, postIds, status, movedKuerzungen) =>
       request('/abrechnungsperiode/periode/restore', {
         method: 'POST',
@@ -969,8 +1012,8 @@ export const api = {
         throw new Error('Nicht authentifiziert');
       }
       if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `HTTP ${res.status}`);
+        const text = await res.text().catch(() => '');
+        throw new Error(fehlertext(res.status, text, parseJson(text)));
       }
       const blob = await res.blob();
       const url  = URL.createObjectURL(blob);
@@ -1098,7 +1141,7 @@ export const api = {
           signal: opts.signal,
         });
         if (res.status === 401) { window.location.href = '/login'; return; }
-        if (!res.ok) { const t = await res.text(); onError?.(t || `HTTP ${res.status}`); return; }
+        if (!res.ok) { const t = await res.text().catch(() => ''); onError?.(fehlertext(res.status, t, parseJson(t))); return; }
 
         const reader  = res.body.getReader();
         const decoder = new TextDecoder();

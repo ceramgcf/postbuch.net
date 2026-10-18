@@ -1,14 +1,14 @@
-FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+FROM node:24-alpine@sha256:44fce696f38ba8c987c4db89954051000bbd05ffd8d8659ba15ed4a8602e937f
 
 # qpdf: PDF-Rotation und -Merge (spätere Sessions)
-# postgresql16-client: pg_dump für Backups (spätere Sessions)
+# postgresql18-client: pg_dump/pg_restore/psql passend zur Serverversion (Backups, Restore)
 # tzdata: Alpine hat die Zoneinfo-Dateien nicht an Bord. Ohne sie kennt die libc
 # "Europe/Berlin" nicht und faellt trotz gesetztem TZ lautlos auf UTC zurueck
 # (betrifft u.a. Datumsangaben in ausgefuehrten Kindprozessen wie pg_dump/psql).
 # Alpine-Paketquellen koennen auf ARM-Heimservern kurz per DNS nicht erreichbar
 # sein. Drei Versuche vermeiden dann einen unnötigen manuellen Eingriff.
 RUN for versuch in 1 2 3; do \
-      apk add --no-cache qpdf postgresql16-client ghostscript tzdata && exit 0; \
+      apk add --no-cache qpdf postgresql18-client ghostscript tzdata && exit 0; \
       if [ "$versuch" -lt 3 ]; then \
         echo "apk fehlgeschlagen – neuer Versuch in $((versuch * 5)) Sekunden" >&2; \
         sleep "$((versuch * 5))"; \

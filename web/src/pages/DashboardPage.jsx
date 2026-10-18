@@ -123,6 +123,7 @@ function AiHealthBanner() {
   const nichtVerfuegbar = new Map();
   for (const cls of MODEL_CLASSES) {
     const m = health.models?.[cls.key];
+    if (m?.aktiv === false) continue; // Stufe der nicht gewählten Modellwahl
     if (!m?.model || !health.providers?.[m.providerId]?.working || m.available !== false) continue;
     const name = `${m.providerLabel || m.providerId}: ${m.model}`;
     nichtVerfuegbar.set(name, [...(nichtVerfuegbar.get(name) || []), cls.label]);

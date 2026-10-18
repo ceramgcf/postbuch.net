@@ -11,6 +11,8 @@
  *   PUT  /api/updates/kanal      → Vorabversionen ein/aus (nur GitHub-Quellen)
  *   POST /api/updates/abbrechen  → noch nicht abgeholte Anforderung zurücknehmen
  *   GET  /api/updates/log        → Log-Schwanz des Agenten als text/plain
+ *   POST /api/updates/hostconfig → Hostauftrag (Modul, Port, DuckDNS, Freigabe …)
+ *   POST /api/updates/hostconfig/bestaetigen → „Oberfläche nur über HTTPS“ quittieren
  *
  * **Die App führt nichts aus.** Sie schreibt eine Anforderungsdatei; ausgeführt
  * wird ausschließlich vom Host-Agenten. Ohne Agenten gibt es hier keinen
@@ -29,6 +31,7 @@ import { signaturKonfiguriert, signaturText, SIGNATUR_STATUS } from '../lib/rele
 import {
   leseAgentStatus, leseAnforderung, schreibeAnforderung, entferneAnforderung,
   leseLaufStatus, leseLogTail, laufAktiv, schreibeHostAnforderung,
+  schreibeWebBestaetigung,
 } from '../lib/update-agent-datei.js';
 import {
   istNeuer, semver, hatFeedQuelle, feedQuelleFingerprint, githubQuelle,
@@ -37,12 +40,33 @@ import db from '../db.js';
 
 const router = Router();
 
+/** Port-Freigaben, die der Host-Agent umschalten kann (SCANNER_BIND/WEB_BIND). */
+const FREIGABE_WERTE = ['scanner:lan', 'scanner:lokal', 'web:lan', 'web:lokal'];
+
 /**
  * Der Fallback für Instanzen ohne Agenten. Konstanter String — NIE aus dem
  * Manifest zusammengesetzt: ein Befehl, den ein Admin per Copy-Paste in seine
  * root-Shell wirft, darf nicht aus einer Datei stammen, die von außen kommt.
  */
 const KOPIERBEFEHL = 'cd ~/postbuch && ./deploy-pages/install.sh --update';
+
+/** Ab 2.12 läuft PostgreSQL 18; ältere Bestände ziehen per Installer um. */
+const POSTGRES_ZIEL = 18;
+const UMZUGSBEFEHL = 'cd ~/postbuch && ./deploy-pages/install.sh --postgres-umzug';
+
+async function datenbankStand() {
+  try {
+    const { rows } = await db.query('SHOW server_version_num');
+    const major = Math.floor(Number(rows[0]?.server_version_num) / 10000) || null;
+    return {
+      postgres: major,
+      umzugAusstehend: !!major && major < POSTGRES_ZIEL,
+      umzugsbefehl: UMZUGSBEFEHL,
+    };
+  } catch {
+    return { postgres: null, umzugAusstehend: false, umzugsbefehl: UMZUGSBEFEHL };
+  }
+}
 
 /**
  * Im Vorabkanal muss der Installer gezielt die geprüfte Version holen, sonst
@@ -102,7 +126,7 @@ async function merkeHostconfig(typ, wert, mitSecret) {
 }
 
 async function gesamtbild() {
-  const [status, agent, lauf, anforderung, aktiv, pin, vorabWunsch] = await Promise.all([
+  const [status, agent, lauf, anforderung, aktiv, pin, vorabWunsch, datenbank] = await Promise.all([
     leseUpdateStatus(),
     leseAgentStatus(),
     leseLaufStatus(),
@@ -110,6 +134,7 @@ async function gesamtbild() {
     checkAktiv(),
     lesePin(),
     vorabGewuenscht(),
+    datenbankStand(),
   ]);
 
   const installiert = appVersion();
@@ -163,6 +188,8 @@ async function gesamtbild() {
       capabilities: agent.capabilities,
       letzterLaufAm: agent.letzterLaufAm,
       scannerProfilAktiv: agent.scannerProfilAktiv,
+      freigaben: agent.freigaben,
+      webBestaetigungBis: agent.webBestaetigungBis,
     },
     // Eine geschriebene, aber noch nicht abgeholte Anforderung ist ein eigener
     // Zustand: die GUI zeigt „warte auf den Agenten" statt eines Fortschritts,
@@ -185,6 +212,7 @@ async function gesamtbild() {
       exitCode: lauf.exitCode,
       meldung: lauf.meldung,
     } : null,
+    datenbank,
     kopierbefehl: kopierbefehl(vorab, verfuegbar,
       !!(installiert && verfuegbar && istNeuer(verfuegbar, installiert))),
   };
@@ -306,7 +334,16 @@ router.post('/hostconfig', async (req, res) => {
   try {
     const agent = await leseAgentStatus();
     const typ = String(req.body?.typ || '');
-    const capability = typ === 'module' ? 'module' : (typ === 'port' ? 'port' : 'netzwerk');
+    const capability = ['module', 'port', 'freigabe'].includes(typ) ? typ : 'netzwerk';
+    const wert = String(req.body?.wert || '');
+    if (typ === 'freigabe') {
+      if (!FREIGABE_WERTE.includes(wert)) return res.status(400).json({ error: 'Unbekannte Freigabe.' });
+      // Die Oberfläche lässt sich nur aus einer HTTPS-Sitzung umschalten: Wer
+      // sie per http://IP bedient, sperrte sich mit „nur über HTTPS“ selbst aus.
+      if (wert.startsWith('web:') && req.protocol !== 'https') {
+        return res.status(409).json({ error: 'Nur aus einer Sitzung über HTTPS umschaltbar.' });
+      }
+    }
     if (!agent.vorhanden || !agent.capabilities?.includes(capability)) {
       return res.status(412).json({
         error: 'Der installierte Host-Agent unterstützt diesen Auftrag noch nicht.',
@@ -327,6 +364,27 @@ router.post('/hostconfig', async (req, res) => {
       details: `nonce=${nonce}`, entity: 'settings', entityId: req.session?.username || 'admin',
     });
     res.json({ nonce, typ });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+router.post('/hostconfig/bestaetigen', async (req, res) => {
+  try {
+    if (req.protocol !== 'https') {
+      return res.status(409).json({ error: 'Die Bestätigung muss über HTTPS kommen.' });
+    }
+    const agent = await leseAgentStatus();
+    const lauf = await leseLaufStatus();
+    const nonce = String(req.body?.nonce || '');
+    if (!agent.webBestaetigungBis || lauf?.typ !== 'freigabe' || lauf.nonce !== nonce) {
+      return res.status(409).json({ error: 'Es ist keine Bestätigung offen.' });
+    }
+    await schreibeWebBestaetigung(nonce);
+    await appLog('INFO', 'hostconfig', 'Oberfläche nur über HTTPS bestätigt', {
+      details: `nonce=${nonce}`, entity: 'settings', entityId: req.session?.username || 'admin',
+    });
+    res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

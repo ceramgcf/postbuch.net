@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16@sha256:a36250871de0833b8757561c72f2477ef1ddd1101afa4e617fb552e0de514c6b
+    image: pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11
     container_name: postbuch-postgres
     restart: unless-stopped
     environment:
@@ -13,7 +13,11 @@ services:
       # `SET TIME ZONE` (siehe app/src/db.js), unabhängig vom Server-Default.
       TZ: Europe/Berlin
     volumes:
-      - ./data/postgres:/var/lib/postgresql/data
+      # Ab PostgreSQL 18 versioniert: Daten unter data/postgres/18/docker.
+      # Liegt in data/postgres noch ein Bestand von PostgreSQL 16, verweigert
+      # das Image den Start, statt leer zu initialisieren. Umzug:
+      # scripts/postgres-umzug.sh (über install.sh --postgres-umzug).
+      - ./data/postgres:/var/lib/postgresql
     ports:
       # Nur auf localhost binden: sonst ist die DB inkl. aller Klartext-Secrets bei
       # einer Instanz ohne Firewall direkt aus dem Internet erreichbar.
@@ -90,6 +94,8 @@ services:
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
       SCANNER_URL: ${SCANNER_URL:-http://scanner:8080}
       SCANNER_PORT: ${SCANNER_PORT:-8080}
+      # Nur für die Anzeige auf der Import-Seite (Webhook freigegeben oder nicht).
+      SCANNER_BIND: ${SCANNER_BIND:-}
       # seed-settings.js liest SCANNER_DEVICE_URL im App-Container. Ohne diese Zeile
       # landete ein im Installer angegebener Scanner-Wert nie in _settings — die
       # Variable ging bisher nur an den scanner-Service.
@@ -118,8 +124,10 @@ services:
     restart: unless-stopped
     depends_on:
       - app
+    # WEB_BIND leer = alle Schnittstellen (IPv4 und IPv6). Mit z. B. 127.0.0.1
+    # ist die Oberfläche nur noch über Caddy erreichbar (spricht web:80 direkt an).
     ports:
-      - "${WEB_PORT:-3420}:80"
+      - "${WEB_BIND:+${WEB_BIND:-}:}${WEB_PORT:-3420}:80"
     networks:
       - postbuch
 
@@ -131,8 +139,11 @@ services:
     restart: unless-stopped
     depends_on:
       - app
+    # SCANNER_BIND=127.0.0.1 schließt den Scan-Webhook für andere Geräte im Netz.
+    # App und Cleaner sprechen den Scanner über das Docker-Netz an und sind davon
+    # nicht betroffen. Leer = alle Schnittstellen.
     ports:
-      - "${SCANNER_PORT:-8080}:8080"
+      - "${SCANNER_BIND:+${SCANNER_BIND:-}:}${SCANNER_PORT:-8080}:8080"
     environment:
       TZ: Europe/Berlin
       APP_URL: http://app:3421
@@ -171,7 +182,7 @@ services:
     # Fester Image-Name, damit der Installer das (release-unabhaengige) caddy-
     # Image zuverlaessig wiederfindet und den teuren xcaddy-Build nicht bei
     # jedem Update wiederholt.
-    image: postbuch-caddy:local2
+    image: postbuch-caddy:local3
     container_name: postbuch-caddy
     restart: unless-stopped
     profiles:

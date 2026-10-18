@@ -2,6 +2,7 @@ import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { createPortal } from 'react-dom';
 import { Document, Page, pdfjs } from 'react-pdf';
+import { PDFJS_DOCUMENT_OPTIONS } from '@/lib/pdfjs-worker';
 import { Spinner } from '@/components/ui/spinner';
 import { Progress } from '@/components/ui/progress';
 import { Download, RotateCcw, RotateCw, RefreshCw, X, Loader2, Printer, Menu, Maximize2 } from 'lucide-react';
@@ -173,7 +174,7 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
       : `${api.files.pdfUrl(postid)}${localKey ? `?v=${localKey}` : ''}`,
     [useExternalUrl, externalPdfUrl, postid, localKey],
   );
-  const pdfOptions = useMemo(() => ({ withCredentials: true }), []);
+  const pdfOptions = PDFJS_DOCUMENT_OPTIONS;
 
   function onDocumentLoadSuccess({ numPages: n }) {
     setNumPages(n);
@@ -403,6 +404,7 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
             style={{ transformOrigin: 'center center', willChange: 'transform' }}
           >
             <Document
+              suspense={false}
               file={pdfUrl}
               onLoadSuccess={onDocumentLoadSuccess}
               onLoadError={onDocumentLoadError}

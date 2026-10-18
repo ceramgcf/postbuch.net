@@ -27,7 +27,9 @@ run_agent() {
 
 run_agent
 grep -q '"version": 2' "$INSTALL/data/update/agent.json"
-grep -q '"capabilities": \["update", "netzwerk", "module", "port"\]' "$INSTALL/data/update/agent.json"
+grep -q '"capabilities": \["update", "zielversion", "netzwerk", "module", "port", "freigabe"\]' "$INSTALL/data/update/agent.json"
+grep -q '"freigaben": { "scanner": "lan", "web": "lan" }' "$INSTALL/data/update/agent.json"
+grep -q '"webBestaetigungBis": null' "$INSTALL/data/update/agent.json"
 grep -q '"scannerProfilAktiv": false' "$INSTALL/data/update/agent.json"
 
 NOW=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
@@ -66,5 +68,40 @@ grep -q '"status": "erfolgreich"' "$INSTALL/data/update/status.json"
 grep -q '{env.DUCKDNS_DOMAIN}' "$INSTALL/caddy/Caddyfile"
 grep -q 'dns duckdns {env.DUCKDNS_API_TOKEN}' "$INSTALL/caddy/Caddyfile"
 ! grep -Rqs "$DUCK_SECRET" "$INSTALL/data/update/status.json" "$INSTALL/data/update/update.log" "$INSTALL/data/update/agent.json" "$TMP/docker.log"
+
+# Oberfläche nur über HTTPS: offene Bestätigung im Heartbeat, Quittung der App
+# schließt sie; ohne Quittung öffnet der Agent nach Ablauf wieder.
+freigabe_auftrag() { # $1 nonce $2 wert
+  printf 'protokoll=2\ntyp=freigabe\nnonce=%s\nangefordertAm=%s\nangefordertVon=test\nwert=%s\n' \
+    "$1" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$2" > "$INSTALL/data/update/anforderung.kv"
+}
+freigabe_auftrag 55555555555555555555555555555555 web:lokal
+run_agent
+grep -q '"status": "erfolgreich"' "$INSTALL/data/update/status.json"
+grep -q '^WEB_BIND=127.0.0.1$' "$INSTALL/.env"
+grep -q '"web": "lokal"' "$INSTALL/data/update/agent.json"
+grep -q '"webBestaetigungBis": "20' "$INSTALL/data/update/agent.json"
+printf 'nonce=55555555555555555555555555555555\n' > "$INSTALL/data/update/bestaetigung.kv"
+run_agent
+grep -q '"webBestaetigungBis": null' "$INSTALL/data/update/agent.json"
+grep -q '^WEB_BIND=127.0.0.1$' "$INSTALL/.env"
+[[ ! -e "$INSTALL/data/update/bestaetigung.kv" ]]
+
+freigabe_auftrag 66666666666666666666666666666666 web:lokal
+run_agent
+# Falsche Nonce zählt nicht; Ablauf simulieren.
+printf 'nonce=55555555555555555555555555555555\n' > "$INSTALL/data/update/bestaetigung.kv"
+printf 'nonce=66666666666666666666666666666666\nbis=1\n' > "$LIB/state/web-bestaetigung"
+run_agent
+grep -q '^WEB_BIND=$' "$INSTALL/.env"
+grep -q '"phase": "zurueckgenommen"' "$INSTALL/data/update/status.json"
+grep -q '"webBestaetigungBis": null' "$INSTALL/data/update/agent.json"
+grep -q '"web": "lan"' "$INSTALL/data/update/agent.json"
+
+freigabe_auftrag 77777777777777777777777777777777 scanner:lokal
+run_agent
+grep -q '^SCANNER_BIND=127.0.0.1$' "$INSTALL/.env"
+grep -q '"scanner": "lokal"' "$INSTALL/data/update/agent.json"
+grep -q '"webBestaetigungBis": null' "$INSTALL/data/update/agent.json"
 
 printf 'Agent-P2-Harness: OK\n'

@@ -95,6 +95,7 @@ const PHASEN = {
   backup:   'Sichere aktuelle Installation …',
   extract:  'Entpacke neue Version …',
   build:    'Baue Container – das kann auf schwacher Hardware 20–35 Minuten dauern …',
+  datenbank: 'Ziehe die Datenbank auf PostgreSQL 18 um – das dauert einige Minuten …',
   up:       'Starte Container neu …',
   fertig:   'Fertig.',
 };

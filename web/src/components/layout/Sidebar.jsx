@@ -213,7 +213,7 @@ function SidebarInner({ isExpanded, isPinned, onTogglePin, onNavClick, onLogout 
         )}
       </div>
 
-      <div className="mx-3 h-px bg-gradient-to-r from-primary/20 via-primary/10 to-transparent flex-shrink-0" />
+      <div className="mx-3 h-px bg-linear-to-r from-primary/20 via-primary/10 to-transparent flex-shrink-0" />
 
       {/* Eingeklappt ohne sichtbare Scrollbar: die 6px-Scrollbar aus index.css
           verschmälert sonst den Inhaltsbereich des <nav> und schiebt die Icons
@@ -288,7 +288,7 @@ function SidebarInner({ isExpanded, isPinned, onTogglePin, onNavClick, onLogout 
       </>}
 
       {/* Genau ein Strich trennt den festen Fußbereich vom Rest der Leiste. */}
-      <div className="mx-3 mt-1 h-px bg-gradient-to-r from-primary/20 via-primary/10 to-transparent flex-shrink-0" />
+      <div className="mx-3 mt-1 h-px bg-linear-to-r from-primary/20 via-primary/10 to-transparent flex-shrink-0" />
 
       {/* Fußbereich: Hilfe, Einstellungen und Abmelden teilen sich einen
           gemeinsamen Block AUSSERHALB des scrollbaren <nav>. Dadurch stehen

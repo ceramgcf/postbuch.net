@@ -16,7 +16,7 @@
 import db from '../db.js';
 import { loadDynamicSettings, getFolders } from '../config.js';
 import { getActiveAdapterFor } from '../lib/storage/index.js';
-import { claimInFlight, releaseInFlight } from './document-processor.js';
+import { claimInFlight, releaseInFlight, inboxUploadLaeuft } from './document-processor.js';
 import { enqueueDocument, isPaused } from '../jobs/pipeline-queue.js';
 import * as tracker from '../jobs/tracker.js';
 import { appLog } from '../app-log.js';
@@ -147,6 +147,11 @@ async function pollOnce() {
   // in der pipeline-queue wartende Dateien sind dort registriert und werden übersprungen.
   const children = await getActiveAdapterFor(settings).listChildren(inboxId);
   const inboxFiles = children.filter((c) => !c.isFolder);
+
+  // Ein Upload, dessen Datei schon in der Inbox liegt, aber noch nicht
+  // geclaimt ist, gehört seinem eigenen Job. Kein await zwischen dieser
+  // Prüfung und den Claims unten; der nächste Poll holt den Rest nach.
+  if (inboxUploadLaeuft()) return;
 
   const claimed = [];
   for (const file of inboxFiles) {
