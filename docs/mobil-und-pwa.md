@@ -149,12 +149,20 @@ App, verhält sich aber nicht in allen Punkten wie eine Chrome-Installation.
 
 ### Android
 
-1. Die postbuch.net-Adresse über `https://` in Chrome (oder Edge/Brave) öffnen
-   und anmelden.
-2. Menü (drei Punkte) → **App installieren** bzw. **Zum Startbildschirm
-   hinzufügen**.
-3. Bestätigen. Die App liegt danach im Launcher und startet wie eine native
-   App in einem eigenen Fenster.
+1. Die eigene postbuch.net-Adresse über `https://` in Chrome (oder Edge/Brave)
+   öffnen. Die Anmeldeseite genügt, anmelden ist dafür noch nicht nötig.
+2. Menü (drei Punkte) → **Installieren und Verknüpfung erstellen**.
+3. Im folgenden Fenster **Installieren** wählen. Edge, Brave und ältere
+   Chrome-Versionen nennen den Menüpunkt **App installieren** bzw. **Zum
+   Startbildschirm hinzufügen**.
+4. postbuch.net liegt danach in der App-Übersicht und startet wie eine native
+   App in einem eigenen Fenster. Wer sich vorher nicht im Browser angemeldet
+   hat, meldet sich beim ersten Start in der App an.
+
+**Verknüpfung erstellen** im selben Fenster legt nur ein Symbol auf den
+Startbildschirm, das postbuch.net in Chrome öffnet: mit Adressleiste und ohne
+Eintrag im Teilen-Menü. Für die App-Funktionen dieses Kapitels ist
+**Installieren** der richtige Weg.
 
 Hier greifen alle mobilen Besonderheiten dieses Kapitels, auch der
 Doppeldruck-Schutz der

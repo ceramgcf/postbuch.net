@@ -167,6 +167,7 @@ ausführlichste Behandlung.
 ## I
 
 - **Import (Dokumente)** – [Dokumente importieren](dokumente-importieren.md) · [Konfliktverhalten](export-import.md#konfliktverhalten-beim-import)
+- **Installieren (App auf dem Handy)** – [Android](mobil-und-pwa.md#android) · [Als App installieren](mobil-und-pwa.md#als-app-installieren-pwa)
 - **Installer** – [Weg 1: Installer](installation.md#weg-1-installer) · [Nützliche Aufrufformen](installation.md#nützliche-aufrufformen) · [Lokal im Installationsverzeichnis](installation.md#der-installer-liegt-lokal-im-installationsverzeichnis)
 - **Installationsverzeichnis** – [Weg 1: Installer](installation.md#weg-1-installer) · [Lokal im Installationsverzeichnis](installation.md#der-installer-liegt-lokal-im-installationsverzeichnis)
 - **Invalidieren (Rechnung)** – [Rechnung invalidieren](dokumentansicht.md#rechnung-invalidieren)
