@@ -145,7 +145,11 @@ function handleMessage(msg, token) {
 
   if (op === OPCODES.HELLO) {
     // Heartbeat-Intervall starten
-    const interval = d?.heartbeat_interval || 41250;
+    // Wert kommt von der Gegenstelle: auf ein plausibles Fenster begrenzen,
+    // damit ein kaputter HELLO keine Heartbeat-Flut auslöst.
+    const roh = Number(d?.heartbeat_interval);
+    const interval = Number.isFinite(roh) ? Math.min(Math.max(roh, 5000), 120000) : 41250;
+    if (_heartbeatInterval) clearInterval(_heartbeatInterval);
     _heartbeatInterval = setInterval(() => {
       send({ op: OPCODES.HEARTBEAT, d: null });
     }, interval);
@@ -199,7 +203,7 @@ async function handleInteraction(interaction) {
 
 async function ackInteraction(id, token) {
   try {
-    await fetch(`https://discord.com/api/v10/interactions/${id}/${token}/callback`, {
+    await fetch(`https://discord.com/api/v10/interactions/${encodeURIComponent(id)}/${encodeURIComponent(token)}/callback`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 7, data: { flags: 64 } }), // ephemeral ACK

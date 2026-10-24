@@ -4,6 +4,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { PageLoader, EmptyState } from '@/components/ui/spinner';
 import { PdfInlineViewer } from '@/components/ui/pdf-inline-viewer';
+import { AutoForwardRing } from '@/components/ui/auto-forward-ring';
+import { geteilteDateienEinreichen } from '@/lib/geteilteDateien';
 import {
   Activity, CheckCircle2, XCircle, Ban, AlertTriangle, Loader2,
   Check, X, Clock, Workflow, PauseCircle, GitMerge, Trash2, Copy,
@@ -570,7 +572,153 @@ function RecentJobRow({ job }) {
 
 // ── Main tab ────────────────────────────────────────────────────────────────
 
-export function JobsMonitor() {
+// ── Verfolgte Importe ───────────────────────────────────────────────────────
+// Geteilte PDFs (/logs?geteilt=1) sowie – je nach Gerätevorgabe – Dateiimporte
+// (/logs?folgen=<jobId>) und in der App gestartete Scans (/logs?scan=<datei>)
+// landen hier. Ein Kasten oben zeigt, was mit dem Dokument passiert; bei genau
+// einem Dokument öffnet die Ansicht es nach erfolgreicher Verarbeitung mit
+// 3-s-Countdown (Ring-Klick oder Taste bricht ab).
+
+const ABGESCHLOSSEN = new Set(['done', 'failed', 'cancelled', 'interrupted']);
+
+// Scan-Jobs tragen den Scanner-Dateinamen als Bezeichnung (scan-registered);
+// bei Namensgleichheit gilt der jüngste.
+function findeZiel(ziel, jobs) {
+  if (ziel.jobId) return jobs.find(j => j.id === ziel.jobId) || null;
+  return jobs
+    .filter(j => j.type === 'doc-process' && j.label === ziel.datei)
+    .sort((x, y) => (y.startedAt ?? 0) - (x.startedAt ?? 0))[0] || null;
+}
+
+function FolgenKarte({ zustand, jobs, onOeffnen, onAbbrechen, weiterleitung }) {
+  let icon = <Loader2 className="h-5 w-5 animate-spin text-sky-400" />;
+  let titel;
+  let text = null;
+
+  if (zustand.phase === 'hochladen') {
+    titel = 'Geteiltes Dokument wird übernommen …';
+  } else if (zustand.phase === 'fehler') {
+    icon = <AlertTriangle className="h-5 w-5 text-red-400" />;
+    titel = 'Teilen fehlgeschlagen';
+    text = zustand.meldung;
+  } else if (jobs.length === 1) {
+    const job = jobs[0];
+    if (!job || (!ABGESCHLOSSEN.has(job.status) && job.status !== 'awaiting_decision')) {
+      titel = 'Dokument wird verarbeitet …';
+      text = job?.stepLabel || 'Den Fortschritt siehst du unten bei den laufenden Jobs.';
+    } else if (job.status === 'awaiting_decision') {
+      icon = <PauseCircle className="h-5 w-5 text-violet-400" />;
+      titel = 'Mögliches Duplikat erkannt';
+      text = 'Bitte entscheide unten unter „Offene Entscheidungen“, wie es weitergeht.';
+    } else if (job.status === 'done' && job.payload?.postid) {
+      icon = <CheckCircle2 className="h-5 w-5 text-emerald-400" />;
+      titel = `Fertig: ${job.payload.postid}`;
+      text = job.payload.betreff || null;
+    } else if (job.status === 'done') {
+      icon = <CheckCircle2 className="h-5 w-5 text-emerald-400" />;
+      titel = 'Verarbeitung abgeschlossen';
+      text = 'Das Ergebnis steht unten im Verlauf.';
+    } else {
+      icon = <XCircle className="h-5 w-5 text-red-400" />;
+      titel = 'Verarbeitung nicht abgeschlossen';
+      text = job.errorMessage || 'Details stehen unten im Verlauf.';
+    }
+  } else {
+    const fertig = jobs.filter(j => j && ABGESCHLOSSEN.has(j.status)).length;
+    const gesamt = jobs.length;
+    if (fertig >= gesamt) icon = <CheckCircle2 className="h-5 w-5 text-emerald-400" />;
+    titel = fertig >= gesamt
+      ? `${gesamt} Dokumente abgeschlossen`
+      : `${gesamt} Dokumente werden verarbeitet · ${fertig} fertig`;
+    text = 'Ein Klick auf einen Eintrag im Verlauf öffnet das Dokument.';
+  }
+
+  const fehler = zustand.fehler || [];
+  const fertigesDokument = jobs.length === 1 && jobs[0]?.status === 'done' ? jobs[0].payload?.postid : null;
+
+  return (
+    <div className="flex items-start gap-3 rounded-xl border border-primary/40 bg-primary/5 px-4 py-3">
+      <div className="mt-0.5 shrink-0">{icon}</div>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-semibold">{titel}</div>
+        {text && <div className="mt-0.5 text-xs text-muted-foreground break-words whitespace-pre-wrap">{text}</div>}
+        {fehler.length > 0 && (
+          <div className="mt-1 text-xs text-red-400 break-words whitespace-pre-wrap">
+            {fehler.slice(0, 5).join('\n')}
+          </div>
+        )}
+        {fertigesDokument && (
+          <button
+            type="button"
+            onClick={() => onOeffnen(fertigesDokument)}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-primary/40 bg-background px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            {weiterleitung ? 'Jetzt öffnen' : 'Dokument öffnen'}
+          </button>
+        )}
+      </div>
+      {weiterleitung && <AutoForwardRing onCancel={onAbbrechen} />}
+    </div>
+  );
+}
+
+/**
+ * Zustand der Verfolgung: null, { phase: 'hochladen' }, { phase: 'fehler', meldung }
+ * oder { phase: 'laeuft', ziele: [{ jobId } | { datei }], fehler }.
+ * Die URL-Parameter werden nach dem Übernehmen entfernt (onUrlErledigt), damit
+ * ein Neuladen nichts erneut auslöst.
+ */
+function useVerfolgung({ geteilt, folgenIds, scanDateien, onUrlErledigt, fetchJobs }) {
+  const [zustand, setZustand] = useState(null);
+  const gestartet = useRef(null);
+  const schluessel = geteilt ? `geteilt:${geteilt}`
+    : (folgenIds.length || scanDateien.length) ? `folgen:${folgenIds.join(',')}|${scanDateien.join(',')}`
+    : null;
+
+  useEffect(() => {
+    if (!schluessel || gestartet.current === schluessel) return;
+    gestartet.current = schluessel;
+
+    if (!geteilt) {
+      setZustand({
+        phase: 'laeuft',
+        ziele: [...folgenIds.map(jobId => ({ jobId })), ...scanDateien.map(datei => ({ datei }))],
+        fehler: [],
+      });
+      onUrlErledigt?.();
+      return;
+    }
+    if (geteilt === 'fehler') {
+      setZustand({ phase: 'fehler', meldung: 'Die geteilte Datei ist nicht angekommen. Öffne postbuch.net einmal direkt und teile die PDF dann erneut.' });
+      onUrlErledigt?.();
+      return;
+    }
+    setZustand({ phase: 'hochladen' });
+    geteilteDateienEinreichen().then(({ jobIds, fehler, ohnePdf }) => {
+      onUrlErledigt?.();
+      if (jobIds.length === 0) {
+        setZustand({
+          phase: 'fehler',
+          meldung: ohnePdf ? 'Es lassen sich nur PDF-Dateien übernehmen.'
+            : fehler.length > 0 ? fehler.slice(0, 5).join('\n')
+            : 'Es wartet keine geteilte Datei (mehr). Teile die PDF bitte erneut.',
+        });
+        return;
+      }
+      setZustand({ phase: 'laeuft', ziele: jobIds.map(jobId => ({ jobId })), fehler });
+      fetchJobs();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schluessel]);
+
+  return zustand;
+}
+
+// ── Main component ──────────────────────────────────────────────────────────
+
+export function JobsMonitor({ geteilt = null, folgenIds = [], scanDateien = [], onUrlErledigt } = {}) {
+  const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -600,6 +748,26 @@ export function JobsMonitor() {
     return () => clearInterval(id);
   }, [fetchJobs]);
 
+  const verfolgung = useVerfolgung({ geteilt, folgenIds, scanDateien, onUrlErledigt, fetchJobs });
+  const [weiterleitungAbgebrochen, setWeiterleitungAbgebrochen] = useState(false);
+
+  const allJobs = [...(data?.active || []), ...(data?.recent || [])];
+  const verfolgteJobs = verfolgung?.phase === 'laeuft'
+    ? verfolgung.ziele.map(ziel => findeZiel(ziel, allJobs))
+    : [];
+  const einzelJob = verfolgteJobs.length === 1 ? verfolgteJobs[0] : null;
+  const weiterleitung = !weiterleitungAbgebrochen && einzelJob?.status === 'done'
+    ? einzelJob.payload?.postid || null
+    : null;
+
+  useEffect(() => {
+    if (!weiterleitung) return;
+    const timer = setTimeout(() => navigate(`/postbuch/${weiterleitung}`), 3000);
+    const onKey = () => setWeiterleitungAbgebrochen(true);
+    window.addEventListener('keydown', onKey);
+    return () => { clearTimeout(timer); window.removeEventListener('keydown', onKey); };
+  }, [weiterleitung, navigate]);
+
   const handleCancel = useCallback(async (id) => {
     await api.jobs.cancel(id);
     await fetchJobs();
@@ -619,7 +787,18 @@ export function JobsMonitor() {
   const recent = data?.recent || [];
   const hasAny = allActive.length > 0 || recent.length > 0;
 
+  const folgenKarte = verfolgung && (
+    <FolgenKarte
+      zustand={verfolgung}
+      jobs={verfolgteJobs}
+      weiterleitung={weiterleitung}
+      onOeffnen={(postid) => navigate(`/postbuch/${postid}`)}
+      onAbbrechen={() => setWeiterleitungAbgebrochen(true)}
+    />
+  );
+
   if (!hasAny) {
+    if (folgenKarte) return folgenKarte;
     return (
       <EmptyState
         icon={Activity}
@@ -631,6 +810,7 @@ export function JobsMonitor() {
 
   return (
     <div className="space-y-6">
+      {folgenKarte}
       <p className="text-muted-foreground text-sm">
         {active.length > 0
           ? `${active.length} laufend · ${recent.length} kürzlich · alle 3 s aktualisiert`

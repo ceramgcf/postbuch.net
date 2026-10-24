@@ -1029,7 +1029,7 @@ async function cleanupStaleSession(row) {
 /** Offene (pending) Sessions — für Wiederaufnahme. Räumt Stale-Sessions im Hintergrund auf. */
 export async function getPendingSessions() {
   const result = await pool.query(
-    `SELECT id, status, groups, created_at, expires_at FROM _abrechnung_sessions
+    `SELECT id, status, groups, created_at, expires_at, ausgeliefert_at FROM _abrechnung_sessions
      WHERE status = 'pending' ORDER BY created_at DESC`
   );
 
@@ -1051,10 +1051,28 @@ export async function getPendingSessions() {
 
 export async function getSessionById(sessionId) {
   const result = await pool.query(
-    `SELECT id, status, groups, created_at, expires_at, completed_at FROM _abrechnung_sessions WHERE id = $1`,
+    `SELECT id, status, groups, created_at, expires_at, completed_at, ausgeliefert_at FROM _abrechnung_sessions WHERE id = $1`,
     [sessionId]
   );
   return result.rows[0] ?? null;
+}
+
+/**
+ * Merkt den ersten Download bzw. das erste Teilen eines fertigen PDFs. Ab dann
+ * läuft die Session nicht mehr ab (siehe autoAbortExpiredAbrechnungsSessions):
+ * Die Abrechnung kann schon beim Kostenträger liegen, ein Timeout würde die
+ * Perioden unbemerkt offen lassen.
+ * @returns {Promise<boolean>} false, wenn die Session nicht (mehr) offen ist
+ */
+export async function markiereAbrechnungAusgeliefert(sessionId) {
+  const result = await pool.query(
+    `UPDATE _abrechnung_sessions
+        SET ausgeliefert_at = COALESCE(ausgeliefert_at, NOW()), updated_at = NOW()
+      WHERE id = $1 AND status = 'pending'
+      RETURNING ausgeliefert_at`,
+    [sessionId]
+  );
+  return result.rows.length > 0;
 }
 
 /** Backend-bewusster Artefakt-Lookup für die PDF-Proxy-Routen (siehe routes/abrechnungsperiode.js). */
@@ -1070,10 +1088,12 @@ export { isLegacySession };
 // ── Auto-Abort: abgelaufene/hängende Sessions aufräumen ──────────────────────
 
 export async function autoAbortExpiredAbrechnungsSessions() {
-  // 1) 'pending' älter als 2h (Timeout)
+  // 1) 'pending' älter als 2h (Timeout) – außer, ein PDF wurde schon
+  //    heruntergeladen oder geteilt (siehe markiereAbrechnungAusgeliefert)
   const expiredPending = await pool.query(
     `SELECT id, groups FROM _abrechnung_sessions
      WHERE status = 'pending'
+       AND ausgeliefert_at IS NULL
        AND ((expires_at IS NOT NULL AND expires_at <= NOW()) OR created_at <= NOW() - INTERVAL '2 hours')`
   );
   for (const row of expiredPending.rows) {

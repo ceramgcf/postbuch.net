@@ -409,16 +409,18 @@ export function PostbuchSection({ data }) {
 
   return (
     <Card>
-      <CardHeader className="pb-3">
+      <CardHeader className="pb-3 @container">
         {/* Kopfzeile: Postnummer steht fest, die Badge-Leiste daneben ist ein
             eigener flex-1-Container. Bricht sie um, beginnt die nächste Zeile
             am Container-Rand – also hinter der Postnummer auf Höhe des
-            Cloud-Symbols, nicht am Kartenrand. Gruppierung und justify-between
-            entsprechen der ActionBar weiter unten. */}
-        <div className="flex items-start gap-3">
+            Cloud-Symbols. Gruppierung und justify-between entsprechen der
+            ActionBar weiter unten. In schmalen Karten löst sich der Container
+            auf (contents): Die Gruppen fließen dann neben der Postnummer und
+            brechen am Kartenrand um. */}
+        <div className="flex items-start gap-3 @max-[560px]:flex-wrap @max-[560px]:items-center @max-[560px]:gap-y-2">
           <span className="font-mono text-lg font-bold tabular-nums leading-6 flex-shrink-0">{data.postid}</span>
 
-          <div className="flex-1 min-w-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <div className="flex-1 min-w-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 @max-[560px]:contents">
             {/* Gruppe 1 – Verbleib: Link auf die Datei in der Dateiablage + Verbleib des Originals */}
             <div className="flex items-center gap-1.5 flex-wrap">
               <AblageLink link={data.link} backend={data.storage_backend} />
@@ -485,7 +487,7 @@ export function PostbuchSection({ data }) {
           </div>
         </div>
         {hasWarnungen && warningsOpen && (
-          <div className="mt-3 overflow-hidden">
+          <div className="mt-3 overflow-x-auto">
             <table className="w-full text-xs border-collapse">
               <thead>
                 <tr>
@@ -505,7 +507,7 @@ export function PostbuchSection({ data }) {
           </div>
         )}
         {data.ai_model && aiModelOpen && (
-          <div className="mt-3 overflow-hidden">
+          <div className="mt-3 overflow-x-auto">
             <table className="w-full text-xs border-collapse">
               <thead>
                 <tr>
@@ -715,7 +717,9 @@ export function PostbuchSection({ data }) {
                 <SaveCancelRow field="kontakt" onSave={saveField} onCancel={cancelEdit} onRemove={removeField} isPending={isPending} />
               </div>
             ) : (
-              <dd className="font-medium">{data.kontakt || '–'}</dd>
+              // Lange Gegenstellen (Firma i. A. Firma …) schmal auf zwei Zeilen kürzen;
+              // vollständig beim Bearbeiten und als Tooltip.
+              <dd className="font-medium max-sm:line-clamp-2 break-words" title={data.kontakt || undefined}>{data.kontakt || '–'}</dd>
             )}
           </div>
 

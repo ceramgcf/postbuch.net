@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useParams, useOutletContext, useLocation, useNavigate } from 'react-router';
+import { useZurueckZiel } from '@/hooks/useBackButtonGuard';
+import { useParams, useOutletContext, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { usePostbuchDetail, useCollectingPerioden, usePins, usePinDokument, useUnpinDokument } from '@/hooks/usePostbuch';
 import { useUndoHistory } from '@/hooks/useUndoHistory';
@@ -20,10 +21,10 @@ import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/componen
 import { PageLoader } from '@/components/ui/spinner';
 import { ArrowLeft, ChevronLeft, ChevronRight, FolderOpen, FolderPlus, Plus, Sparkles, Search, X, Pin, Pencil, AlertTriangle } from 'lucide-react';
 import { Link } from 'react-router';
-import { useIsMobile } from '@/hooks/useIsMobile';
-import { lockLandscape, unlockOrientation, useIsPortrait } from '@/hooks/useOrientationLock';
-import { MobilePdfOverlay } from '@/components/layout/MobilePdfOverlay';
-import { useAllowPortrait } from '@/hooks/usePortraitAllowed';
+import { useDarstellung } from '@/hooks/useDarstellung';
+import { SeitenLeiste, useKopfOhneTitel } from '@/hooks/useSeite';
+import { DokumentViewer } from '@/components/layout/DokumentViewer';
+import { FileText, ListChecks } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 
 const routeLabels = {
@@ -46,6 +47,47 @@ function getBackLabel(from) {
   const path = from.split('?')[0];
   if (path.startsWith('/akten/')) return 'Zurück zur Akte';
   return routeLabels[path] || 'Dokumente';
+}
+
+// Umschalter der mobilen Kopfleiste: Daten ↔ Dokument.
+function AnsichtUmschalter({ ansicht, onWechsel }) {
+  const knopf = (wert, Icon, label) => (
+    <button
+      type="button" role="tab" aria-selected={ansicht === wert}
+      onClick={() => onWechsel(wert)}
+      className={`flex h-8 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium transition-colors ${
+        ansicht === wert ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground'
+      }`}
+    >
+      <Icon className="h-4 w-4" />
+      {label}
+    </button>
+  );
+  return (
+    <div role="tablist" aria-label="Ansicht" className="flex rounded-full bg-muted p-0.5">
+      {knopf('daten', ListChecks, 'Daten')}
+      {knopf('dokument', FileText, 'Dokument')}
+    </div>
+  );
+}
+
+function NavPfeil({ item, index, navList, backTo, direction, extraState, suche, verbergen }) {
+  const navigate = useNavigate();
+  const Icon = direction === 'prev' ? ChevronLeft : ChevronRight;
+  return (
+    <button
+      type="button"
+      disabled={!item}
+      onClick={() => item && navigate(`/postbuch/${item.postid}${suche}`, {
+        state: { from: backTo, navList, navIndex: index, ...extraState },
+        replace: true,
+      })}
+      aria-label={direction === 'prev' ? 'Vorheriges Dokument' : 'Nächstes Dokument'}
+      className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-foreground active:bg-primary/10 disabled:opacity-30 ${verbergen ? 'invisible' : ''}`}
+    >
+      <Icon className="h-5 w-5" />
+    </button>
+  );
 }
 
 function NavButton({ item, index, navList, backTo, direction, extraState }) {
@@ -139,30 +181,29 @@ export default function DocumentDetailPage() {
   const aktenmodusBetreff = location.state?.aktenmodusBetreff;
   const aktenmodusBackTo = location.state?.aktenmodusBackTo;
   const extraNavState = aktenmodusAkteId ? { aktenmodusAkteId, aktenmodusBetreff, aktenmodusBackTo } : {};
+  useZurueckZiel(true, () => navigate(backTo, { state: { skipAutoforward: true, zurueck: true } }));
 
-  const isMobile = useIsMobile();
-  const isPortrait = useIsPortrait();
+  const { canWrite, istEingeschraenkt } = useAuth();
+  const { istMobil } = useDarstellung();
+  // Mobil trägt die Kopfleiste nur Blättern und Umschalter; die ID steht im Datenkopf.
+  useKopfOhneTitel();
 
-  // Teilt der AppShell mit, dass Hochformat in der Dokumentendetailansicht erlaubt ist.
-  // Dadurch re-triggert AppShell's useEffect mit portraitAllowed=true und ruft
-  // unlockOrientation() auf – das behebt die Race Condition bei Direktaufruf (Deep Link):
-  // ohne diesen Aufruf würde AppShell's Effect (der nach Child-Effects läuft) auf dem
-  // initialen Mount lockLandscape() aufrufen und den Unlock unten überschreiben.
-  useAllowPortrait(isMobile);
-
-  // Orientation-Lock aufheben wenn Dokumentendetailansicht aktiv ist,
-  // damit der Nutzer für den PDF-Vollbild-Viewer ins Portrait drehen kann.
-  // Desktop: isMobile = false → kein Effekt.
-  // isPortrait wird reaktiv von useIsPortrait() geliefert – kein manuelles setIsPortrait nötig.
-  // Hinweis: Der eigentliche Unlock bei Direktaufruf wird durch AppShell (via
-  // portraitAllowed-State) sichergestellt; dieser Effect dient als Belt-and-Suspenders.
-  useEffect(() => {
-    if (!isMobile) return;
-    unlockOrientation();
-    return () => {
-      lockLandscape();
-    };
-  }, [isMobile]);
+  // Mobil-Layout: Dokument und Daten per Umschalter. Die Wahl
+  // steht in der URL (?ansicht=dokument), damit sie Neuladen und Blättern
+  // übersteht; Umschalten ersetzt den Verlaufseintrag.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const ansicht = searchParams.get('ansicht') === 'dokument' ? 'dokument' : 'daten';
+  // Der Viewer bleibt nach dem ersten Öffnen gemountet und wird bei „Daten“
+  // nur ausgeblendet: Beim bedingten Aushängen blieb sein fixer Rahmen im DOM
+  // stehen. Beim Blättern lädt er das jeweilige Dokument selbst neu.
+  const [viewerFuer, setViewerFuer] = useState(null);
+  if (ansicht === 'dokument' && viewerFuer !== postid) setViewerFuer(postid);
+  const viewerGeladen = viewerFuer !== null;
+  const wechsleAnsicht = (wert) => setSearchParams((p) => {
+    const n = new URLSearchParams(p);
+    if (wert === 'dokument') n.set('ansicht', 'dokument'); else n.delete('ansicht');
+    return n;
+  }, { replace: true, state: location.state });
 
   const { data, isLoading, error } = usePostbuchDetail(postid);
   const { data: linkedAkten = [] } = useAktenByPostId(postid);
@@ -186,42 +227,6 @@ export default function DocumentDetailPage() {
   const [pinKostentraeger, setPinKostentraeger] = useState('');
   const [pinGrund, setPinGrund] = useState('');
 
-  // ── Bearbeitungsschutz: kein Portrait-PDF-Overlay während der Nutzer tippt oder ein Dialog offen ist ──
-  // isInputFocused: wird true, wenn ein <input>/<textarea>/<select> den Fokus hat.
-  // Ein 200ms Debounce auf focusout verhindert, dass kurzes Fokus-Wandern (z. B. beim Drehen) fälschlicherweise
-  // den Schutz deaktiviert, bevor das Orientation-Event greift.
-  const [isInputFocused, setIsInputFocused] = useState(false);
-  useEffect(() => {
-    function onFocusIn(e) {
-      const tag = e.target?.tagName?.toUpperCase();
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
-        setIsInputFocused(true);
-      }
-    }
-    function onFocusOut() {
-      setTimeout(() => {
-        const tag = document.activeElement?.tagName?.toUpperCase();
-        setIsInputFocused(!!(tag && (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT')));
-      }, 200);
-    }
-    document.addEventListener('focusin', onFocusIn);
-    document.addEventListener('focusout', onFocusOut);
-    return () => {
-      document.removeEventListener('focusin', onFocusIn);
-      document.removeEventListener('focusout', onFocusOut);
-    };
-  }, []);
-
-  // hasOpenDialog: beobachtet per MutationObserver, ob irgendein [role="dialog"] im DOM vorhanden ist.
-  // Deckt sowohl lokale Dialoge (Akte hinzufügen/entfernen) als auch Dialoge in Kindkomponenten ab.
-  const [hasOpenDialog, setHasOpenDialog] = useState(false);
-  useEffect(() => {
-    const check = () => setHasOpenDialog(document.querySelector('[role="dialog"]') !== null);
-    const observer = new MutationObserver(check);
-    observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, []);
-
   const semanticSuggestions = useSemanticAktenSuggestions(postid, showAktenMenu);
 
   useEffect(() => {
@@ -243,25 +248,10 @@ export default function DocumentDetailPage() {
   // werden auf der Nachfolgerin geführt.
   const istErsetzt = !!(arztrechnung || handwerkerrechnung || generischeRechnung)?.ersetzung?.ersetzt_durch;
 
-  // ── Portrait-PDF-Modus (nur Mobile, nur Hochformat) ──────────────────────────
-  // Wenn der Nutzer sein Smartphone hochkant dreht: nur den PDF-Viewer anzeigen.
-  // Rückdrehen ins Landscape schließt den Viewer automatisch.
-  // Desktop: isMobile = false → dieser Block wird nie ausgeführt.
-  // Ausnahme: läuft gerade eine Bearbeitung (Feld wird editiert oder Dialog ist offen),
-  // wird der PDF-Overlay unterdrückt, damit keine laufende Eingabe unterbrochen wird.
-  const suppressPortraitPdf = isInputFocused || hasOpenDialog;
-  if (isMobile && isPortrait && !suppressPortraitPdf) {
-    return (
-      <MobilePdfOverlay
-        postid={postid}
-        hasPdf={!!(postbuch.hatPdf || postbuch.onedrive_id)}
-      />
-    );
-  }
-
   const linkedIds = new Set(linkedAkten.map(a => a.akteid));
   const availableAkten = recentAkten.filter(a => !linkedIds.has(a.akteid));
-  const { canWrite, istEingeschraenkt } = useAuth();
+  const hatPdf = !!(postbuch.hatPdf || postbuch.onedrive_id);
+  const suche = ansicht === 'dokument' ? '?ansicht=dokument' : '';
 
   // Personen mit mindestens einer offenen COLLECTING-Periode, und welche
   // Kostenträger dafür bei der gewählten Person überhaupt offen sind (eine
@@ -369,11 +359,30 @@ export default function DocumentDetailPage() {
     }
   }
 
+  // Mobil in der Dokumentansicht liegt der Viewer über der ganzen Fläche; die
+  // Daten bleiben gemountet (Eingaben überleben den Wechsel), nehmen aber
+  // keinen Platz ein und lassen die Seite darunter nicht scrollen.
+  const nurDokument = istMobil && ansicht === 'dokument';
+
   return (
-    <div className="p-6 lg:p-8 space-y-6">
+    <div className={nurDokument ? 'h-0 overflow-hidden' : 'p-6 lg:p-8 space-y-6'} aria-hidden={nurDokument || undefined}>
+      {istMobil && (
+        <SeitenLeiste>
+          <div className="flex w-full items-center justify-between gap-1">
+            <NavPfeil item={prevItem} index={navIndex - 1} navList={navList} backTo={backTo} direction="prev" extraState={extraNavState} suche={suche} verbergen={!prevItem && !nextItem} />
+            <AnsichtUmschalter ansicht={ansicht} onWechsel={wechsleAnsicht} />
+            <NavPfeil item={nextItem} index={navIndex + 1} navList={navList} backTo={backTo} direction="next" extraState={extraNavState} suche={suche} verbergen={!prevItem && !nextItem} />
+          </div>
+        </SeitenLeiste>
+      )}
+      {istMobil && viewerGeladen && (
+        <div style={{ display: ansicht === 'dokument' ? 'contents' : 'none' }}>
+          <DokumentViewer postid={postid} hasPdf={hatPdf} />
+        </div>
+      )}
       {/* Aktenmodus banner */}
       {aktenmodusAkteId && (
-        <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2">
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2">
           <FolderOpen className="h-4 w-4 text-primary" />
           <span className="text-sm">
             Aktenmodus – <span className="font-medium">{aktenmodusAkteId}</span> {aktenmodusBetreff}
@@ -409,15 +418,19 @@ export default function DocumentDetailPage() {
 
       {/* Navigation row */}
       <div className="flex items-center gap-2 flex-wrap">
-        <Link to={backTo} state={{ skipAutoforward: true }}>
+        <Link to={backTo} state={{ skipAutoforward: true, zurueck: true }}>
           <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground hover:text-foreground">
             <ArrowLeft className="h-4 w-4" />
             {backLabel}
           </Button>
         </Link>
-        <span className="text-sm text-muted-foreground font-mono">{postid}</span>
+        {/* Mobil steht die ID im Datenkopf darunter. */}
+        {!istMobil && <span className="text-sm text-muted-foreground font-mono">{postid}</span>}
+        {istMobil && navList.length > 1 && navIndex >= 0 && (
+          <span className="ml-auto text-xs text-muted-foreground tabular-nums">{navIndex + 1} / {navList.length}</span>
+        )}
 
-        {(prevItem || nextItem) && (
+        {!istMobil && (prevItem || nextItem) && (
           <div className="flex items-center gap-1 ml-auto">
             {prevItem && (
               <NavButton item={prevItem} index={navIndex - 1} navList={navList} backTo={backTo} direction="prev" extraState={extraNavState} />
@@ -468,10 +481,10 @@ export default function DocumentDetailPage() {
 
       {/* Akten – linked dossiers */}
       {!istEingeschraenkt && <div className="space-y-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <FolderOpen className="h-4 w-4 text-muted-foreground" />
           <h3 className="text-sm font-medium">Akten</h3>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex flex-wrap justify-end items-center gap-2">
             {postbuch.hasEmbedding && (
               <Button
                 variant="outline"

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useZurueckZiel } from '@/hooks/useBackButtonGuard';
 import { useSearchParams, Link, useNavigate, useNavigationType, useLocation } from 'react-router';
 import { useQueryClient, useQuery, useInfiniteQuery } from '@tanstack/react-query';
 import { GlowHeading } from '@/components/ui/GlowHeading';
@@ -16,7 +17,8 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { PageLoader, EmptyState } from '@/components/ui/spinner';
 import { formatDate, formatCurrency } from '@/lib/utils';
-import { Search, Sparkles, FolderPlus, ArrowLeft, FolderOpen, Archive, FileText, Folder, X } from 'lucide-react';
+import { Search, Sparkles, FolderPlus, ArrowLeft, FolderOpen, Archive, FileText, Folder } from 'lucide-react';
+import { AutoForwardRing } from '@/components/ui/auto-forward-ring';
 
 const SIMILARITY_THRESHOLD = 0.6;
 
@@ -25,44 +27,6 @@ const SIMILARITY_THRESHOLD = 0.6;
 function parseClientIdQuery(q) {
   const m = (q || '').trim().match(/^#?\s*([PpAa])\s*[-.]?\s*(\d{1,6})$/);
   return m ? { kind: m[1].toUpperCase() } : null;
-}
-
-// Countdown-Ring am exakten Treffer: 44px-Button, SVG-Ring läuft in 3s ab,
-// Klick bricht die automatische Weiterleitung ab. Bei reduced-motion Zahlen-Countdown.
-function AutoForwardRing({ onCancel }) {
-  const reduced = typeof window !== 'undefined'
-    && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  const [remaining, setRemaining] = useState(3);
-  useEffect(() => {
-    const iv = setInterval(() => setRemaining((r) => (r > 0 ? r - 1 : 0)), 1000);
-    return () => clearInterval(iv);
-  }, []);
-  return (
-    <button
-      type="button"
-      onClick={(e) => { e.preventDefault(); e.stopPropagation(); onCancel(); }}
-      aria-label="Weiterleitung abbrechen"
-      title="Weiterleitung abbrechen"
-      className="absolute top-3 right-3 z-10 flex h-11 w-11 items-center justify-center rounded-full bg-background/90 backdrop-blur-sm border border-border/60 shadow-sm text-primary transition-opacity"
-    >
-      {reduced ? (
-        <span className="text-sm font-semibold tabular-nums">{remaining}</span>
-      ) : (
-        <>
-          <svg className="absolute inset-0 h-full w-full -rotate-90" viewBox="0 0 44 44" aria-hidden="true">
-            <circle
-              cx="22" cy="22" r="17" fill="none" stroke="currentColor" strokeWidth="2.5"
-              strokeDasharray="106.8" className="animate-countdown-drain"
-            />
-          </svg>
-          <X className="h-4 w-4" />
-        </>
-      )}
-      <span role="timer" aria-live="assertive" className="sr-only">
-        Weiterleitung in {remaining} Sekunden
-      </span>
-    </button>
-  );
 }
 
 export default function SearchPage() {
@@ -78,6 +42,7 @@ export default function SearchPage() {
   const aktenmodusAkteId = searchParams.get('aktenmodusAkteId') || null;
   const aktenmodusBetreff = searchParams.get('aktenmodusBetreff') || null;
   const aktenmodusBackTo = searchParams.get('aktenmodusBackTo') || null;
+  useZurueckZiel(!!aktenmodusAkteId, () => navigate(aktenmodusBackTo || `/akten/${aktenmodusAkteId}`));
 
   // Add-to-akte
   const addDocMutation = useAddDocumentToAkte();
@@ -420,7 +385,7 @@ export default function SearchPage() {
                       </button>
                     )}
                     {forwardTarget?.id === r.postid && (
-                      <AutoForwardRing onCancel={cancelForward} />
+                      <AutoForwardRing onCancel={cancelForward} className="absolute top-3 right-3 z-10" />
                     )}
                   </div>
                   {idx === 0 && r.exact && docResults.length > 1 && (
@@ -496,7 +461,7 @@ export default function SearchPage() {
                     </Card>
                   </Link>
                   {forwardTarget?.id === a.akteid && (
-                    <AutoForwardRing onCancel={cancelForward} />
+                    <AutoForwardRing onCancel={cancelForward} className="absolute top-3 right-3 z-10" />
                   )}
                   </div>
                   {idx === 0 && a.exact && aktenResults.length > 1 && (

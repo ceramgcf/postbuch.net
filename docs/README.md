@@ -24,7 +24,7 @@ Mal sehen, ist das README im Wurzelverzeichnis.
 | [PKV, Beihilfe und Abrechnung](abrechnung-pkv-beihilfe.md) | Arztrechnungen, Einreichungen, Erstattungen, Kürzungen |
 | [Analyse](analyse.md) | Unbezahlte Rechnungen, Handwerkerkosten fürs Finanzamt, Fristenkalender, freie Salden |
 | [Export und Import](export-import.md) | Akte für den Anwalt, Excel-Auswertung, Dokumentenübergabe zwischen Instanzen |
-| [Mobil und PWA](mobil-und-pwa.md) | Querformat-Sperre, Dokumentansicht durch Drehen, App-Installation |
+| [Mobil und PWA](mobil-und-pwa.md) | Mobilansicht, Desktop-Oberfläche auf Touch-Geräten, App-Installation |
 | [Etiketten drucken](etiketten-drucken.md) | Niimbot D110, Etikettenaufbau, Browser-Voraussetzungen |
 | [MCP-Zugriff](mcp.md) | postbuch.net als Datenquelle für Claude, ChatGPT und andere Tools |
 | [Benachrichtigungen](benachrichtigungen.md) | PWA-/Browser-Push (empfohlen), Discord (experimentell), Ereigniskategorien |
@@ -38,6 +38,7 @@ Mal sehen, ist das README im Wurzelverzeichnis.
 | [KI-Anbieter](ki-provider.md) | Provider, Modellstufen, Embeddings, cloudfreier Betrieb |
 | [Backup und Wiederherstellung](backup-wiederherstellung.md) | Datenbank **und** Dokumente sichern, Restore, Notfallwiederherstellung |
 | [Sicherheit](sicherheit.md) | Rollenmodell, Netzwerk, Secrets, Meldewege |
+| [Zugriff von unterwegs](zugriff-von-unterwegs.md) | Per VPN ins Heimnetz: WireGuard über die FRITZ!Box oder Tailscale |
 | [Architektur](architektur.md) | Dienste, Datenfluss, Datenmodell, Schema-Pflege |
 | [Betrieb und Troubleshooting](betrieb-troubleshooting.md) | Updates, Neustart, Logs, häufige Fehlerbilder |
 | [FAQ](faq.md) | Kurze Antworten auf wiederkehrende Fragen |

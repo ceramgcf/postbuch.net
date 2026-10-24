@@ -32,10 +32,13 @@ import { appLog } from '../../app-log.js';
 import { holeFeed, feedQuelleFingerprint } from '../postbuch-feed.js';
 import { validiereEmpfehlungen, EMPFEHLUNGEN_PFAD, EMBEDDING_KLASSE } from './empfehlungen-feed.js';
 import { MODEL_CLASSES, aktiveModellklassen } from './model-classes.js';
+import { EINGEBAUT_ID } from './registry.js';
 import {
-  EMBEDDING_DEFAULT, embeddingConfig, probeEmbeddingDimension, signatureOf,
+  EMBEDDING_DEFAULT, embeddingConfig, embeddingSlot, probeEmbeddingDimension, signatureOf,
 } from '../embedding.js';
+import { vorsilbenVorschlag } from '../embedding-vorsilben.js';
 import { startHelpEmbeddingJob } from '../../service/help-corpus.js';
+import { starteNeuberechnung } from '../../service/embedding-neuberechnung.js';
 import { clientSafeError } from '../net-guard.js';
 import { buildAiHealth, invalidateAiHealthCache } from '../ai-health.js';
 import { loadDynamicSettings } from '../../config.js';
@@ -172,7 +175,10 @@ function findeProvider(kandidat, berichte, feld) {
     return berichte[kandidat.providerId];
   }
   if (!kandidat.providerTyp) return null;
-  const gleicherTyp = Object.values(berichte).filter((b) => b.typ === kandidat.providerTyp);
+  // Der eingebaute Embedding-Dienst ist nur über seine feste ID gemeint. Als
+  // „erster Provider dieses Typs" stünde er sonst für jedes fremde Modell.
+  const gleicherTyp = Object.values(berichte)
+    .filter((b) => b.typ === kandidat.providerTyp && b.id !== EINGEBAUT_ID);
   const mitModell = gleicherTyp.find((b) => b.configured && b.working && listetModell(b, kandidat.model, feld));
   if (mitModell) return mitModell;
   return gleicherTyp.find((b) => b.configured) || gleicherTyp[0] || null;
@@ -342,6 +348,14 @@ async function sichereSnapshotEinmalig() {
   await schreibeSetting(SNAPSHOT_KEY, { erstelltAm: new Date().toISOString(), modelle });
 }
 
+/** Nach einem Wechsel des Embedding-Slots: Hilfe und Bestand nachziehen. */
+function embeddingWechselNachziehen() {
+  startHelpEmbeddingJob({ reason: 'provider-konfiguriert' });
+  starteNeuberechnung({ grund: 'modellempfehlung' }).catch((err) => {
+    appLog('ERROR', 'embedding', `Neuberechnung nach Modellwechsel nicht gestartet: ${err.message}`);
+  });
+}
+
 /** Stellt den gesicherten Vorzustand exakt wieder her. */
 export async function zuruecksetzen() {
   const snap = await leseSetting(SNAPSHOT_KEY, {});
@@ -376,9 +390,9 @@ export async function zuruecksetzen() {
   await appLog('INFO', 'llm-empfehlungen', 'Modellwahl auf den Stand vor der ersten Empfehlung zurückgesetzt', {
     details: `${zurueck.length} Schlüssel`,
   });
-  // Zurück heißt: wieder die alte Signatur. Der Hilfekorpus muss dazu passen,
-  // sonst findet die Anwenderhilfe nichts mehr.
-  if (embeddingBeruehrt) startHelpEmbeddingJob({ reason: 'provider-konfiguriert' });
+  // Zurück heißt: wieder die alte Signatur. Hilfekorpus und Bestand müssen
+  // dazu passen, sonst finden Suche und Anwenderhilfe nichts mehr.
+  if (embeddingBeruehrt) embeddingWechselNachziehen();
   return { zurueckgesetzt: zurueck };
 }
 
@@ -501,7 +515,9 @@ export async function anwenden(klassenKeys, { auto = false, von = 'admin' } = {}
 
     await sichereSnapshotEinmalig();
     if (kl.art === 'embedding') {
-      const cfg = { providerId: ziel.providerId, model: ziel.model, dim };
+      const cfg = embeddingSlot({
+        providerId: ziel.providerId, model: ziel.model, dim, vorsilben: vorsilbenVorschlag(ziel.model),
+      });
       await schreibeSetting('llm_embedding', cfg);
       await schreibeSetting('llm_embedding_signature', signatureOf(cfg));
       embeddingGesetzt = true;
@@ -525,9 +541,9 @@ export async function anwenden(klassenKeys, { auto = false, von = 'admin' } = {}
   }
 
   if (etwasGeschrieben) invalidateAiHealthCache();
-  // Neue Signatur ⇒ der Hilfekorpus passt nicht mehr. Der Job ist idempotent
-  // und läuft im Hintergrund, sichtbar in der Aufgabenanzeige.
-  if (embeddingGesetzt) startHelpEmbeddingJob({ reason: 'provider-konfiguriert' });
+  // Neue Signatur ⇒ Hilfekorpus und Bestand passen nicht mehr. Beide Läufe
+  // sind idempotent und im Hintergrund, sichtbar in der Aufgabenanzeige.
+  if (embeddingGesetzt) embeddingWechselNachziehen();
 
   if (angewendet.length) {
     const zeilen = angewendet.map((a) => `${a.label}: ${a.vorher.model} → ${a.nachher.model} (${a.nachher.providerId})`);

@@ -7,7 +7,7 @@
  * sie wegen nosniff ab (siehe web/nginx.conf).
  *
  * Ein Import genügt – die Zuweisung ist ein idempotenter Modul-Seiteneffekt.
- * PdfPanel.jsx und MobilePdfOverlay.jsx tragen dieselbe Zuweisung noch inline;
+ * PdfPanel.jsx und DokumentViewer.jsx tragen dieselbe Zuweisung noch inline;
  * sie sollen bei Gelegenheit auf dieses Modul umgestellt werden.
  */
 import { pdfjs } from 'react-pdf';

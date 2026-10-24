@@ -11,7 +11,7 @@
  * lassen sich beide Richtungen symmetrisch wieder vertauschen.
  */
 
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomInt } from 'node:crypto';
 import db from '../db.js';
 import { getAdapter, getActiveAdapterFor, legacyOnedriveWerte } from '../lib/storage/index.js';
 import { appLog } from '../app-log.js';
@@ -28,9 +28,8 @@ function randomSuffix() {
   // 6-stellige zufällige alphanumerische Zeichenkette (Großbuchstaben + Zahlen)
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let result = '';
-  const bytes = randomBytes(6);
   for (let i = 0; i < 6; i++) {
-    result += chars[bytes[i] % chars.length];
+    result += chars[randomInt(chars.length)];
   }
   return result;
 }

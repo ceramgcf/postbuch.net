@@ -52,8 +52,9 @@ export function decodeBase64Pdf(dataB64) {
   if (!dataB64 || typeof dataB64 !== 'string') {
     throw new Error('dataB64 fehlt oder ist kein String');
   }
-  const match = /base64,(.*)$/.exec(dataB64);
-  const b64 = (match ? match[1] : dataB64).trim();
+  // indexOf statt Regex: der String kann viele MB groß sein.
+  const marker = dataB64.indexOf('base64,');
+  const b64 = (marker >= 0 ? dataB64.slice(marker + 7) : dataB64).trim();
   const buf = Buffer.from(b64, 'base64');
   if (buf.length < 10) throw new Error('Leere oder fehlerhafte PDF-Daten');
   if (buf[0] !== 0x25 || buf[1] !== 0x50 || buf[2] !== 0x44 || buf[3] !== 0x46) {

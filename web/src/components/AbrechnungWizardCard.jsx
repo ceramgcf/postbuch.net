@@ -19,12 +19,11 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, Play, Check, X, Download, ChevronLeft, ChevronRight, ChevronDown, FileText, Clock, AlertTriangle, ExternalLink, ClipboardCheck } from 'lucide-react';
-import { useIsMobile } from '@/hooks/useIsMobile';
-import { lockLandscape, unlockOrientation, useIsPortrait } from '@/hooks/useOrientationLock';
-import { useAllowPortrait } from '@/hooks/usePortraitAllowed';
+import { useDarstellung } from '@/hooks/useDarstellung';
 import { useAbrechnungLauncher } from '@/hooks/useAbrechnungLauncher';
-import { MobilePdfOverlay } from '@/components/layout/MobilePdfOverlay';
+import { useLocation, useNavigate } from 'react-router';
 import { PdfInlineViewer } from '@/components/ui/pdf-inline-viewer';
+import { PdfTeilenButton, kannDateienTeilen } from '@/components/ui/pdf-teilen';
 import { cn, formatCurrency } from '@/lib/utils';
 
 // ─── Hilfsfunktion: Bytes lesbar formatieren ─────────────────────────────────
@@ -46,11 +45,26 @@ function chunkFileName(group, chunkIndex) {
   return groupFileName(group).replace(/\.pdf$/i, `_Teil${chunkIndex + 1}.pdf`);
 }
 
+// Ab dem ersten Download/Teilen kann die Abrechnung beim Kostenträger liegen:
+// Der Server lässt die Session dann nicht mehr ablaufen, sie endet nur durch
+// Bestätigen oder Abbrechen. Einmal je Session genügt.
+const ausgelieferteSessions = new Set();
+function markiereAusgeliefert(sessionId) {
+  if (!sessionId || ausgelieferteSessions.has(sessionId)) return;
+  ausgelieferteSessions.add(sessionId);
+  api.abrechnungsperiode.ausgeliefert(sessionId).catch(() => ausgelieferteSessions.delete(sessionId));
+}
+
 // ─── Step-Indicator ───────────────────────────────────────────────────────────
 function StepIndicator({ step }) {
   const steps = ['Auswahl', 'Prüfen', 'Einreichen', 'Bestätigen'];
   return (
-    <div className="flex items-center gap-1 text-xs text-muted-foreground">
+    <>
+    {/* Schmal: nur der aktuelle Schritt, die volle Kette passt nicht in eine Zeile. */}
+    <div className="sm:hidden text-xs text-muted-foreground">
+      Schritt {step}/{steps.length} · <span className="font-medium text-primary">{steps[step - 1]}</span>
+    </div>
+    <div className="hidden sm:flex items-center gap-1 text-xs text-muted-foreground">
       {steps.map((label, i) => (
         <span key={label} className="flex items-center gap-1">
           {i > 0 && <ChevronRight className="h-3 w-3 opacity-40" />}
@@ -63,6 +77,7 @@ function StepIndicator({ step }) {
         </span>
       ))}
     </div>
+    </>
   );
 }
 
@@ -407,7 +422,7 @@ function Step1Selection({ onStart, onCancel, istTier, vorauswahl }) {
       )}
 
       {/* Zusammenfassung + Aktionen */}
-      <div className="flex items-center justify-between pt-1 border-t gap-2">
+      <div className="flex items-center justify-between pt-1 border-t gap-2 flex-wrap">
         <span className="text-xs text-muted-foreground flex items-center gap-2 flex-wrap">
           {relevantRows.length > 0
             ? `${relevantRows.length} Periode${relevantRows.length !== 1 ? 'n' : ''} ausgewählt`
@@ -419,7 +434,7 @@ function Step1Selection({ onStart, onCancel, istTier, vorauswahl }) {
             </span>
           )}
         </span>
-        <div className="flex gap-2">
+        <div className="flex gap-2 ml-auto">
           <Button variant="ghost" size="sm" onClick={onCancel}>
             Abbrechen
           </Button>
@@ -447,46 +462,22 @@ function Step1Selection({ onStart, onCancel, istTier, vorauswahl }) {
 // ─── Schritt 2: Prüfen (PDF-Ansicht pro Gruppe) ───────────────────────────────
 function Step2Review({ session, onNext, onCancel, isRejecting }) {
   const [activeGroup, setActiveGroup] = useState(0);
-  const isMobile = useIsMobile();
-  const isPortrait = useIsPortrait();
+  const { istMobil } = useDarstellung();
 
   const groups = session?.groups ?? [];
   const group = groups[activeGroup];
-
-  // Teilt der AppShell mit, dass Hochformat während Step 2 zulässig ist,
-  // damit sie nicht das LandscapeOnly-Overlay einblendet (was Step2Review
-  // unmounten und den Lock-Cleanup triggern würde – Endlos-Flipflop).
-  useAllowPortrait(isMobile);
-
-  // Mobile: Orientation-Lock aufheben, damit User ins Portrait drehen kann um PDF zu sehen.
-  // Beim Verlassen von Step 2: wieder zurück zu Landscape.
-  useEffect(() => {
-    if (!isMobile) return;
-    unlockOrientation();
-    return () => { lockLandscape(); };
-  }, [isMobile]);
-
-  // Portrait-Fullscreen-PDF-Viewer: exakt wie bei DocumentDetailPage
-  if (isMobile && isPortrait && group) {
-    return (
-      <MobilePdfOverlay
-        pdfUrl={api.abrechnungsperiode.pdfUrl(session.sessionId, activeGroup)}
-        fileName={groupFileName(group)}
-      />
-    );
-  }
 
   return (
     <div className="space-y-3">
       {/* Gruppen-Tabs */}
       {groups.length > 1 && (
-        <div className="flex gap-1.5 border-b pb-2">
+        <div className="flex gap-1.5 border-b pb-2 overflow-x-auto">
           {groups.map((g, i) => (
             <button
               key={g.kostentraeger}
               onClick={() => setActiveGroup(i)}
               className={cn(
-                'px-3 py-1 rounded text-sm transition-colors',
+                'px-3 py-1 rounded text-sm transition-colors shrink-0 whitespace-nowrap',
                 i === activeGroup
                   ? 'bg-primary/10 text-primary font-medium'
                   : 'text-muted-foreground hover:bg-muted/50'
@@ -509,7 +500,7 @@ function Step2Review({ session, onNext, onCancel, isRejecting }) {
       {/* Gruppen-Info + Download */}
       {group && (
         <div className="space-y-2">
-          <div className="flex items-start justify-between text-sm gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between text-sm gap-3">
             <div className="text-muted-foreground">
               <PdfIdentity group={group} />
               <div className="mt-1">
@@ -523,10 +514,10 @@ function Step2Review({ session, onNext, onCancel, isRejecting }) {
                 </div>
               )}
             </div>
-            <div className="flex flex-col items-end gap-1 shrink-0">
+            <div className="flex flex-row flex-wrap gap-x-4 gap-y-1 sm:flex-col sm:items-end shrink-0">
               <a
                 href={api.abrechnungsperiode.pdfUrl(session.sessionId, activeGroup)}
-                download={groupFileName(group)}
+                download={groupFileName(group)} onClick={() => markiereAusgeliefert(session.sessionId)}
                 className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
               >
                 <Download className="h-3.5 w-3.5" />
@@ -558,7 +549,7 @@ function Step2Review({ session, onNext, onCancel, isRejecting }) {
                   <a
                     key={ci}
                     href={api.abrechnungsperiode.chunkUrl(session.sessionId, activeGroup, ci)}
-                    download={chunkFileName(group, ci)}
+                    download={chunkFileName(group, ci)} onClick={() => markiereAusgeliefert(session.sessionId)}
                     className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-900 dark:text-amber-200 bg-white dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700 rounded-md px-2.5 py-1.5 hover:bg-amber-50 dark:hover:bg-amber-900/50 transition-colors"
                   >
                     <Download className="h-3.5 w-3.5" />
@@ -573,61 +564,21 @@ function Step2Review({ session, onNext, onCancel, isRejecting }) {
 
       {/* PDF-Viewer */}
       {group && (
-        isMobile ? (
-          <div className="rounded-lg border bg-muted/20 p-4 space-y-3">
-            <div className="flex flex-col items-center gap-2">
-              <FileText className="h-8 w-8 text-muted-foreground/50" />
-              <p className="text-sm text-muted-foreground text-center">
-                Zum Anzeigen: Gerät hochkant drehen
-              </p>
-            </div>
-            <a
-              href={api.abrechnungsperiode.pdfUrl(session.sessionId, activeGroup)}
-              download={groupFileName(group)}
-              className="flex items-center justify-center gap-1.5 text-sm text-primary font-medium w-full rounded-md border border-primary/30 py-2"
-            >
-              <Download className="h-4 w-4" />
-              {group.kostentraeger}-Abrechnung{group.totalSizeBytes ? ` (${fmtBytes(group.totalSizeBytes)})` : ''}
-            </a>
-            {group.chunks && group.chunks.length > 1 && (
-              <div className="space-y-2">
-                <p className="text-xs text-amber-700 font-medium text-center flex items-center justify-center gap-1">
-                  <AlertTriangle className="h-3 w-3" />
-                  Für Kostenträger-Upload ({group.chunks.length} Teile):
-                </p>
-                <div className="flex flex-col gap-2">
-                  {group.chunks.map((chunk, ci) => (
-                    <a
-                      key={ci}
-                      href={api.abrechnungsperiode.chunkUrl(session.sessionId, activeGroup, ci)}
-                      download={chunkFileName(group, ci)}
-                      className="flex items-center justify-center gap-1.5 text-sm text-amber-900 bg-amber-50 border border-amber-200 rounded-md py-2 font-medium"
-                    >
-                      <Download className="h-4 w-4" />
-                      {chunk.label}{chunk.sizeBytes ? ` · ${fmtBytes(chunk.sizeBytes)}` : ''}
-                    </a>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
           <PdfInlineViewer
             key={`${session.sessionId}-${activeGroup}`}
             file={api.abrechnungsperiode.pdfUrl(session.sessionId, activeGroup)}
             className="w-full"
-            style={{ height: '65vh', minHeight: '400px' }}
+            style={istMobil ? { height: '70dvh', minHeight: '320px' } : { height: '65vh', minHeight: '400px' }}
           />
-        )
       )}
 
       {/* Navigation */}
-      <div className="flex items-center justify-between pt-1 border-t gap-2">
+      <div className="flex items-center justify-between pt-1 border-t gap-2 flex-wrap">
         <Button variant="outline" size="sm" onClick={onCancel} disabled={isRejecting}>
           {isRejecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
           Abbrechen
         </Button>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 ml-auto">
           {groups.length > 1 && (
             <div className="flex gap-1">
               <Button variant="ghost" size="sm" disabled={activeGroup === 0}
@@ -653,15 +604,19 @@ function Step2Review({ session, onNext, onCancel, isRejecting }) {
 // ─── Schritt 3: Extern einreichen ───────────────────────────────────────────
 function Step3Submit({ session, onNext, onBack, onCancel, isRejecting }) {
   const groups = session?.groups ?? [];
+  const teilenMoeglich = kannDateienTeilen();
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm space-y-2">
         <p className="font-semibold">Jetzt außerhalb von postbuch.net einreichen</p>
-        <ol className="list-decimal pl-5 space-y-1 text-muted-foreground">
-          <li>Alle PDFs herunterladen und speichern.</li>
-          <li>Bei PKV und/oder Beihilfe im Portal hochladen. Für eine Handy-App die Dateien aufs Handy übertragen, z. B. per E-Mail an sich selbst oder über ein USB-Datenkabel.</li>
-          <li>Nach der externen Einreichung unten weitergehen.</li>
-        </ol>
+        <p className="text-muted-foreground">Für jedes PDF einen der beiden Wege wählen:</p>
+        <ul className="list-disc pl-5 space-y-1 text-muted-foreground">
+          <li><span className="font-medium text-foreground">Herunterladen</span> und im Portal von PKV bzw. Beihilfe hochladen.</li>
+          {teilenMoeglich
+            ? <li><span className="font-medium text-foreground">Teilen</span> und direkt an die App des Kostenträgers übergeben.</li>
+            : <li>Für die <span className="font-medium text-foreground">App des Kostenträgers</span> diese Abrechnung am Smartphone fortsetzen und dort teilen – oder die PDFs aufs Smartphone übertragen.</li>}
+        </ul>
+        <p className="text-muted-foreground">Sobald ein PDF heruntergeladen oder geteilt wurde, bleibt diese Abrechnung offen, bis sie bestätigt oder abgebrochen wird.</p>
       </div>
       <div className="space-y-3">
         {groups.map((group, groupIndex) => (
@@ -669,17 +624,26 @@ function Step3Submit({ session, onNext, onBack, onCancel, isRejecting }) {
             <PdfIdentity group={group} />
             <p className="text-base font-semibold break-all">{groupFileName(group)}</p>
             <p className="text-xs text-muted-foreground">{group.documentCount} Dokument{group.documentCount !== 1 ? 'e' : ''}{group.totalSizeBytes ? ` · ${fmtBytes(group.totalSizeBytes)}` : ''}</p>
-            <a href={api.abrechnungsperiode.pdfUrl(session.sessionId, groupIndex)} download={groupFileName(group)} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
-              <Download className="h-4 w-4" />PDF herunterladen
-            </a>
-            {group.chunks?.length > 1 && <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200 space-y-1.5"><p className="font-medium">Für den Upload bei {group.kostentraeger} bitte diese Teil-PDFs verwenden:</p>{group.chunks.map((chunk, chunkIndex) => <a key={chunkIndex} href={api.abrechnungsperiode.chunkUrl(session.sessionId, groupIndex, chunkIndex)} download={chunkFileName(group, chunkIndex)} className="flex items-center gap-1 underline"><Download className="h-3.5 w-3.5" />{chunk.label}</a>)}</div>}
+            <div className="flex flex-wrap items-center gap-2">
+              <a href={api.abrechnungsperiode.pdfUrl(session.sessionId, groupIndex)} download={groupFileName(group)} onClick={() => markiereAusgeliefert(session.sessionId)} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+                <Download className="h-4 w-4" />Herunterladen
+              </a>
+              <PdfTeilenButton
+                url={api.abrechnungsperiode.pdfUrl(session.sessionId, groupIndex)}
+                fileName={groupFileName(group)}
+                onTeilen={() => markiereAusgeliefert(session.sessionId)}
+                iconClassName="h-4 w-4"
+                className="inline-flex items-center gap-1.5 rounded-md border border-primary/30 px-3 py-2 text-sm font-medium text-primary hover:bg-primary/5 disabled:opacity-60"
+              />
+            </div>
+            {group.chunks?.length > 1 && <div className="rounded-md bg-amber-50 p-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200 space-y-1.5"><p className="font-medium">Für den Upload bei {group.kostentraeger} bitte diese Teil-PDFs verwenden:</p>{group.chunks.map((chunk, chunkIndex) => <div key={chunkIndex} className="flex flex-wrap items-center gap-x-4 gap-y-1"><a href={api.abrechnungsperiode.chunkUrl(session.sessionId, groupIndex, chunkIndex)} download={chunkFileName(group, chunkIndex)} onClick={() => markiereAusgeliefert(session.sessionId)} className="flex items-center gap-1 underline"><Download className="h-3.5 w-3.5" />{chunk.label}</a><PdfTeilenButton url={api.abrechnungsperiode.chunkUrl(session.sessionId, groupIndex, chunkIndex)} fileName={chunkFileName(group, chunkIndex)} onTeilen={() => markiereAusgeliefert(session.sessionId)} className="flex items-center gap-1 underline disabled:opacity-60" /></div>)}</div>}
           </div>
         ))}
       </div>
       <p className="text-xs font-medium text-amber-700">Wichtig: Auf der nächsten Seite muss der Abschluss noch bestätigt werden. Erst dann werden die Perioden geschlossen und die temporären PDFs gelöscht.</p>
-      <div className="flex items-center justify-between border-t pt-3 gap-2">
+      <div className="flex items-center justify-between border-t pt-3 gap-2 flex-wrap">
         <Button variant="outline" size="sm" onClick={onCancel} disabled={isRejecting}><X className="h-3.5 w-3.5" />Abbrechen</Button>
-        <div className="flex gap-2"><Button variant="ghost" size="sm" onClick={onBack}>Zurück</Button><Button size="sm" onClick={onNext}>Zur Bestätigung<ChevronRight className="h-3.5 w-3.5" /></Button></div>
+        <div className="flex gap-2 ml-auto"><Button variant="ghost" size="sm" onClick={onBack}>Zurück</Button><Button size="sm" onClick={onNext}>Zur Bestätigung<ChevronRight className="h-3.5 w-3.5" /></Button></div>
       </div>
     </div>
   );
@@ -726,7 +690,7 @@ function Step4Confirm({ session, breEntscheidung, onConfirm, onReject, isConfirm
         <span className="font-medium">Ich habe die PDFs gespeichert und extern eingereicht bzw. führe die Einreichung jetzt außerhalb von postbuch.net durch.</span>
       </label>
 
-      <div className="flex items-center justify-between pt-1 border-t gap-2">
+      <div className="flex items-center justify-between pt-1 border-t gap-2 flex-wrap">
         <Button variant="outline" size="sm" onClick={onReject} disabled={isRejecting || isConfirming}>
           {isRejecting
             ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -748,6 +712,8 @@ function Step4Confirm({ session, breEntscheidung, onConfirm, onReject, isConfirm
 export default function AbrechnungWizardCard({ istTier = false }) {
   const qc = useQueryClient();
   const { launchRequest, consumeLaunch } = useAbrechnungLauncher();
+  const location = useLocation();
+  const navigate = useNavigate();
 
   // Schritt 0 = Wizard geschlossen, 1–4 = aktive Schritte
   const [step, setStep] = useState(0);
@@ -908,6 +874,16 @@ export default function AbrechnungWizardCard({ istTier = false }) {
     setStep(2);
   }
 
+  // „Fortsetzen“ vom Dashboard: die genannte offene Session wieder aufnehmen.
+  const fortsetzenId = location.state?.abrechnungFortsetzen;
+  useEffect(() => {
+    if (!fortsetzenId || step !== 0) return;
+    const offen = pendingSessions.find((s) => s.id === fortsetzenId);
+    if (!offen) return;
+    handleResumeSession(offen);
+    navigate(location.pathname + location.search, { replace: true, state: {} });
+  }, [fortsetzenId, step, pendingSessions]); // eslint-disable-line
+
   // Extern ausgelöstes Starten mit einer konkreten Periode (von PeriodenPage)
   useEffect(() => {
     if (!launchRequest) return;
@@ -989,22 +965,26 @@ export default function AbrechnungWizardCard({ istTier = false }) {
               <span className="text-muted-foreground text-xs">PDFs mergen + Perioden abschließen</span>
             </div>
             <div className="flex items-center gap-2">
-              {/* Banner: offene Session */}
-              {pendingSessions.length > 0 && (
-                <button
-                  onClick={() => handleResumeSession(pendingSessions[0])}
-                  className="inline-flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5 hover:bg-amber-100 transition-colors"
-                >
+              {/* Offene Abrechnung: erst fortsetzen und bestätigen bzw. abbrechen,
+                  bevor eine neue beginnt. */}
+              {pendingSessions.length > 0 ? (
+                <Button size="sm" onClick={() => handleResumeSession(pendingSessions[0])} className="bg-amber-600 hover:bg-amber-700 text-white">
                   <Clock className="h-3.5 w-3.5" />
                   Offene Abrechnung fortsetzen
-                </button>
+                </Button>
+              ) : (
+                <Button size="sm" onClick={() => { setVorauswahl(null); setStep(1); }}>
+                  <Play className="h-3.5 w-3.5" />
+                  Starten
+                </Button>
               )}
-              <Button size="sm" onClick={() => { setVorauswahl(null); setStep(1); }}>
-                <Play className="h-3.5 w-3.5" />
-                Starten
-              </Button>
             </div>
           </div>
+          {pendingSessions.length > 0 && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Eine neue Abrechnung lässt sich erst starten, wenn die offene bestätigt oder abgebrochen ist.
+            </p>
+          )}
         </CardContent>
       </Card>
     );
@@ -1019,7 +999,7 @@ export default function AbrechnungWizardCard({ istTier = false }) {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-x-3 gap-y-1 flex-wrap">
           <CardTitle className="text-base">Neue Abrechnung</CardTitle>
           <StepIndicator step={step} />
         </div>

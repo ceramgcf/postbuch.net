@@ -130,7 +130,7 @@ async function modelleVon(settings, providerId, fresh) {
         // baseUrl ohne /v1. Die Antwort der Gegenstelle NICHT in den geworfenen
         // Text übernehmen — sie geht an den Client (siehe catch unten).
         if (!Array.isArray(d?.data) && !Array.isArray(d?.models)) {
-          console.warn(`[ai-health] "${providerId}": Antwort ohne Modell-Liste:`,
+          console.warn('[ai-health] "%s": Antwort ohne Modell-Liste:', providerId,
                        JSON.stringify(d ?? null).slice(0, 300));
           throw new Error('Die Gegenstelle hat keine Modell-Liste geliefert. '
             + 'Häufigste Ursache: die Basis-URL endet nicht auf /v1.');
@@ -155,7 +155,8 @@ async function modelleVon(settings, providerId, fresh) {
             return /^(gpt-|o1|o3|o4|chatgpt-)/.test(m.id);
           });
         }
-        models = liste
+        // Ein reiner Embedding-Dienst bietet nichts für die Sprachmodell-Auswahl.
+        models = prov.nurEmbedding ? [] : liste
           .sort((a, b) => (b.created || 0) - (a.created || 0))
           .map(({ id, name }) => ({ id, name }));
       }
@@ -165,7 +166,7 @@ async function modelleVon(settings, providerId, fresh) {
     // Antwort-Bodys der Gegenstelle an. Diese Route pollt das UI von selbst —
     // mit einer frei eintragbaren baseUrl wäre der Fehlertext sonst ein
     // generisches HTTP-Lesegerät fürs LAN. Rohtext nur ins Server-Log.
-    console.warn(`[ai-health] Modell-Listing "${providerId}" fehlgeschlagen:`, e.message);
+    console.warn('[ai-health] Modell-Listing "%s" fehlgeschlagen:', providerId, e.message);
     error = clientSafeError(e);
   }
 
@@ -213,6 +214,14 @@ export async function buildAiHealth({ fresh = false } = {}) {
       ? (subscriptionFeatureUnlocked() && !!prov.apiKey)
       : (!!prov.apiKey || (prov.typ === 'openai-compatible' && prov.id !== 'openai' && !!prov.baseUrl));
     const benutzt = benutzteProviderIds.has(e.id);
+    // Der eingebaute Embedding-Dienst läuft nur, wo er gewählt ist (eigenes
+    // Compose-Profil). Ungewählt ist ein fehlschlagender Abruf kein Defekt;
+    // eingerichtet wird er über die Embedding-Karte.
+    if (prov.nurEmbedding && prov.fest && settings.llm_embedding?.providerId !== e.id) {
+      berichte[e.id] = { id: e.id, label: e.label, typ: e.typ, caps: e.caps,
+                         configured: true, working: false, ruhend: true, error: null, models: [], embeddingModels: [], benutzt };
+      return;
+    }
     if (!e.aktiv || !konfiguriert) {
       berichte[e.id] = { id: e.id, label: e.label, typ: e.typ, caps: e.caps,
                          configured: konfiguriert, working: false, error: null, models: [], embeddingModels: [], benutzt };

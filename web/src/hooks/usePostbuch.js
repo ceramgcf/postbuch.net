@@ -1,14 +1,55 @@
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
 import { api } from '../api/client';
 
-export function usePostbuchList(filters) {
+export function usePostbuchList(filters, { enabled = true } = {}) {
   return useQuery({
     queryKey: ['postbuch', 'list', filters],
+    enabled,
     queryFn: () => api.postbuch.list(filters),
     placeholderData: keepPreviousData,
     refetchInterval: 10_000,
     refetchIntervalInBackground: false,
+  });
+}
+
+/**
+ * Endlosliste (mobile Darstellung). Blättert per Keyset-Cursor, damit neue
+ * Dokumente oben die bereits geladenen Seiten nicht verschieben. Die
+ * Ähnlichkeitssortierung kennt keinen Cursor und blättert per offset.
+ * Gesamtzahl steht nur in der ersten Seite.
+ */
+export function usePostbuchEndlos(filters, { enabled = true } = {}) {
+  const { offset: _o, ...basis } = filters;
+  const limit = Number(basis.limit) || 30;
+  return useInfiniteQuery({
+    queryKey: ['postbuch', 'endlos', basis],
+    queryFn: ({ pageParam }) => api.postbuch.list({ ...basis, limit, ...pageParam }),
+    initialPageParam: {},
+    getNextPageParam: (seite, _alle, letzterParam) => {
+      if (seite.nextCursor) return { cursor: seite.nextCursor };
+      if (basis.sort === 'similarity' && seite.data.length === limit) {
+        return { offset: (letzterParam.offset ?? 0) + limit };
+      }
+      return undefined;
+    },
+    enabled,
+  });
+}
+
+/**
+ * Prüft leise, ob vor der ersten geladenen Zeile neue Dokumente liegen
+ * (nur sinnvoll bei absteigender ID-Sortierung). Liefert die neueste PostID.
+ */
+export function usePostbuchKopf(filters, { enabled = true } = {}) {
+  const { offset: _o, ...basis } = filters;
+  return useQuery({
+    queryKey: ['postbuch', 'kopf', basis],
+    queryFn: () => api.postbuch.list({ ...basis, limit: 1 }),
+    select: (antwort) => antwort.data[0]?.postid ?? null,
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
+    enabled,
   });
 }
 

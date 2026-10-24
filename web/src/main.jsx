@@ -5,8 +5,8 @@ import { AuthProvider } from '@/hooks/useAuth';
 import { TaskProvider } from '@/hooks/useTaskStore';
 import { UndoHistoryProvider } from '@/hooks/useUndoHistory';
 import { AbrechnungLauncherProvider } from '@/hooks/useAbrechnungLauncher';
-import { PortraitAllowedProvider } from '@/hooks/usePortraitAllowed';
 import { PrinterProvider } from '@/contexts/PrinterContext';
+import { DarstellungProvider } from '@/hooks/useDarstellung';
 import App from './App';
 import './index.css';
 
@@ -23,19 +23,19 @@ const queryClient = new QueryClient({
 createRoot(document.getElementById('root')).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <TaskProvider>
-          <UndoHistoryProvider>
-            <AbrechnungLauncherProvider>
-              <PortraitAllowedProvider>
+      <DarstellungProvider>
+        <AuthProvider>
+          <TaskProvider>
+            <UndoHistoryProvider>
+              <AbrechnungLauncherProvider>
                 <PrinterProvider>
                   <App />
                 </PrinterProvider>
-              </PortraitAllowedProvider>
-            </AbrechnungLauncherProvider>
-          </UndoHistoryProvider>
-        </TaskProvider>
-      </AuthProvider>
+              </AbrechnungLauncherProvider>
+            </UndoHistoryProvider>
+          </TaskProvider>
+        </AuthProvider>
+      </DarstellungProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

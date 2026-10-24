@@ -9,193 +9,98 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { Pagination } from '@/components/ui/Pagination';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
-import { ColumnResizer } from '@/components/table/ColumnResizer';
+import { DataView } from '@/components/listen/DataView';
 import { ColumnSettings } from '@/components/table/ColumnSettings';
 import { useColumnConfig } from '@/hooks/useColumnConfig';
-import { useIsMobile } from '@/hooks/useIsMobile';
+import { useDarstellung } from '@/hooks/useDarstellung';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { PageLoader, EmptyState } from '@/components/ui/spinner';
 import { formatRelativeTime } from '@/lib/utils';
-import { FolderOpen, Plus, Search, ArrowUp, ArrowDown, Filter, FilterX, CalendarClock, Archive } from 'lucide-react';
+import { FolderOpen, Plus, Search, CalendarClock, Archive } from 'lucide-react';
 
 // Kanonische Spaltendefinition (Single-Point-of-Truth); `elastic` schluckt die Restbreite.
+// `zelle`/`mobil` siehe DataView: dieselbe Definition liefert Tabelle und Karte.
 const aktenColumns = [
-  { key: 'akteid',        label: 'ID',           sortable: true,  filterable: true,  defaultWidth: 88,  minWidth: 64 },
-  { key: 'betreff',       label: 'Betreff',      sortable: true,  filterable: true,  elastic: true },
-  { key: 'dok_count',     label: 'Dokumente',    defaultWidth: 108, minWidth: 80 },
-  { key: 'schlagwoerter', label: 'Schlagwörter', defaultWidth: 220, minWidth: 110 },
-  { key: 'updated_at',    label: 'Aktualisiert', sortable: true,  defaultWidth: 128, minWidth: 96 },
+  { key: 'akteid', label: 'ID', sortable: true, filterable: true, defaultWidth: 88, minWidth: 64,
+    mobil: 'meta', zellKlasse: 'font-mono text-xs overflow-hidden',
+    zelle: (row, { istMobil }) => istMobil ? <span className="font-mono">{row.akteid}</span> : row.akteid },
+  { key: 'betreff', label: 'Betreff', sortable: true, filterable: true, elastic: true,
+    mobil: 'titel', zellKlasse: 'truncate',
+    zelle: (row) => (
+      <span className="inline-flex max-w-full items-center gap-1.5">
+        {row.historisch && <Archive className="h-3 w-3 flex-shrink-0 text-muted-foreground" title="Historisch" />}
+        <span className="truncate">{row.betreff || '–'}</span>
+        {row.wv_active_count > 0 && (
+          <CalendarClock className="h-3.5 w-3.5 flex-shrink-0 text-amber-500" title={`${row.wv_active_count} aktive Wiedervorlage${row.wv_active_count > 1 ? 'n' : ''}`} />
+        )}
+      </span>
+    ) },
+  { key: 'dok_count', label: 'Dokumente', defaultWidth: 108, minWidth: 80,
+    mobil: 'rechts', zellKlasse: 'text-center overflow-hidden',
+    zelle: (row, { istMobil }) => istMobil
+      ? <span className="text-xs font-medium text-muted-foreground">{row.dok_count} Dok.</span>
+      : <Badge variant="secondary" className="text-xs">{row.dok_count}</Badge> },
+  { key: 'schlagwoerter', label: 'Schlagwörter', defaultWidth: 220, minWidth: 110,
+    mobil: 'badges', zellKlasse: 'overflow-hidden whitespace-nowrap',
+    zelle: (row) => {
+      const sw = row.schlagwoerter || [];
+      if (sw.length === 0) return null;
+      return (
+        <div className="flex gap-1 items-center overflow-hidden whitespace-nowrap">
+          {sw.slice(0, 3).map((w) => (
+            <Badge key={w} variant="outline" className="text-[10px] truncate">{w}</Badge>
+          ))}
+          {sw.length > 3 && <Badge variant="outline" className="text-[10px]">+{sw.length - 3}</Badge>}
+        </div>
+      );
+    } },
+  { key: 'updated_at', label: 'Aktualisiert', sortable: true, defaultWidth: 128, minWidth: 96,
+    mobil: 'meta', zellKlasse: 'text-xs text-muted-foreground whitespace-nowrap overflow-hidden',
+    zelle: (row) => formatRelativeTime(row.updated_at) },
 ];
-const AKTEN_SELECT_WIDTH = 128;
+
+const spalteEinfuegen = {
+  key: '_select', label: '', width: 128, resizable: false, mobil: 'aktion',
+  zelle: (row, { onSelectAkte }) => (
+    <Button
+      size="sm"
+      variant="secondary"
+      onClick={(e) => { e.stopPropagation(); onSelectAkte(row); }}
+      className="text-xs"
+    >
+      Hier einfügen
+    </Button>
+  ),
+};
+
+const MOBIL_AKTEN = 200;
 
 function AktenTable({ data, sort, order, onSort, columnFilters, onColumnFilterChange, onRowClick, aktenwahlPostId, onSelectAkte, columnConfig }) {
-  const isMobile = useIsMobile();
-  const [openFilters, setOpenFilters] = useState(() =>
-    new Set(Object.keys(columnFilters || {}).filter((k) => columnFilters[k]))
-  );
-
-  const cfgColumns = columnConfig?.columns
-    ?? aktenColumns.map((c) => ({ ...c, visible: true, width: c.defaultWidth ?? null }));
-  const visibleStatic = cfgColumns.filter((c) => c.visible);
-  const visibleKeys = new Set(visibleStatic.map((c) => c.key));
-
-  // Finale Reihenfolge: konfigurierte sichtbare Statik + (im Aktenwahlmodus) die _select-Spalte.
-  const allColumns = [...visibleStatic];
-  if (aktenwahlPostId) {
-    allColumns.push({ key: '_select', label: '', width: AKTEN_SELECT_WIDTH, resizable: false });
-  }
-
-  const handleSort = (key) => {
-    if (!allColumns.find((c) => c.key === key)?.sortable) return;
-    onSort(key, sort === key && order === 'asc' ? 'desc' : 'asc');
-  };
-
-  const SortIcon = ({ col }) => {
-    if (sort !== col) return null;
-    return order === 'asc'
-      ? <ArrowUp className="h-3 w-3 inline ml-1" />
-      : <ArrowDown className="h-3 w-3 inline ml-1" />;
-  };
-
-  const openFilter = (key) => setOpenFilters((prev) => new Set([...prev, key]));
-  const closeFilter = (key) => {
-    setOpenFilters((prev) => { const s = new Set(prev); s.delete(key); return s; });
-    onColumnFilterChange?.(key, '');
-  };
+  const { istMobil } = useDarstellung();
+  // Desktop: Nutzer-Konfiguration; mobil zählt nur `mobil` der Spalte.
+  const basis = istMobil
+    ? aktenColumns
+    : (columnConfig?.columns ?? aktenColumns.map((c) => ({ ...c, visible: true, width: c.defaultWidth ?? null })))
+        .filter((c) => c.visible);
+  const spalten = aktenwahlPostId ? [...basis, spalteEinfuegen] : basis;
 
   return (
-    <Table className={isMobile ? undefined : 'table-fixed'}>
-      {!isMobile && (
-        <colgroup>
-          {allColumns.map((col) => (
-            <col
-              key={col.key}
-              data-colkey={col.key}
-              style={!col.elastic && col.width ? { width: `${col.width}px` } : undefined}
-            />
-          ))}
-        </colgroup>
-      )}
-      <TableHeader>
-        <TableRow>
-          {allColumns.map((col) => {
-            const isOpen = openFilters.has(col.key);
-            const hasValue = !!(columnFilters?.[col.key]);
-            const showResizer = !isMobile && col.resizable !== false && !col.elastic;
-            return (
-              <TableHead
-                key={col.key}
-                className={`relative ${col.sortable && !isOpen ? 'cursor-pointer select-none' : ''}`}
-                onClick={() => !isOpen && col.sortable && handleSort(col.key)}
-              >
-                <div className="flex items-center gap-1 min-w-0">
-                  {col.filterable && onColumnFilterChange && isOpen ? (
-                    <input
-                      autoFocus
-                      type="text"
-                      value={columnFilters?.[col.key] || ''}
-                      onChange={(e) => onColumnFilterChange(col.key, e.target.value)}
-                      onClick={(e) => e.stopPropagation()}
-                      placeholder={col.label + '…'}
-                      className="min-w-0 flex-1 h-5 px-1 text-xs rounded border border-input bg-background font-normal placeholder:text-muted-foreground/50 focus:outline-none focus:ring-1 focus:ring-ring/50 focus:border-primary/40"
-                    />
-                  ) : (
-                    <span className="flex-1 truncate">{col.label}{col.sortable && <SortIcon col={col.key} />}</span>
-                  )}
-                  {col.filterable && onColumnFilterChange && (
-                    isOpen || hasValue
-                      ? <button
-                          onClick={(e) => { e.stopPropagation(); closeFilter(col.key); }}
-                          className="flex-shrink-0 text-primary hover:text-primary/70"
-                          title="Filter löschen und schließen"
-                        ><FilterX className="h-3 w-3" /></button>
-                      : <button
-                          onClick={(e) => { e.stopPropagation(); openFilter(col.key); }}
-                          className="flex-shrink-0 text-muted-foreground/40 hover:text-muted-foreground"
-                          title="Spalte filtern"
-                        ><Filter className="h-3 w-3" /></button>
-                  )}
-                </div>
-                {showResizer && (
-                  <ColumnResizer
-                    columnKey={col.key}
-                    min={col.minWidth ?? 40}
-                    max={col.maxWidth ?? 600}
-                    onCommit={(px) => columnConfig?.setWidth(col.key, px)}
-                    onReset={() => columnConfig?.resetWidth(col.key)}
-                  />
-                )}
-              </TableHead>
-            );
-          })}
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {data.length === 0 && (
-          <TableRow>
-            <TableCell colSpan={allColumns.length} className="h-32 text-center text-muted-foreground text-sm">
-              Keine Akten gefunden.
-            </TableCell>
-          </TableRow>
-        )}
-        {data.map((row) => (
-          <TableRow
-            key={row.akteid}
-            className={`cursor-pointer${row.historisch ? ' opacity-50' : ''}`}
-            onClick={() => onRowClick(row)}
-          >
-            {visibleKeys.has('akteid') && <TableCell className="font-mono text-xs overflow-hidden">{row.akteid}</TableCell>}
-            {visibleKeys.has('betreff') && (
-            <TableCell className={`truncate ${isMobile ? 'max-w-[400px]' : ''}`}>
-              <span className="inline-flex items-center gap-1.5">
-                {row.historisch && <Archive className="h-3 w-3 flex-shrink-0 text-muted-foreground" title="Historisch" />}
-                {row.betreff || '–'}
-                {row.wv_active_count > 0 && (
-                  <CalendarClock className="h-3.5 w-3.5 flex-shrink-0 text-amber-500" title={`${row.wv_active_count} aktive Wiedervorlage${row.wv_active_count > 1 ? 'n' : ''}`} />
-                )}
-              </span>
-            </TableCell>
-            )}
-            {visibleKeys.has('dok_count') && (
-            <TableCell className="text-center overflow-hidden">
-              <Badge variant="secondary" className="text-xs">{row.dok_count}</Badge>
-            </TableCell>
-            )}
-            {visibleKeys.has('schlagwoerter') && (
-            <TableCell className="overflow-hidden whitespace-nowrap">
-              <div className="flex gap-1 items-center overflow-hidden whitespace-nowrap">
-                {(row.schlagwoerter || []).slice(0, 3).map((sw) => (
-                  <Badge key={sw} variant="outline" className="text-[10px] truncate">{sw}</Badge>
-                ))}
-                {(row.schlagwoerter || []).length > 3 && (
-                  <Badge variant="outline" className="text-[10px]">+{row.schlagwoerter.length - 3}</Badge>
-                )}
-              </div>
-            </TableCell>
-            )}
-            {visibleKeys.has('updated_at') && (
-            <TableCell className="text-xs text-muted-foreground whitespace-nowrap overflow-hidden">
-              {formatRelativeTime(row.updated_at)}
-            </TableCell>
-            )}
-            {aktenwahlPostId && (
-              <TableCell>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={(e) => { e.stopPropagation(); onSelectAkte(row); }}
-                  className="text-xs"
-                >
-                  Hier einfügen
-                </Button>
-              </TableCell>
-            )}
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <DataView
+      spalten={spalten}
+      daten={data}
+      zeilenKey="akteid"
+      onZeile={onRowClick}
+      ctx={{ istMobil, onSelectAkte }}
+      leerText="Keine Akten gefunden."
+      zeilenKlasse={(row) => (row.historisch ? 'opacity-50' : '')}
+      sort={sort}
+      order={order}
+      onSort={onSort}
+      columnFilters={columnFilters}
+      onColumnFilterChange={onColumnFilterChange}
+      columnConfig={columnConfig}
+    />
   );
 }
 
@@ -205,6 +110,7 @@ export default function AktenListPage() {
   const location = useLocation();
   const { closePdf } = useOutletContext();
   const [perPage, setPerPage] = usePerPage();
+  const { istMobil } = useDarstellung();
   const columnConfig = useColumnConfig('akten', aktenColumns);
 
   // Aktenwahlmodus: a postid is passed when user wants to add a document to an akte
@@ -240,7 +146,8 @@ export default function AktenListPage() {
   // Reserve ~5.5% of container height as buffer (rounded up) to avoid overflow
   const AUTO_BUFFER_PX = Math.ceil(containerHeight * 0.06);
   const autoRows = Math.max(5, Math.floor((containerHeight - TABLE_HEAD_H - AUTO_BUFFER_PX) / ROW_H));
-  const effectivePerPage = perPage === 'auto' ? autoRows : Number(perPage);
+  // Mobil: Karten in einem Stück (Akten sind wenige; 200 = Höchstgrenze der API).
+  const effectivePerPage = istMobil ? MOBIL_AKTEN : perPage === 'auto' ? autoRows : Number(perPage);
 
   const filtersFromUrl = {
     q: searchParams.get('q') || undefined,
@@ -345,9 +252,9 @@ export default function AktenListPage() {
     updateFilters({ ...filters, offset: (page - 1) * effectivePerPage });
   };
 
-  const handlePerPageChange = (value) => {
+  const handlePerPageChange = (value, { automatisch = false } = {}) => {
     setPerPage(value);
-    updateFilters({ ...filters, offset: 0 });
+    if (!automatisch) updateFilters({ ...filters, offset: 0 });
   };
 
   const handleCreateAkte = async () => {
@@ -422,7 +329,7 @@ export default function AktenListPage() {
       {/* Aktenwahlmodus-Banner */}
       {aktenwahlPostId && (
         <div className="px-5 pt-3 pb-1">
-          <div className="flex items-center gap-2 text-sm">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
             <Badge className="bg-primary/10 text-primary border-primary/30">Aktenwahlmodus</Badge>
             <span className="text-muted-foreground">
               Wählen Sie eine Akte für Dokument <span className="font-mono font-semibold">{aktenwahlPostId}</span>
@@ -437,8 +344,8 @@ export default function AktenListPage() {
         </div>
       )}
 
-      <div className="flex items-center gap-3 px-5 py-3.5 border-b border-border/60 bg-card">
-        <div className="relative flex-1 max-w-sm">
+      <div className="flex items-center gap-3 px-5 py-3.5 border-b border-border/60 bg-card max-sm:gap-2 max-sm:px-4">
+        <div className="relative flex-1 max-w-sm min-w-0">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
             type="text"
@@ -448,9 +355,9 @@ export default function AktenListPage() {
             className="pl-9 h-9"
           />
         </div>
-        <Button size="sm" onClick={() => setShowNewDialog(true)} className="gap-1.5">
+        <Button size="sm" onClick={() => setShowNewDialog(true)} className="gap-1.5" title="Neue Akte">
           <Plus className="h-3.5 w-3.5" />
-          Neue Akte
+          <span className="max-sm:sr-only">Neue Akte</span>
         </Button>
         <button
           onClick={() => setShowHistorisch(!showHistorisch)}
@@ -459,14 +366,16 @@ export default function AktenListPage() {
         >
           <Archive className="h-4 w-4" />
         </button>
-        <ColumnSettings
-          columns={columnConfig.columns}
-          visibleCount={columnConfig.visibleCount}
-          onToggle={columnConfig.toggleVisible}
-          onReset={columnConfig.reset}
-        />
+        {!istMobil && (
+          <ColumnSettings
+            columns={columnConfig.columns}
+            visibleCount={columnConfig.visibleCount}
+            onToggle={columnConfig.toggleVisible}
+            onReset={columnConfig.reset}
+          />
+        )}
         {data && (
-          <span className="text-sm text-muted-foreground whitespace-nowrap ml-auto flex items-center gap-2">
+          <span className="text-sm text-muted-foreground whitespace-nowrap ml-auto flex items-center gap-2 max-sm:text-xs">
             {isFetching && !isLoading && (
               <span className="inline-block h-3 w-3 rounded-full border-2 border-primary border-t-transparent animate-spin" />
             )}
@@ -476,7 +385,7 @@ export default function AktenListPage() {
       </div>
 
       {/* Table */}
-      <div ref={containerRef} className="flex-1 overflow-auto">
+      <div ref={containerRef} className={`flex-1 overflow-auto ${istMobil ? 'p-3' : ''}`}>
         {isLoading ? (
           <PageLoader />
         ) : error ? (

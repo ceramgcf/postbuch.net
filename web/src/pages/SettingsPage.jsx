@@ -25,7 +25,7 @@ import {
   LifeBuoy, Fingerprint, Search, Cpu, Coins, MessageSquare,
   FileText, RotateCw, AlertOctagon, Copy, CalendarClock, Euro,
   Folder, Plus, Printer, Bluetooth, BluetoothConnected, BluetoothOff, BluetoothSearching,
-  Plug, KeyRound, Server, HardDrive, ArrowLeftRight, Lock, FolderTree,
+  Plug, KeyRound, UserRound, Server, HardDrive, ArrowLeftRight, Lock, FolderTree,
 } from 'lucide-react';
 import { usePrinter } from '@/contexts/PrinterContext';
 import BackupWarnung from '@/components/BackupWarnung';
@@ -37,6 +37,8 @@ import PushInstanzCard from '@/components/settings/PushInstanzCard';
 import UpdateCard from '@/components/settings/UpdateCard';
 import { ScannerFreigabe, ErreichbarkeitCard } from '@/components/settings/FreigabeSchalter';
 import EmpfehlungenCard from '@/components/settings/EmpfehlungenCard';
+import DebugModusCard from '@/components/settings/DebugModusCard';
+import EtikettQrCard from '@/components/settings/EtikettQrCard';
 import ModelSelector from '@/components/settings/ModelSelector';
 import { WurzelordnerFeld, useAppOrdner, standardWurzel, wurzelLabel } from '@/components/settings/WurzelordnerFeld';
 import ScannerDiscoveryCard from '@/components/settings/ScannerDiscoveryCard';
@@ -48,6 +50,8 @@ import { MODEL_CLASSES, modellwahlAus, klassenFuer } from '@/components/settings
 import { ModellwahlAuswahl } from '@/components/settings/ModellwahlAuswahl';
 import { renderLabelCanvas } from '@/lib/labelRenderer';
 import { gleichesModell } from '@/lib/modellId';
+import { leseImportFolgen, schreibeImportFolgen } from '@/lib/importFolgen';
+import { Switch } from '@/components/ui/switch';
 import {
   useVerbleibKategorienAll,
   useCreateVerbleibKategorie,
@@ -2940,6 +2944,8 @@ function AllgemeinTab() {
         </CardContent>
       </Card>
 
+      <DebugModusCard />
+
       {saveMutation.isError && <p className="text-sm text-destructive">{saveMutation.error?.message}</p>}
       <div className="flex items-center gap-3">
         <Button size="sm" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
@@ -4445,6 +4451,8 @@ function DruckerTab() {
         </CardContent>
       </Card>
 
+      <EtikettQrCard />
+
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Hinweise</CardTitle>
@@ -4643,8 +4651,9 @@ function McpTab() {
 
 // ── Settings Tab Bar ──────────────────────────────────────────────────────────
 
+// Tab-ID bleibt 'konto' (Standard-Tab für Nicht-Admins, ?tab=konto in Lesezeichen), beschriftet ist er „Persönlich“.
 function KontoTab() {
-  const { username, isAdmin } = useAuth();
+  const { username, isAdmin, canWrite } = useAuth();
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -4665,6 +4674,7 @@ function KontoTab() {
   };
 
   return (
+    <>
     <Card>
       <CardHeader>
         <CardTitle>Konto</CardTitle>
@@ -4691,13 +4701,51 @@ function KontoTab() {
         )}
       </CardContent>
     </Card>
+    {canWrite && <ImportFolgenKarte />}
+    </>
+  );
+}
+
+// Gerätebezogen (localStorage). Geteilte PDFs folgen immer.
+function ImportFolgenKarte() {
+  const [wert, setWert] = useState(leseImportFolgen);
+  const setze = (feld, an) => {
+    const neu = { ...wert, [feld]: an };
+    setWert(neu);
+    schreibeImportFolgen(neu);
+  };
+  const optionen = [
+    { feld: 'datei', titel: 'Dateiimport', text: 'Nach dem Hochladen von PDFs auf der Seite Importieren.' },
+    { feld: 'scan', titel: 'Scannen', text: 'Nach einem auf der Seite Importieren gestarteten Scan – per Kamera nach dem Hochladen, per Scanner, sobald er in der Pipeline angekommen ist.' },
+  ];
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Automatisch folgen beim Import</CardTitle>
+        <CardDescription>
+          Wechselt nach dem Import zu Logs → Jobs und öffnet das fertige Dokument. Gilt nur für diesen
+          Browser; über das Teilen-Menü übergebene PDFs folgen immer.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {optionen.map(({ feld, titel, text }) => (
+          <div key={feld} className="flex items-start justify-between gap-4">
+            <span>
+              <span className="block text-sm font-medium">{titel}</span>
+              <span className="block text-xs text-muted-foreground">{text}</span>
+            </span>
+            <Switch checked={wert[feld]} onCheckedChange={(an) => setze(feld, an)} label={`Automatisch folgen: ${titel}`} />
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 
 function SettingsTabBar({ tab, onTabChange }) {
   const { isAdmin, canWrite, istEingeschraenkt } = useAuth();
   const adminTabs = [
-    { id: 'konto',              label: 'Konto',              icon: KeyRound },
+    { id: 'konto',              label: 'Persönlich',         icon: UserRound },
     { id: 'allgemein',          label: 'Allgemein',          icon: Globe    },
     { id: 'ki',                 label: 'KI',                 icon: Bot      },
     { id: 'scanner',            label: 'Scanner',            icon: ScanLine },
@@ -4786,7 +4834,7 @@ export default function SettingsPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-3xl mx-auto space-y-6">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Settings className="h-5 w-5 text-primary" />
         <h1 className="text-xl font-semibold">Einstellungen</h1>
         <DevUnlockVersion isAdmin={isAdmin} />

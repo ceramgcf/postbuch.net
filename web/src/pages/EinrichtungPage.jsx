@@ -5,7 +5,7 @@
  *
  * 1. **Der Assistent wird nicht verlassen.** Dateiablage und KI werden inline mit
  *    denselben Karten gerendert wie in den Einstellungen (OneDriveSection,
- *    ProviderCard, EmbeddingCard). Wer in Schritt 4 klickt, landet nicht in
+ *    ProviderCard, EmpfehlungenCard). Wer in Schritt 4 klickt, landet nicht in
  *    einem anderen Bereich ohne Rückweg.
  * 2. **Es wird nichts geraten.** Jedes vorbelegte Feld stammt aus dem
  *    Ist-Zustand der Instanz. Ein hart einkodierter Vorgabewert hat einer
@@ -25,6 +25,7 @@ import { api } from '@/api/client';
 import { pushApi } from '@/api/push';
 import { einrichtungsGateFreigeben } from '@/lib/einrichtung-gate';
 import { schlankeHilfeUrl } from '@/lib/docs';
+import EingebauterEmbeddingDienst from '@/components/settings/EingebauterEmbeddingDienst';
 import { usePushSubscription } from '@/hooks/usePushSubscription';
 import { Logo } from '@/components/ui/Logo';
 import { Testergebnis } from '@/components/ui/testergebnis';
@@ -39,7 +40,6 @@ import MenschenCard from '@/components/settings/MenschenCard';
 import OneDriveSection from '@/components/settings/OneDriveSection';
 import NextcloudCard from '@/components/settings/NextcloudCard';
 import ProviderCard from '@/components/settings/ProviderCard';
-import EmbeddingCard from '@/components/settings/EmbeddingCard';
 import EmpfehlungenCard from '@/components/settings/EmpfehlungenCard';
 import ModelSelector from '@/components/settings/ModelSelector';
 import { MODEL_CLASSES, modellwahlAus, klassenFuer } from '@/components/settings/modelClasses';
@@ -1439,10 +1439,10 @@ export default function EinrichtungPage() {
  * fünf Karten nebeneinander, von denen vier ohne konfigurierten Provider nur
  * Fehlermeldungen anzeigen konnten – das las sich wie ein kaputter Assistent.
  *
- * Sprachmodell und Embedding sind zwei getrennte Voraussetzungen. Ein
- * 2-in-1-Provider (OpenAI) erfüllt beide auf einmal, zwei getrennte Provider
- * gehen genauso. Beides ist Pflicht: ohne Embedding gibt es weder Ähnlichkeits-
- * suche noch Duplikatprüfung noch Anwenderhilfe.
+ * Sprachmodell und Embedding sind zwei getrennte Voraussetzungen. Beides ist
+ * Pflicht: ohne Embedding gibt es weder Ähnlichkeitssuche noch Duplikatprüfung
+ * noch Anwenderhilfe. Das Embedding übernimmt im Assistenten immer der
+ * eingebaute Dienst; einen anderen gibt es nur bewusst in den Einstellungen.
  */
 function Stufe({ nummer, titel, beschreibung, gesperrt, sperrgrund, children }) {
   return (
@@ -1484,7 +1484,6 @@ function KiSchritt({ status, pruefen, onSchritt }) {
   const llmPruefung = status?.pruefungen?.kiLlm;
   const embPruefung = status?.pruefungen?.kiEmbedding;
   const llmBereit = (llmPruefung?.llmProviders || []).length > 0;
-  const embeddingBereit = (embPruefung?.embeddingProviders || []).length > 0;
 
   const klassenStatus = llmPruefung?.modellklassen || [];
   const statusMap = Object.fromEntries(klassenStatus.map((x) => [x.key, x]));
@@ -1536,10 +1535,9 @@ function KiSchritt({ status, pruefen, onSchritt }) {
     <div className="space-y-4">
       <StatusZeilen status={status} nur={['kiLlm', 'kiEmbedding']} aktuellerSchritt="ki" onSchritt={onSchritt} />
       <Testergebnis>
-        Ein einfacher Einstieg ist beispielsweise ein OpenAI-Entwicklerkonto mit kleinem
-        Guthaben: ein Konto kann Sprachmodelle und Embeddings bereitstellen. Das ist ein
-        möglicher kurzer Weg, keine Anbieterempfehlung. Cloudfrei geht es ebenso mit einem
-        lokalen Chat- und Embedding-Modell.
+        Gebraucht wird ein Sprachmodell-Provider, etwa ein Entwicklerkonto bei einem
+        KI-Anbieter mit kleinem Guthaben oder cloudfrei ein lokales Modell. Das ist ein
+        möglicher Weg, keine Anbieterempfehlung. Embeddings berechnet postbuch.net selbst.
       </Testergebnis>
 
       <Stufe
@@ -1554,10 +1552,10 @@ function KiSchritt({ status, pruefen, onSchritt }) {
         nummer={2}
         titel="Modellempfehlungen"
         beschreibung="Die mit dieser Version ausgelieferte Auswahl – ein Klick belegt alle Aufgaben sinnvoll vor."
-        gesperrt={!llmBereit && !embeddingBereit}
-        sperrgrund="Wird frei, sobald ein Provider den Test bestanden hat."
+        gesperrt={!llmBereit}
+        sperrgrund="Wird frei, sobald ein Sprachmodell-Provider den Test bestanden hat."
       >
-        <EmpfehlungenCard llmGesperrt={!llmBereit} embeddingGesperrt={!embeddingBereit} onChanged={nachProviderAenderung} />
+        <EmpfehlungenCard llmGesperrt={!llmBereit} ohneEmbedding onChanged={nachProviderAenderung} />
       </Stufe>
 
       <Stufe
@@ -1604,18 +1602,10 @@ function KiSchritt({ status, pruefen, onSchritt }) {
 
       <Stufe
         nummer={4}
-        titel="Embedding-Modell"
+        titel="Embedding"
         beschreibung="Grundlage für Ähnlichkeitssuche, Duplikatprüfung und die Anwenderhilfe."
-        gesperrt={!embeddingBereit}
-        sperrgrund="Wird frei, sobald ein Provider mit Embedding-Fähigkeit den Test bestanden hat. Ein Konto kann beides abdecken."
       >
-        <Testergebnis>
-          Die angezeigte Auswahl ist nur ein Vorschlag, bis du sie speicherst. Solange hier nichts
-          gespeichert ist, richtet „Modellempfehlungen alle übernehmen“ das Embedding-Modell mit
-          ein. Ein späterer Wechsel ändert die Signatur aus Provider, Modell und Dimension und
-          macht eine Neuberechnung des Vektorbestands nötig – dafür gibt es eine eigene Rückfrage.
-        </Testergebnis>
-        <EmbeddingCard providers={providers} onChanged={nachProviderAenderung} />
+        <EingebautesEmbedding pruefung={embPruefung} onChanged={nachProviderAenderung} />
       </Stufe>
 
       <div className="flex flex-wrap gap-2">
@@ -1624,6 +1614,42 @@ function KiSchritt({ status, pruefen, onSchritt }) {
         </Button>
       </div>
       {pruefen.isError && <Testergebnis status="fehler">{pruefen.error.message}</Testergebnis>}
+    </div>
+  );
+}
+
+/**
+ * Embedding im Assistenten: immer der eingebaute Dienst. Eine Instanz, die
+ * schon ein anderes Modell gewählt hat, behält es; geändert wird es nur in den
+ * Einstellungen, weil ein Wechsel den gesamten Vektorbestand neu berechnet.
+ */
+function EingebautesEmbedding({ pruefung, onChanged }) {
+  const gewaehlt = pruefung?.embedding;
+  const andereWahl = !!gewaehlt?.model && !pruefung?.embeddingEingebaut;
+
+  return (
+    <div className="space-y-2">
+      <p className="text-xs text-muted-foreground">
+        postbuch.net bringt einen eigenen Embedding-Dienst mit (Snowflake Arctic Embed M v2.0). Er
+        läuft im eigenen Stack, ohne Cloud und ohne laufende Kosten. Ein anderer Dienst lässt sich
+        später unter Einstellungen → KI → Embeddings wählen.
+      </p>
+      {andereWahl ? (
+        <Testergebnis status={pruefung.ok ? 'erfolg' : 'fehler'}>
+          Gewählt ist {gewaehlt.providerId}/{gewaehlt.model}. Diese Wahl bleibt bestehen; geändert
+          wird sie unter Einstellungen → KI → Embeddings.
+        </Testergebnis>
+      ) : (
+        <>
+          {pruefung?.embeddingEingebaut && (
+            <Testergebnis status={pruefung.ok ? 'erfolg' : 'fehler'}>{pruefung.text}</Testergebnis>
+          )}
+          {/* Gewählt und betriebsbereit braucht keinen weiteren Knopf. */}
+          {!(pruefung?.embeddingEingebaut && pruefung.ok) && (
+            <EingebauterEmbeddingDienst assistent gewaehlt={!!pruefung?.embeddingEingebaut} onGewaehlt={onChanged} />
+          )}
+        </>
+      )}
     </div>
   );
 }

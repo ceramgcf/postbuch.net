@@ -6,7 +6,9 @@
  * Solange das so war, brach jeder Provider-Wechsel Suche und Duplikat-Check
  * still an vier Stellen. `embedText()` ist jetzt der einzige Pfad.
  *
- * Konfiguration: _settings.llm_embedding = { providerId, model, dim }.
+ * Konfiguration: _settings.llm_embedding = { providerId, model, dim, vorsilben? }.
+ * `vorsilben` = { anfrage, dokument } für asymmetrisch trainierte Modelle
+ * (siehe embedding-vorsilben.js); fehlt der Schlüssel, gibt es keine.
  * Der Default kommt aus der ersten Empfehlung der ausgelieferten
  * llm-empfehlungen.json (empfehlungs-standard.js), nicht aus einem Literal hier.
  *
@@ -23,13 +25,17 @@
  * echte Dimension verkleinert und dieses Padding entfernt werden.
  *
  * ── Warum die Signatur ───────────────────────────────────────────────────────
- * `embedding_signature` = "<providerId>/<model>/<dim>". Suche und Duplikat-Check
+ * `embedding_signature` = "<providerId>/<model>/<dim>", bei gesetzten Vorsilben
+ * ergänzt um "/v-<hash>": andere Vorsilben ergeben andere Vektoren und dürfen
+ * sich deshalb nicht mit dem Bestand mischen. Ohne Vorsilben bleibt die
+ * Signatur exakt wie vor deren Einführung. Suche und Duplikat-Check
  * berücksichtigen ausschließlich Zeilen mit der aktuellen Signatur; abweichende
  * gelten als „kein Embedding" — ein Zustand, den der Code über
  * embedding_failed_at/embedding_error bereits sauber behandelt. Damit ist
  * Mischbestand nach einem Modellwechsel strukturell unmöglich.
  */
 
+import { createHash } from 'node:crypto';
 import pool from '../db.js';
 import { loadDynamicSettings } from '../config.js';
 import { appLog } from '../app-log.js';
@@ -39,33 +45,75 @@ import { fetchOpenAIEmbedding } from './llm/providers/openai.js';
 /** Speicherbreite der halfvec-Spalten. Siehe Header. */
 export const STORAGE_DIM = 3072;
 
-// Es gibt bewusst KEINE Werkseinstellung für das Embedding-Modell. Ein Wechsel
+// Es gibt bewusst KEINEN Laufzeit-Default für das Embedding-Modell. Ein Wechsel
 // der Signatur entwertet den gesamten Vektorbestand, bis er neu berechnet ist —
-// deshalb wird das Modell einmal ausdrücklich gewählt (Einrichtungsassistent,
-// Einstellungen → KI oder „Modellempfehlungen übernehmen") statt vorbelegt.
-// Ohne Wahl bleibt `model` leer: `embedText()` überspringt dann, und der
-// Assistent meldet die offene Pflichtentscheidung, statt still ein Modell zu
-// benutzen, das der Betreiber nie gesehen hat.
+// ein Default, der sich mit einem Update verschiebt, täte genau das still.
+// Neue Instanzen bekommen stattdessen beim ersten Start den eingebauten Dienst
+// als ausdrücklich gespeicherte Wahl (seed-settings.js); ein anderer Dienst
+// wird bewusst in Einstellungen → KI gewählt. Fehlt die Wahl trotzdem, bleibt
+// `model` leer: `embedText()` überspringt dann, und der Assistent meldet die
+// offene Pflichtentscheidung.
 export const EMBEDDING_DEFAULT = {
   providerId: null,
   model: null,
   dim: STORAGE_DIM,
 };
 
+export { EINGEBAUTES_EMBEDDING } from './embedding-eingebaut.js';
+
+/** Obergrenze je Vorsilbe; echte Modellanweisungen sind deutlich kürzer. */
+export const VORSILBE_MAX = 500;
+
+/**
+ * Vorsilben in die gespeicherte Form bringen: genau zwei Zeichenketten,
+ * `null`, wenn beide leer sind. Leerraum bleibt erhalten — „query: " und
+ * „query:" sind für das Modell verschiedene Eingaben.
+ */
+export function normalisiereVorsilben(v) {
+  if (!v || typeof v !== 'object') return null;
+  const anfrage = typeof v.anfrage === 'string' ? v.anfrage.slice(0, VORSILBE_MAX) : '';
+  const dokument = typeof v.dokument === 'string' ? v.dokument.slice(0, VORSILBE_MAX) : '';
+  return anfrage || dokument ? { anfrage, dokument } : null;
+}
+
+/**
+ * Speicherform von `_settings.llm_embedding`. Ohne Vorsilben fehlt der
+ * Schlüssel ganz, damit bestehende Konfigurationen (und alle aus ihr
+ * abgeleiteten Prüfsummen) unverändert bleiben.
+ */
+export function embeddingSlot({ providerId, model, dim, vorsilben }) {
+  const cfg = { providerId, model, dim };
+  const v = normalisiereVorsilben(vorsilben);
+  if (v) cfg.vorsilben = v;
+  return cfg;
+}
+
 /** Aktive Embedding-Konfiguration aus den Settings (mit Default). */
 export function embeddingConfig(settings) {
   const cfg = settings?.llm_embedding;
   if (!cfg || typeof cfg !== 'object' || !cfg.model) return { ...EMBEDDING_DEFAULT };
   const dim = Number(cfg.dim);
-  return {
+  return embeddingSlot({
     providerId: cfg.providerId || EMBEDDING_DEFAULT.providerId,
     model: String(cfg.model),
     dim: Number.isInteger(dim) && dim >= 64 && dim <= STORAGE_DIM ? dim : STORAGE_DIM,
-  };
+    vorsilben: cfg.vorsilben,
+  });
 }
 
 export function signatureOf(cfg) {
-  return `${cfg.providerId}/${cfg.model}/${cfg.dim}`;
+  const basis = `${cfg.providerId}/${cfg.model}/${cfg.dim}`;
+  const v = normalisiereVorsilben(cfg.vorsilben);
+  if (!v) return basis;
+  const hash = createHash('sha256').update(JSON.stringify([v.anfrage, v.dokument])).digest('hex');
+  return `${basis}/v-${hash.slice(0, 8)}`;
+}
+
+/** Text so, wie er für die gegebene Rolle an das Modell geht. */
+export function mitVorsilbe(text, cfg, rolle = 'dokument') {
+  const v = normalisiereVorsilben(cfg?.vorsilben);
+  if (!v) return text;
+  return (rolle === 'anfrage' ? v.anfrage : v.dokument) + text;
 }
 
 /** Aktive Signatur — der Filterwert für alle Vektor-Queries. */
@@ -94,7 +142,11 @@ export function toVectorLiteral(vec) {
  *
  * @param {string} inputText
  * @param {object} [settings]
- * @param {object} [meta]  - { entity, entityId, correlationId, username, kategorie }
+ * @param {object} [meta]  - { entity, entityId, correlationId, username, kategorie,
+ *                            rolle: 'dokument' (Standard) | 'anfrage' }
+ *                            Suchanfragen müssen 'anfrage' setzen; alles, was
+ *                            gespeichert oder mit Gespeichertem verglichen
+ *                            wird, ist 'dokument'.
  * @returns {Promise<{ vector: number[], literal: string, signature: string, cfg: object }|null>}
  *          null, wenn kein Embedding-Provider konfiguriert/erreichbar ist.
  */
@@ -136,7 +188,7 @@ export async function embedText(inputText, settings = null, meta = null) {
 
   let result;
   try {
-    result = await fetchOpenAIEmbedding(cfg.model, String(inputText), provider);
+    result = await fetchOpenAIEmbedding(cfg.model, mitVorsilbe(String(inputText), cfg, meta?.rolle), provider);
   } catch (err) {
     log(null, err);
     throw err;

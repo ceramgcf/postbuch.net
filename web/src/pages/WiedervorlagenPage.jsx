@@ -331,7 +331,7 @@ export default function WiedervorlagenPage() {
                     key={wv.wv_id}
                     className="flex items-center gap-3 px-2.5 py-2 rounded-lg bg-red-100/50 border border-red-200/60"
                   >
-                    <Link to={linkTo} state={{ from: returnTo }} className="flex items-center gap-3 flex-1 min-w-0 hover:opacity-80 transition-opacity">
+                    <Link to={linkTo} state={{ from: returnTo }} className="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1 flex-1 min-w-0 hover:opacity-80 transition-opacity">
                       <span className="font-mono text-xs text-red-800 w-20 tabular-nums flex-shrink-0">
                         {formatDate(wv.faellig_am)}
                       </span>
@@ -339,8 +339,8 @@ export default function WiedervorlagenPage() {
                         seit {diffDays} {diffDays === 1 ? 'Tag' : 'Tagen'}
                       </span>
                       <span className="font-mono text-xs text-red-700 w-16 tabular-nums flex-shrink-0">{refId}</span>
-                      <span className="text-sm font-semibold truncate flex-1">{betreff}</span>
-                      <span className="text-xs bg-amber-200 text-amber-800 rounded px-1.5 py-0.5 truncate max-w-[220px] flex-shrink-0">
+                      <span className="text-sm font-semibold truncate flex-1 max-sm:order-last max-sm:basis-full">{betreff}</span>
+                      <span className="text-xs bg-amber-200 text-amber-800 rounded px-1.5 py-0.5 truncate max-w-[220px] max-sm:max-w-full max-sm:shrink">
                         {wv.aktion}
                       </span>
                     </Link>
@@ -436,13 +436,13 @@ export default function WiedervorlagenPage() {
                         'border-border/50 hover:bg-primary/[0.02]'
                       }`}
                     >
-                      <Link to={linkTo} state={{ from: returnTo }} className="flex items-center gap-3 flex-1 min-w-0 hover:opacity-80 transition-opacity">
+                      <Link to={linkTo} state={{ from: returnTo }} className="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1 flex-1 min-w-0 hover:opacity-80 transition-opacity">
                         <span className={`font-mono text-xs w-20 tabular-nums flex-shrink-0 ${
                           isOverdue ? 'text-red-600 font-bold' : isDueToday ? 'text-amber-600 font-bold' : 'text-muted-foreground'
                         }`}>{formatDate(wv.faellig_am)}</span>
                         <span className="font-mono text-xs text-muted-foreground w-16 tabular-nums flex-shrink-0">{refId}</span>
-                        <span className="text-sm font-semibold truncate flex-1">{betreff}</span>
-                        <span className="text-xs bg-amber-100 text-amber-800 rounded px-1.5 py-0.5 truncate max-w-[220px] flex-shrink-0">
+                        <span className="text-sm font-semibold truncate flex-1 max-sm:order-last max-sm:basis-full">{betreff}</span>
+                        <span className="text-xs bg-amber-100 text-amber-800 rounded px-1.5 py-0.5 truncate max-w-[220px] max-sm:max-w-full max-sm:shrink">
                           {wv.aktion}
                         </span>
                       </Link>

@@ -34,6 +34,12 @@ oder hinter ein VPN. Wer sie trotzdem veröffentlicht, braucht zwingend HTTPS
 (dafür gibt es das Caddy-Profil) und ein starkes Admin-Passwort. Siehe
 [Sicherheit](sicherheit.md).
 
+**Wie komme ich von unterwegs an meine Dokumente?**
+Über ein VPN ins Heimnetz, etwa mit WireGuard auf der FRITZ!Box oder mit
+Tailscale. Die gewohnte Adresse, installierte App und Push-Nachrichten
+funktionieren dann wie zu Hause. Schritt für Schritt unter
+[Zugriff von unterwegs](zugriff-von-unterwegs.md).
+
 **Warum funktioniert meine DuckDNS-Subdomain in meinem Netzwerk nicht?**
 Über die reine IP-Adresse geht es, über den Hostnamen (z. B.
 `deinname.duckdns.org`) nicht – das ist meist **DNS-Rebind-Schutz**. Der
@@ -59,7 +65,8 @@ dazuschaltest: dem KI-Anbieter und gegebenenfalls dem Cloud-Speicher.
 Das hängt am Volumen und am gewählten Modell. Ein Dokumentimport liegt grob bei
 **1–20 Eurocent**, eine Assistentenantwort häufig bei **1–15 Eurocent**; lange
 Dokumente, teure Modelle, Fallbacks und PDF-Vision können darüber liegen.
-Embeddings sind einzeln meist viel billiger, können sich bei einer vollständigen
+Embeddings kosten mit dem eingebauten Dienst nichts; bei einem Cloud-Anbieter
+sind sie einzeln meist viel billiger, können sich bei einer vollständigen
 Neuberechnung aber summieren. Die genaue Liste aller Auslöser und Beispiele
 steht unter [KI-Anbieter → Kosten und kostenpflichtige Aufrufe](ki-provider.md#kosten-und-kostenpflichtige-aufrufe).
 
@@ -100,8 +107,9 @@ scheitert die Verarbeitung eines Dokuments. Was du danach an den Ergebnissen
 änderst, bleibt selbstverständlich dir überlassen.
 
 **Nimmt postbuch.net von sich aus Verbindung nach draußen auf?**
-Ja, abhängig von deiner Konfiguration: für die Dokumentverarbeitung und
-Embeddings zum gewählten KI-Anbieter, für den Zugriff auf die gewählte Dateiablage,
+Ja, abhängig von deiner Konfiguration: für die Dokumentverarbeitung zum
+gewählten KI-Anbieter, für Embeddings nur, wenn statt des eingebauten Dienstes
+ein Cloud-Anbieter gewählt ist, für den Zugriff auf die gewählte Dateiablage,
 für aktivierte Push- oder Discord-Benachrichtigungen, für DuckDNS sowie für die
 tägliche Abfrage des Release-Manifests bei der eingetragenen Bezugsquelle.
 Telemetrie und Nutzungsstatistiken werden nicht übertragen.

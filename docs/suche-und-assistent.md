@@ -29,8 +29,9 @@ Bedeutung der Anfrage mit der Bedeutung des Dokuments. Mit dem Suchbegriff
 
 > [!CAUTION]
 >
-> Semantische Suche setzt einen konfigurierten **Embedding-Provider** voraus
-> (siehe [KI-Provider](ki-provider.md)). Ohne ihn bleibt nur Volltext. Außerdem
+> Semantische Suche setzt ein eingerichtetes **Embedding** voraus, standardmäßig
+> den [eingebauten Dienst](ki-provider.md#der-eingebaute-embedding-dienst).
+> Ohne Embedding bleibt nur Volltext. Außerdem
 > werden nur Dokumente gefunden, deren Embedding mit dem _aktuell_ eingestellten
 > Modell erzeugt wurde – nach einem Modellwechsel muss neu eingebettet werden,
 > sonst fehlen alte Dokumente still im Ergebnis.

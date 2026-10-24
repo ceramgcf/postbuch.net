@@ -1,41 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { NavLink, useNavigate } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
-import { useIsMobile } from '@/hooks/useIsMobile';
-import { useIsPortrait } from '@/hooks/useOrientationLock';
-import { api } from '@/api/client';
-import {
-  LayoutDashboard, FileText, AlertCircle, Scissors,
-  CalendarRange, LogOut, Search, Wrench, Pin, PinOff,
-  FolderOpen, ScrollText, Scale, Users, CalendarClock, Settings,
-  Upload, MessageCircle, BookOpen, HeartPulse,
-} from 'lucide-react';
+import { useDarstellung } from '@/hooks/useDarstellung';
+import { useNavigation } from '@/hooks/useNavigation';
+import { LogOut, Pin, PinOff } from 'lucide-react';
+import { MarkeVoll, LogoBild } from './Marke';
 import { TaskStatusBar } from './TaskStatusBar';
 import { UndoRedoBar } from '@/components/ui/UndoRedoBar';
-
-const NAV_ITEMS_BASE = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/import', icon: Upload, label: 'Importieren' },
-  { to: '/postbuch', icon: FileText, label: 'Dokumente' },
-  { to: '/akten', icon: FolderOpen, label: 'Akten' },
-  { to: '/search', icon: Search, label: 'Suche' },
-  { to: '/assistent', icon: MessageCircle, label: 'Assistent' },
-];
-// Logs is conditionally shown based on nav_visibility setting (always shown to admins)
-const NAV_ITEM_LOGS = { to: '/logs', icon: ScrollText, label: 'Logs' };
-
-const KRANKENVERSICHERUNG_ITEMS = [
-  { to: '/analyse/kuerzungen', icon: Scissors, label: 'Kürzungen' },
-  { to: '/analyse/perioden', icon: CalendarRange, label: 'Abrechnungsperioden' },
-];
-const ANALYSE_ITEMS_BASE = [
-  { to: '/analyse/unbezahlt', icon: AlertCircle, label: 'Unbezahlt' },
-  { to: '/analyse/handwerker', icon: Wrench, label: 'Handwerker' },
-  { to: '/analyse/gesundheitskosten', icon: HeartPulse, label: 'Gesundheitskosten' },
-  { to: '/analyse/wiedervorlagen', icon: CalendarClock, label: 'Kalender' },
-];
-const ANALYSE_ITEM_SALDEN = { to: '/analyse/salden', icon: Scale, label: 'Salden' };
 
 function usePersistedBool(key, defaultVal) {
   const [val, setVal] = useState(() => {
@@ -52,95 +23,11 @@ function usePersistedBool(key, defaultVal) {
   return [val, setVal];
 }
 
-/**
- * Gradient text with proper omnidirectional glow.
- * The blurred layer uses a solid colour (not background-clip:text) so the
- * gaussian blur spreads freely in all directions instead of being clipped to
- * the text outline.
- */
-function GlowText({ children, fontSize }) {
-  return (
-    <span
-      className="relative inline-block"
-      style={{ fontSize, fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.25 }}
-    >
-      {/* Blur layer – same gradient so teal spreads right-ward correctly */}
-      <span
-        aria-hidden
-        style={{
-          position: 'absolute', top: 0, left: 0,
-          background: 'linear-gradient(90deg, #7d2dbd 0%, #a56bd8 50%, #2cc5dd 100%)',
-          WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent',
-          backgroundClip: 'text',
-          filter: 'blur(6px)',
-          opacity: 0.85,
-          whiteSpace: 'nowrap',
-          pointerEvents: 'none',
-          userSelect: 'none',
-        }}
-      >
-        {children}
-      </span>
-      {/* Sharp gradient text on top */}
-      <span
-        style={{
-          position: 'relative',
-          background: 'linear-gradient(90deg, #7d2dbd 0%, #a56bd8 50%, #2cc5dd 100%)',
-          WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent',
-          backgroundClip: 'text',
-          whiteSpace: 'nowrap',
-        }}
-      >
-        {children}
-      </span>
-    </span>
-  );
-}
-
-// Logo size when expanded: 53 * 0.95 ≈ 50px
-const LOGO_FULL_SIZE = 50;
-// Icon size when collapsed: fixed to the same icon area so buttons don't jump
-const LOGO_ICON_SIZE = 36;
 // Fixed header height – must be identical in both modes to avoid layout shift
 const HEADER_H = 72;
 
-function SidebarLogoFull({ instanceName }) {
-  const size = LOGO_FULL_SIZE;
-  return (
-    <div className="flex items-center gap-2.5 min-w-0">
-      <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
-        <img src="/logo.svg" alt="" aria-hidden width={size} height={size}
-          className="absolute inset-0" style={{ filter: 'blur(10px)', opacity: 0.55 }} />
-        <img src="/logo.svg" alt="postbuch.net" width={size} height={size} className="relative" />
-      </div>
-      <div className="min-w-0">
-        <GlowText fontSize={22}>
-          postbuch<span style={{ fontSize: '1.8em', lineHeight: 1 }}>.</span><span style={{ fontSize: '0.47em', lineHeight: 1 }}>net</span>
-        </GlowText>
-        {instanceName && (
-          <p className="text-[10px] text-muted-foreground/70 truncate mt-0.5 max-w-[120px]" title={instanceName}>{instanceName}</p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SidebarLogoIcon() {
-  const size = LOGO_ICON_SIZE;
-  return (
-    <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
-      <img src="/logo.svg" alt="" aria-hidden width={size} height={size}
-        className="absolute inset-0" style={{ filter: 'blur(8px)', opacity: 0.55 }} />
-      <img src="/logo.svg" alt="postbuch.net" width={size} height={size} className="relative" />
-    </div>
-  );
-}
-
-
 function SidebarInner({ isExpanded, isPinned, onTogglePin, onNavClick, onLogout }) {
-  const { isAdmin, istEingeschraenkt } = useAuth();
+  const { istEingeschraenkt } = useAuth();
   const itemBase = 'flex items-center h-9 rounded-lg text-sm font-medium transition-all duration-150';
   const itemExpanded = 'gap-3 px-3';
   const itemCollapsed = 'justify-center w-full';
@@ -150,48 +37,8 @@ function SidebarInner({ isExpanded, isPinned, onTogglePin, onNavClick, onLogout 
   const cls = (isActive) =>
     `${itemBase} ${isExpanded ? itemExpanded : itemCollapsed} ${isActive ? itemActive : itemInactive}`;
 
-  const { data: personenData } = useQuery({
-    queryKey: ['personen'],
-    queryFn: () => api.personen.list(),
-    staleTime: 5 * 60 * 1000,
-  });
-  const hasInsuredPerson = (personenData?.data ?? []).some((p) => p.pkv || p.beihilfe);
-
-  // Nav visibility settings (only relevant for non-admins; admins always see everything)
-  const { data: appSettings } = useQuery({
-    queryKey: ['settings-public'],
-    queryFn: () => api.settingsPublic.getAll(),
-    staleTime: 5 * 60 * 1000,
-  });
-  const navVis = appSettings?.nav_visibility?.value || {};
-  const showSalden = isAdmin || navVis.salden !== false;
-
-  // Dezenter Punkt am Einstellungen-Eintrag, wenn ein Update bereitliegt.
-  // Nur für Admins: /api/updates ist admin-only, und nur ein Admin kann das
-  // Update überhaupt auslösen – ein Punkt, dem niemand folgen kann, ist Lärm.
-  const { data: updateInfo } = useQuery({
-    queryKey: ['updates'],
-    queryFn: () => api.updates.get(),
-    enabled: isAdmin,
-    staleTime: 30 * 60 * 1000,
-    retry: false,
-  });
-  const updateVerfuegbar = isAdmin && updateInfo?.updateVerfuegbar === true;
-  const showLogs   = isAdmin || navVis.logs   !== false;
-
-  // Nur eigene Dokumente: Dokumente und Suche, keine Analyse- oder
-  // Verwaltungsbereiche – der Server sperrt sie für dieses Konto ohnehin.
-  const navItems = istEingeschraenkt
-    ? NAV_ITEMS_BASE.filter(({ to }) => to === '/postbuch' || to === '/search')
-    : [
-      ...NAV_ITEMS_BASE,
-      ...(showLogs ? [NAV_ITEM_LOGS] : []),
-    ];
-
-  const analyseItems = istEingeschraenkt ? [] : [
-    ...ANALYSE_ITEMS_BASE,
-    ...(showSalden ? [ANALYSE_ITEM_SALDEN] : []),
-  ];
+  const { haupt: navItems, gruppen, fuss, instanceName, updateVerfuegbar } = useNavigation();
+  const [navHilfe, navEinstellungen] = fuss;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -201,7 +48,7 @@ function SidebarInner({ isExpanded, isPinned, onTogglePin, onNavClick, onLogout 
         className={`flex items-center flex-shrink-0 ${isExpanded ? 'px-4 justify-between' : 'px-2 justify-center'}`}
         style={{ height: HEADER_H }}
       >
-        {isExpanded ? <SidebarLogoFull instanceName={appSettings?.instance_name?.value} /> : <SidebarLogoIcon />}
+        {isExpanded ? <MarkeVoll instanceName={instanceName} /> : <LogoBild size={36} />}
         {isExpanded && onTogglePin && (
           <button
             onClick={onTogglePin}
@@ -231,46 +78,27 @@ function SidebarInner({ isExpanded, isPinned, onTogglePin, onNavClick, onLogout 
           </NavLink>
         ))}
 
-        {hasInsuredPerson && !istEingeschraenkt && <>
-          {/* Krankenversicherung is a peer navigation section to Analyse. */}
-          <div className="h-10 flex items-center" style={{ paddingLeft: isExpanded ? '0.75rem' : 0, justifyContent: isExpanded ? 'flex-start' : 'center' }}>
-            {isExpanded ? (
-              <span className="text-[11px] font-semibold uppercase text-muted-foreground tracking-widest">
-                Krankenversicherung
-              </span>
-            ) : (
-              <div className="h-px w-6 bg-border/60" />
-            )}
+        {gruppen.map(({ titel, items }) => (
+          <div key={titel} className="space-y-0.5">
+            {/* Abschnittstrenner mit fester Höhe, damit nichts springt */}
+            <div className="h-10 flex items-center" style={{ paddingLeft: isExpanded ? '0.75rem' : 0, justifyContent: isExpanded ? 'flex-start' : 'center' }}>
+              {isExpanded ? (
+                <span className="text-[11px] font-semibold uppercase text-muted-foreground tracking-widest">
+                  {titel}
+                </span>
+              ) : (
+                <div className="h-px w-6 bg-border/60" />
+              )}
+            </div>
+            {items.map(({ to, icon: Icon, label }) => (
+              <NavLink key={to} to={to} onClick={onNavClick}
+                className={({ isActive }) => cls(isActive)}
+              >
+                <Icon className="h-4 w-4 flex-shrink-0" />
+                {isExpanded && <span className="truncate">{label}</span>}
+              </NavLink>
+            ))}
           </div>
-
-          {KRANKENVERSICHERUNG_ITEMS.map(({ to, icon: Icon, label }) => (
-            <NavLink key={to} to={to} onClick={onNavClick}
-              className={({ isActive }) => cls(isActive)}
-            >
-              <Icon className="h-4 w-4 flex-shrink-0" />
-              {isExpanded && <span className="truncate">{label}</span>}
-            </NavLink>
-          ))}
-        </>}
-
-        {/* Analyse section divider – fixed height so items below never jump */}
-        {analyseItems.length > 0 && <div className="h-10 flex items-center" style={{ paddingLeft: isExpanded ? '0.75rem' : 0, justifyContent: isExpanded ? 'flex-start' : 'center' }}>
-          {isExpanded ? (
-            <span className="text-[11px] font-semibold uppercase text-muted-foreground tracking-widest">
-              Analyse
-            </span>
-          ) : (
-            <div className="h-px w-6 bg-border/60" />
-          )}
-        </div>}
-
-        {analyseItems.map(({ to, icon: Icon, label }) => (
-          <NavLink key={to} to={to} onClick={onNavClick}
-            className={({ isActive }) => cls(isActive)}
-          >
-            <Icon className="h-4 w-4 flex-shrink-0" />
-            {isExpanded && <span className="truncate">{label}</span>}
-          </NavLink>
         ))}
 
       </nav>
@@ -297,20 +125,20 @@ function SidebarInner({ isExpanded, isPinned, onTogglePin, onNavClick, onLogout 
           Bewusst ohne Abschnittslabel und ohne Trenner untereinander – nur
           Ausrichtung und horizontales Padding wechseln, nie die Höhe. */}
       <div className={`flex-shrink-0 space-y-0.5 pt-1 pb-2 ${isExpanded ? 'px-2' : 'px-1'}`}>
-        <NavLink to="/hilfe" onClick={onNavClick}
-          title={isExpanded ? undefined : 'Hilfe'}
+        <NavLink to={navHilfe.to} onClick={onNavClick}
+          title={isExpanded ? undefined : navHilfe.label}
           className={({ isActive }) => cls(isActive)}
         >
-          <BookOpen className="h-4 w-4 flex-shrink-0" />
-          {isExpanded && <span className="truncate">Hilfe</span>}
+          <navHilfe.icon className="h-4 w-4 flex-shrink-0" />
+          {isExpanded && <span className="truncate">{navHilfe.label}</span>}
         </NavLink>
 
-        <NavLink to="/einstellungen" onClick={onNavClick}
-          title={isExpanded ? undefined : 'Einstellungen'}
+        <NavLink to={navEinstellungen.to} onClick={onNavClick}
+          title={isExpanded ? undefined : navEinstellungen.label}
           className={({ isActive }) => cls(isActive)}
         >
           <span className="relative flex-shrink-0">
-            <Settings className="h-4 w-4" />
+            <navEinstellungen.icon className="h-4 w-4" />
             {updateVerfuegbar && (
               <span
                 className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-primary"
@@ -318,7 +146,7 @@ function SidebarInner({ isExpanded, isPinned, onTogglePin, onNavClick, onLogout 
               />
             )}
           </span>
-          {isExpanded && <span className="truncate">Einstellungen</span>}
+          {isExpanded && <span className="truncate">{navEinstellungen.label}</span>}
         </NavLink>
 
         {/* Abmelden bewusst als schlichter Button in derselben Item-Geometrie
@@ -342,13 +170,9 @@ export function Sidebar() {
   // Mobile: temporäres Ausklappen für 3 Sekunden per Tipp auf die eingeklappte Leiste
   const [tempExpanded, setTempExpanded] = useState(false);
   const tempTimerRef = useRef(null);
-  const isMobile = useIsMobile();
-  const isPortrait = useIsPortrait();
-  // Hochformat auf dem Handy (Detailseite): eine angeheftete 256-px-Leiste
-  // ließe dem Inhalt kaum Platz. Dort immer die schmale Leiste zeigen; die
-  // gespeicherte Wahl gilt wieder, sobald das Gerät quer liegt.
-  const pinErzwungenAus = isMobile && isPortrait;
-  const isPinned = pinGewuenscht && !pinErzwungenAus;
+  // Touch: kein Hover, Ausklappen per Tipp.
+  const { istTouch } = useDarstellung();
+  const isPinned = pinGewuenscht;
   const { logout } = useAuth();
   const navigate = useNavigate();
 
@@ -386,7 +210,7 @@ export function Sidebar() {
   const innerProps = {
     isExpanded,
     isPinned,
-    onTogglePin: pinErzwungenAus ? undefined : handleTogglePin,
+    onTogglePin: handleTogglePin,
     onNavClick: handleNavClick,
     onLogout: handleLogout,
   };
@@ -412,11 +236,11 @@ export function Sidebar() {
           transition-[width] duration-200 ease-in-out overflow-hidden
           ${isExpanded ? 'w-64 shadow-2xl shadow-primary/10' : 'w-14'}
         `}
-        onMouseEnter={() => !isMobile && setIsHovered(true)}
-        onMouseLeave={() => !isMobile && setIsHovered(false)}
+        onMouseEnter={() => !istTouch && setIsHovered(true)}
+        onMouseLeave={() => !istTouch && setIsHovered(false)}
         // Mobile: Tipp auf die eingeklappte Leiste → 3 Sekunden ausgeklappt
         onClickCapture={(e) => {
-          if (isMobile && !isExpanded) {
+          if (istTouch && !isExpanded) {
             e.preventDefault();
             e.stopPropagation();
             handleTouchExpand();

@@ -315,8 +315,11 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
   // kein Modell gewählt, und Suche, Duplikatprüfung und Hilfekorpus bleiben
   // ohne Vektoren. Gewählt allein reicht aber nicht — der Provider des Modells
   // muss auch antworten.
-  const providerCaps = new Map(listProviders(settings).map((p) => [p.id, p.caps]));
-  const llmProviders = workingProviders;
+  const alleProvider = listProviders(settings);
+  const providerCaps = new Map(alleProvider.map((p) => [p.id, p.caps]));
+  // Der eingebaute Embedding-Dienst antwortet immer, ist aber kein Sprachmodell.
+  const nurEmbedding = new Set(alleProvider.filter((p) => p.nurEmbedding).map((p) => p.id));
+  const llmProviders = workingProviders.filter((id) => !nurEmbedding.has(id));
   const embeddingProviders = workingProviders.filter((id) => providerCaps.get(id)?.embeddings === true);
   const embedding = embeddingConfig(settings);
   const embeddingKonfiguriert = !!embedding.model && workingProviders.includes(embedding.providerId);
@@ -414,9 +417,9 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
       { anzahl: folderCount, erwartet: erwarteteFolderKeys.length, fehlend: fehlendeFolderKeys },
     ),
     kiLlm: pruefung(
-      workingProviders.length > 0 && pflichtmodelleOk,
+      llmProviders.length > 0 && pflichtmodelleOk,
       true,
-      workingProviders.length === 0
+      llmProviders.length === 0
         ? 'Noch kein Sprachmodell-Provider erfolgreich getestet.'
         : (!pflichtmodelleOk
           ? `${modellklassen.filter((x) => x.pflicht && !x.ok).length} von ${modellklassen.length} Aufgaben haben noch kein nutzbares Modell.`
@@ -433,7 +436,11 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
     kiEmbedding: pruefung(
       embeddingKonfiguriert,
       true,
-      embeddingProviders.length === 0
+      nurEmbedding.has(embedding.providerId)
+        ? (embeddingKonfiguriert
+          ? 'Der eingebaute Embedding-Dienst ist einsatzbereit.'
+          : 'Der eingebaute Embedding-Dienst antwortet noch nicht.')
+        : embeddingProviders.length === 0
         ? 'Noch kein Embedding-Provider erfolgreich getestet.'
         : (!embedding.model
           ? 'Es ist noch kein Embedding-Modell gewählt.'
@@ -445,6 +452,7 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
         llmProviders,
         embeddingProviders,
         embeddingKonfiguriert,
+        embeddingEingebaut: nurEmbedding.has(embedding.providerId),
         embedding: { providerId: embedding.providerId, model: embedding.model, dim: embedding.dim },
         embeddingExplizit: !!settings.llm_embedding?.model,
         modellSignatur: aktuelleKiModellSignatur,
@@ -534,7 +542,7 @@ router.post('/pruefen', async (req, res) => {
     // hinzugefügten (nicht-eingebauten) Provider dauerhaft gesperrt, obwohl
     // "Wird frei, sobald ein Provider den Test bestanden hat" etwas anderes
     // verspricht. Ein antwortender Provider genügt als Nachweis.
-    const kiBestanden = bild.pruefungen.kiLlm.workingProviders.length > 0;
+    const kiBestanden = bild.pruefungen.kiLlm.llmProviders.length > 0;
     if (storageBestanden || kiBestanden) {
       const settings = await loadDynamicSettings();
       // Eine Prüfung ist eine Messung, kein Startsignal. Sie hält nur

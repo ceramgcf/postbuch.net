@@ -9,6 +9,17 @@ hostconfig_compose() {
     if [[ "${DOCKER_ART:-direkt}" == "sudo" ]]; then sudo -n docker compose "$@"; else docker compose "$@"; fi
 }
 
+# Wie hostconfig_compose, aber mit Zeitlimit: Ein hängender Download beim
+# Build darf den Agenten nicht dauerhaft blockieren.
+hostconfig_compose_befristet() { # $1 Sekunden, Rest wie hostconfig_compose
+    local sekunden="$1"; shift
+    if [[ "${DOCKER_ART:-direkt}" == "sudo" ]]; then
+        timeout "$sekunden" sudo -n docker compose "$@"
+    else
+        timeout "$sekunden" docker compose "$@"
+    fi
+}
+
 hostconfig_env_setzen() { # $1 Datei, $2 Key, $3 Wert
     local datei="$1" key="$2" wert="$3" tmp backup gefunden=false
     case "$key" in
@@ -109,10 +120,50 @@ hostconfig_service_laeuft() { # $1 service; Vorzustand unabhängig von Health
     [[ "$zustand" == true* ]]
 }
 
+# COMPOSE_PROFILES ist eine Liste (`scanner,embedding`). Jeder Auftrag ändert
+# nur sein eigenes Profil; unbekannte oder unsaubere Einträge fallen beim
+# Schreiben weg, statt in die .env zurückzuwandern.
+hostconfig_profile_lesen() { # $1 env; gibt die gültigen Profile kommagetrennt aus
+    local roh teil liste=()
+    roh=$(grep '^COMPOSE_PROFILES=' "$1" 2>/dev/null | tail -n1 | cut -d= -f2- || true)
+    IFS=',' read -ra teile <<< "$roh"
+    for teil in "${teile[@]}"; do
+        case "$teil" in scanner|embedding|caddy) liste+=("$teil") ;; esac
+    done
+    (IFS=','; printf '%s' "${liste[*]}")
+}
+
+hostconfig_profil_aktiv() { # $1 env $2 profil
+    [[ ",$(hostconfig_profile_lesen "$1")," == *,"$2",* ]]
+}
+
+hostconfig_profil_setzen() { # $1 env $2 profil (scanner|embedding) $3 an|aus
+    local env="$1" profil="$2" modus="$3" teil neu=()
+    case "$profil" in scanner|embedding) ;; *) return 2 ;; esac
+    IFS=',' read -ra teile <<< "$(hostconfig_profile_lesen "$env")"
+    for teil in "${teile[@]}"; do
+        [[ -n "$teil" && "$teil" != "$profil" ]] && neu+=("$teil")
+    done
+    [[ "$modus" == an ]] && neu+=("$profil")
+    hostconfig_env_setzen "$env" COMPOSE_PROFILES "$(IFS=','; printf '%s' "${neu[*]}")"
+}
+
 hostconfig_scanner_aktiv() { # $1 env
-    local profile
-    profile=$(grep '^COMPOSE_PROFILES=' "$1" 2>/dev/null | tail -n1 | cut -d= -f2- || true)
-    [[ ",$profile," == *,scanner,* ]]
+    hostconfig_profil_aktiv "$1" scanner
+}
+
+hostconfig_embedding_aktiv() { # $1 env
+    hostconfig_profil_aktiv "$1" embedding
+}
+
+# Der Embedding-Dienst meldet sich erst nach dem Healthcheck-Startfenster
+# gesund. Ein einmaliger Blick direkt nach `up` wäre ein falscher Fehlschlag.
+hostconfig_service_bereit_warten() { # $1 service $2 Sekunden
+    local ende=$(( $(date +%s) + $2 ))
+    until hostconfig_service_bereit "$1"; do
+        (( $(date +%s) < ende )) || return 1
+        sleep 3
+    done
 }
 
 # Freigabe eines Ports: "lan" (alle Schnittstellen), "lokal" (nur der Host
@@ -168,11 +219,24 @@ hostconfig_ruecktausch() { # $1 env $2 typ $3 scanner-war-aktiv $4 caddy-war-akt
     return 1
 }
 
+# Rücktausch für embedding:an/aus: .env zurück und den Dienst in den
+# Vorzustand bringen. Der Scanner bleibt davon unberührt.
+hostconfig_embedding_ruecktausch() { # $1 env $2 embedding-war-aktiv
+    hostconfig_rollback "$1" || return 1
+    if [[ "$2" == true ]]; then
+        hostconfig_compose --profile embedding up -d --no-deps embedding || true
+    else
+        hostconfig_compose stop embedding || true
+    fi
+    return 1
+}
+
 hostconfig_anwenden() { # $1 install-dir $2 typ $3 wert $4 secret(optional)
     local install="$1" typ="$2" wert="$3" secret="${4:-}" env="$1/.env" caddyfile="$1/caddy/Caddyfile"
-    local scanner_war_aktiv=false caddy_war_aktiv=false
+    local scanner_war_aktiv=false caddy_war_aktiv=false embedding_war_aktiv=false
     cd "$install" || return 1
     hostconfig_scanner_aktiv "$env" && scanner_war_aktiv=true
+    hostconfig_embedding_aktiv "$env" && embedding_war_aktiv=true
     hostconfig_service_laeuft caddy && caddy_war_aktiv=true
     rm -f -- "${env}.hostconfig.bak"
     rm -f -- "${caddyfile}.hostconfig.bak"
@@ -180,7 +244,7 @@ hostconfig_anwenden() { # $1 install-dir $2 typ $3 wert $4 secret(optional)
         module)
             case "$wert" in
                 scanner:an)
-                    hostconfig_env_setzen "$env" COMPOSE_PROFILES scanner || return 1
+                    hostconfig_profil_setzen "$env" scanner an || return 1
                     hostconfig_compose --profile scanner build scanner cleaner \
                         || { hostconfig_ruecktausch "$env" "$typ" "$scanner_war_aktiv"; return 1; }
                     hostconfig_compose --profile scanner up -d --force-recreate --no-deps scanner cleaner \
@@ -189,9 +253,25 @@ hostconfig_anwenden() { # $1 install-dir $2 typ $3 wert $4 secret(optional)
                         || { hostconfig_ruecktausch "$env" "$typ" "$scanner_war_aktiv"; return 1; }
                     ;;
                 scanner:aus)
-                    hostconfig_env_setzen "$env" COMPOSE_PROFILES '' || return 1
+                    hostconfig_profil_setzen "$env" scanner aus || return 1
                     hostconfig_compose stop scanner cleaner \
                         || { hostconfig_ruecktausch "$env" "$typ" "$scanner_war_aktiv"; return 1; }
+                    ;;
+                embedding:an)
+                    # Bauen nutzt den Cache: Ist das Image schon da, ist das
+                    # ein kurzer Abgleich. Sonst lädt der Build das Modell.
+                    hostconfig_profil_setzen "$env" embedding an || return 1
+                    hostconfig_compose_befristet 3600 --profile embedding build embedding \
+                        || { hostconfig_embedding_ruecktausch "$env" "$embedding_war_aktiv"; return 1; }
+                    hostconfig_compose --profile embedding up -d --no-deps embedding \
+                        || { hostconfig_embedding_ruecktausch "$env" "$embedding_war_aktiv"; return 1; }
+                    hostconfig_service_bereit_warten embedding 120 \
+                        || { hostconfig_embedding_ruecktausch "$env" "$embedding_war_aktiv"; return 1; }
+                    ;;
+                embedding:aus)
+                    hostconfig_profil_setzen "$env" embedding aus || return 1
+                    hostconfig_compose stop embedding \
+                        || { hostconfig_embedding_ruecktausch "$env" "$embedding_war_aktiv"; return 1; }
                     ;;
                 *) return 2 ;;
             esac

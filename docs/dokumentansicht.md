@@ -13,9 +13,9 @@ Am Desktop liegt die Seitenleiste links, in der Mitte die Daten, **rechts** das
 PDF-Panel. Es öffnet sich auf der Detailseite von selbst, wenn das Dokument eine
 Datei hat, und kann nicht geschlossen werden.
 
-Auf dem Telefon gibt es kein PDF-Panel: Dort wird die Detailseite im Querformat
-angezeigt, und ein Drehen ins Hochformat schaltet auf den Vollbild-Betrachter
-um. Das ist in [Mobil und PWA](mobil-und-pwa.md) beschrieben.
+In der Mobilansicht gibt es kein PDF-Panel. Dort wechselt der Umschalter
+**Daten | Dokument** in der Kopfleiste zwischen Metadaten und PDF, siehe
+[Mobil und PWA](mobil-und-pwa.md#die-mobilansicht).
 
 In der Kopfzeile steht links der ![Pfeil-zurück-Symbol](icons/arrow-left.svg)
 Rücksprung dorthin, wo man hergekommen ist („Dokumente", „Zurück zur Akte",
@@ -222,8 +222,10 @@ der Fortschritt erscheint in der Aufgabenleiste. Man kann die Seite verlassen.
 einmal besser eingescannt wurde. Die Postnummer bleibt, ebenso Betreff,
 Adressat, Detailtabellen, Aktenzuordnung und Notizen – ausgetauscht wird nur die
 Datei, **ohne** KI-Lauf. Der ![PDF-ersetzen-Symbol](icons/file-up.svg) Knopf
-führt in den Import, wo entweder ein neuer Scan ausgelöst oder eine (auch
-mehrere, zusammenzuführende) PDF-Datei hochgeladen wird. Die alte Datei wandert
+führt in den Import, wo ein neuer Scan ausgelöst, die Seiten
+[mit der Kamera](dokumente-importieren.md#mit-der-kamera-in-postbuchnet) neu
+aufgenommen oder eine (auch mehrere, zusammenzuführende) PDF-Datei hochgeladen
+wird. Die alte Datei wandert
 in den Ordner **`<postbuch.net-Wurzelverzeichnis>/_trash`** der Dateiablage; die
 Aktion ist mit **Strg+Z** rückgängig zu machen. Das ist der
 [eigene Papierkorb von postbuch.net](storage-backends.md#der-postbuchnet-papierkorb),
@@ -706,6 +708,10 @@ Genau das bildet postbuch.net mit der **Ersetzung** ab.
   „ersetzt die frühere Rechnung …“.
 - An der alten Rechnung lassen sich danach weder Zahlungen erfassen noch
   bestreiten, und ihr Menü **Rechnung** entfällt.
+- Auch der [Assistent](suche-und-assistent.md#assistent) und der
+  [MCP-Zugriff](mcp.md) kennen die Ersetzung: Suchtreffer, Volltext und PDF der alten
+  Rechnung tragen den Hinweis auf die Korrekturrechnung. Für Beträge, Summen
+  und offene Posten zählt nur die Korrekturrechnung.
 
 **Rückgängig:** ![Rückgängig-Symbol](icons/undo-2.svg) **Ersetzung aufheben**
 im Hinweis – an einer der beiden Rechnungen – löst die Verbindung wieder. Die
@@ -1191,6 +1197,8 @@ steht, wird über eine [Wiederverarbeitung](#wiederverarbeiten) korrigiert.
 Das Panel rechts zeigt die Datei seitenweise. Es ist über den linken Rand
 **breiter oder schmaler zu ziehen** (200 Pixel bis 80 % der Fensterbreite),
 solange kein Dialog offen ist.
+Ist das Panel zu schmal für die ganze Werkzeugleiste, rückt die
+Seitennavigation aus der Kopfzeile in eine eigene Leiste unter dem Dokument.
 
 ![Der PDF-Betrachter mit Werkzeugleiste](screenshots/pdf-panel.jpg)
 
@@ -1217,10 +1225,10 @@ postbuch.net sie **einmalig** aus der Dateiablage nach und blendet solange „Do
 wird aus Archiv geladen (42 %)" ein. Scheitert auch das, bleibt es bei einer
 Fehlermeldung statt eines zweiten Versuchs.
 
-In der [mobilen Ansicht](mobil-und-pwa.md) gibt es keine klassische
-Werkzeugleiste: Nach dem Drehen ins Hochformat sitzt unten mittig ein runder
+Auf dem Telefon gibt es keine Werkzeugleiste: Im
+[PDF-Betrachter](mobil-und-pwa.md#bedienung-im-pdf-betrachter) sitzt unten mittig ein runder
 Knopf mit ![Menü-Symbol](icons/sliders-horizontal.svg) Menü-Symbol, der auf
-Tippen alle Werkzeuge – Drehen, Herunterladen, Drucken – als Halbkreis-Menü
+Tippen alle Werkzeuge – Drehen, Herunterladen, Teilen – als Halbkreis-Menü
 aufklappt.
 
 ---

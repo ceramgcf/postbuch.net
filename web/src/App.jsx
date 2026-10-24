@@ -1,4 +1,3 @@
-import { useLayoutEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/api/client';
@@ -13,6 +12,7 @@ import DashboardPage from '@/pages/DashboardPage';
 import PostbuchListPage from '@/pages/PostbuchListPage';
 import DocumentDetailPage from '@/pages/DocumentDetailPage';
 import AktenPage from '@/pages/AktenPage';
+import AblageSprungPage from '@/pages/AblageSprungPage';
 import AktenListPage from '@/pages/AktenListPage';
 import AkteDetailPage from '@/pages/AkteDetailPage';
 import OriginaleListPage from '@/pages/OriginaleListPage';
@@ -35,30 +35,6 @@ import EinrichtungPage from '@/pages/EinrichtungPage';
 import AblageUmzugPage from '@/pages/AblageUmzugPage';
 import HilfePage from '@/pages/HilfePage';
 import ScannerKalibrierungPage from '@/pages/ScannerKalibrierungPage';
-
-// Viewport-Zoom zentral verwaltet. Standard ist die Desktop-Dichte (width=1280,
-// gesetzt in index.html) – auf Mobilgeräten wird die ganze App auf 1280px virtuelle
-// Breite skaliert. Das macht die kompakte Login-Card winzig. Ausnahme darum nur für
-// /login: dort normale Geräte-Breite, sodass der Auth-Dialog in echter Mobil-Grösse
-// erscheint (wie bei familienkalender).
-function ViewportManager() {
-  const location = useLocation();
-
-  useLayoutEffect(() => {
-    const vp = document.querySelector('meta[name="viewport"]');
-    if (!vp) return;
-
-    const brauchtGeraetebreite = location.pathname === '/login'
-      || location.pathname.startsWith('/einrichtung/')
-      || location.pathname.startsWith('/ablage-umzug/')
-      || location.pathname.startsWith('/scanner-kalibrierung/');
-    vp.content = brauchtGeraetebreite
-      ? 'width=device-width,initial-scale=1,user-scalable=no'
-      : 'width=1280,user-scalable=no';
-  }, [location.pathname]);
-
-  return null;
-}
 
 // Hilfe ohne App-Navigation: bei offener Einrichtung (übrige Seiten gesperrt)
 // und für Tabs, die ein Assistent über schlankeHilfeUrl() geöffnet hat.
@@ -173,7 +149,6 @@ export default function App() {
 
   return (
     <BrowserRouter>
-      <ViewportManager />
       <Routes>
         <Route path="/login" element={
           authenticated ? <Navigate to="/" replace /> : <LoginPage />
@@ -194,6 +169,7 @@ export default function App() {
             <Route path="originale" element={<OriginaleListPage />} />
           </Route>
           <Route path="akten/:akteid" element={<AkteDetailPage />} />
+          <Route path="mappe/:ablageid" element={<AblageSprungPage />} />
           <Route path="search" element={<SearchPage />} />
           <Route path="assistent" element={<AssistantPage />} />
           <Route path="analyse/unbezahlt" element={<UnbezahltPage />} />

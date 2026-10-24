@@ -5,18 +5,18 @@
 
 # postbuch.net - Dokumentenverwaltung mit KI
 
-> [!IMPORTANT]
->
-> **Public Beta:** postbuch.net ist im täglichen Einsatz, aber noch jung.
-> Rechne mit Fehlern und Änderungen zwischen Versionen und sichere deine Daten
-> regelmäßig. Fehlerberichte über GitHub-Issues sind ausdrücklich willkommen.
+**Deine Post, automatisch gelesen, sauber abgelegt und jederzeit wiederzufinden.**
 
-postbuch.net ist eine selbstgehostete Anwendung für die digitale, KI-gestützte
-Verwaltung und Archivierung deiner Post und privaten Dokumente. Ihr Backend
-läuft auf deinem eigenen Linux-Server (z. B. Raspberry Pi) in Docker-Containern.
-Die KI kann aus der Cloud von einem externen Anbieter oder von einem lokal
-betriebenen, OpenAI-kompatiblen Server kommen. Die Oberfläche ist eine
-Web-App, die im Browser oder als PWA-App läuft.
+postbuch.net ist eine selbstgehostete Anwendung für die private Dokumentenablage
+im Haushalt. Du scannst einen Brief oder lädst ein PDF hoch, eine KI liest es,
+trägt Absender, Datum, Betreff und Dokumentart ein und legt die Datei mit
+sprechendem Namen in OneDrive oder deiner Nextcloud ab. Später findest du es
+über eine Suche, die nach Bedeutung statt nur nach Wörtern sucht, oder fragst
+einfach im Chat danach.
+
+Das Backend läuft in Docker auf deinem eigenen Rechner, ein Raspberry Pi
+genügt. Die Oberfläche öffnest du im Browser oder installierst sie als App auf
+PC, Smartphone und Tablet.
 
 <p align="center">
   <picture>
@@ -27,151 +27,205 @@ Web-App, die im Browser oder als PWA-App läuft.
   </picture>
 </p>
 
-Scans, Uploads oder ein überwachter Cloud-Ordner laufen in einer gemeinsamen
-Warteschlange zusammen, **eine KI liest jedes Dokument** und trägt alle
-relevanten Metadaten in eine **Datenbank** ein. Die Dateien werden in OneDrive
-oder einer eigenen Nextcloud **vollautomatisch und mit passendem Dateinamen in
-einer sauberen Ordnerstruktur abgelegt**. So lassen sich **Dokumente intuitiv
-und schnell** wiederfinden, auch wenn sie vor langer Zeit eingepflegt wurden.
+## Was postbuch.net für dich erledigt
 
-postbuch.net verfügt über eine **übersichtliche Weboberfläche zur Verwaltung der
-Dokumente**, der Zugriff erfolgt im Browser. Auch eine Installation als PWA-App
-auf dem PC, Smartphone oder auch Tablet ist möglich. postbuch.net bietet
-klassische Dokumentenverwaltungsfunktionen wie Fristen-Überwachung,
-Wiedervorlagen und Aktenanlage. Kern der Anwendung sind aber zahlreiche
-nutzerfreundliche KI-Funktionen:
+- **Erfassen ohne Abtippen.** Die KI versteht jedes Dokument und trägt die
+  Metadaten selbst ein: Absender, Datum, Betreff, Dokumentart, Betrag, eine
+  kurze Zusammenfassung und Schlagworte.
+- **Ablegen ohne Nachdenken.** Jede Datei landet mit passendem Namen in einer
+  aufgeräumten Ordnerstruktur in deiner Cloud-Ablage. Die Ordner bleiben auch
+  ohne postbuch.net lesbar.
+- **Wiederfinden, auch nach Jahren.** Die semantische Suche findet ein
+  Dokument auch, wenn du andere Begriffe verwendest als der Absender. Im Chat
+  beantwortet die KI Fragen zu deinen Unterlagen und zeigt die Belege, aus
+  denen sie die Antwort ableitet.
+- **Fristen und Wiedervorlagen im Blick.** Erinnerungen kommen als
+  Push-Nachricht aufs Handy.
+- **Zusammenhänge mit einem Klick.** Ähnliche Dokumente, etwa alle Rechnungen
+  eines Handwerkers oder alle Unterlagen zu einem Autounfall, lassen sich
+  finden und zu einer Akte bündeln.
+- **Arztrechnungen für Privatversicherte.** Für PKV und Beihilfe sammelt
+  postbuch.net die Belege, bündelt sie für die Einreichung und gleicht die
+  Erstattungen automatisch ab. Kürzungen meldet es dir zur Prüfung.
 
-- Absender, Datum, Betreff, Dokumentart, eine Zusammenfassung des Inhalts und
-  passende Schlagworte vergibst du nicht mehr selbst. Die KI versteht jedes
-  Dokument und **trägt diese sogenannten Metadaten automatisch ein**.
-- Mit der **semantischen Suche** findest du jedes Dokument schnell wieder,
-  selbst wenn du andere Begriffe verwendest. Denn die KI vergleicht die
-  Bedeutung deiner Suchanfrage mit der Bedeutung der Dokumente, nicht nur die
-  exakten Wörter.
-- Du kannst **mit deinen Dokumenten chatten**. Die KI beantwortet Fragen und
-  liefert die Belege, aus denen sie die Antwort ableitet.
-- Für **Privatversicherte (PKV)** bietet sie einen vollautomatischen Abgleich
-  von Arztrechnungen mit PKV- und Beihilfe-Erstattungen. Sie erkennt dabei
-  Kürzungen und meldet sie, damit du sie prüfen kannst.
-- **Ähnliche Dokumente** findest du mit einem Klick, z. B. alle Rechnungen eines
-  Handwerkers oder alle Unterlagen zu einem Autounfall. Genauso einfach lassen
-  sich **zusammengehörige Dokumente zu einer Akte** zusammenfassen.
-
-postbuch.net ist für die Verwaltung sämtlicher privater Dokumente ausgelegt, die
-per Post bzw. digital als PDF eingehen oder ausgehändigt werden, z. B. für
-
-- Rechnungen – für spezielle Typen wie Arztrechnungen und Handwerkerrechnungen
-  werden eigene Workflows angeboten
-- Verträge
-- Angebote
-- Kaufbelege
-- Gesundheitsunterlagen
-- Bescheide von Behörden, Versicherungen und Banken
-- Kontoauszüge
-- Steuerunterlagen
-- Urkunden
-
-> [!NOTE]
->
-> **Nur für PDFs**
->
-> postbuch.net versteht sich als **Dokumentenarchiv** – also als Ablage für
-> Dokumente, die nicht mehr verändert werden. Es akzeptiert **ausschließlich das
-> PDF-Format**. postbuch.net ist **kein Dokumenten-Editor**, keine
-> Textverarbeitung und nicht zur Verwaltung von Entwürfen gedacht. Deine
-> Ausgangspost kannst du trotzdem erfassen, indem du sie scannst oder als PDF
-> speicherst.
-
-## Bevor du startest
-
-> [!CAUTION]
->
-> **Wichtige Hinweise**
->
-> - **In der Standardkonfiguration verlassen deine Dokumente dein Netz und gehen
->   zu Cloud-Diensten, die du selbst auswählst**.
-> - **Nicht für Unternehmen, Selbstständige oder Vereine gedacht.**
-> - **Auf Deutschland zugeschnitten – Oberfläche und Abläufe gibt es nur auf
->   Deutsch.**
-> - **Niemals frei aus dem Internet erreichbar machen.**
-> - **Der Code von postbuch.net basiert auf KI-Coding-Tools und ist nicht
->   vollständig menschlich gegengeprüft.**
-
-Die Langfassung:
-
-- postbuch.net schickt Dokumente zum Lesen an einen von dir gewählten
-  KI-Anbieter (z. B. OpenAI oder Anthropic) und legt sie bei einem von dir
-  gewählten Speicher-Anbieter ab (OneDrive oder eine eigene Nextcloud) – in
-  beiden Fällen über deine eigenen Zugangsdaten, nicht über uns. Ein
-  cloud-freier Betrieb ist möglich: eigene Nextcloud plus mindestens zwei lokal
-  gehostete KI-Modelle (z. B. über Ollama oder LM Studio – eines für Embeddings,
-  mindestens ein weiteres als Sprachmodell für die Analyse), laufend sichtbar am
-  Cloud-frei-Check unter `Einstellungen → Allgemein`. Praktikabel ist das nur
-  mit passender Inferenz-Hardware und Erfahrung im Umgang damit – und selbst
-  dann: Die KI-Qualität bei kniffligen Fällen bleibt spürbar hinter einem
-  Cloud-Modell zurück.
-- postbuch.net ist auf Deutschland ausgelegt. Oberfläche, Doku und die
-  KI-Auswertung arbeiten auf Deutsch, und die Fachfunktionen setzen deutsche
-  Verhältnisse voraus: private Krankenversicherung und Beihilfe, GOÄ/GOZ/GOT bei
-  Arztrechnungen, der Steuerabzug für Handwerkerleistungen, deutsche IBANs und
-  Datumsformate. Außerhalb Deutschlands lässt sich die allgemeine
-  Dokumentenverwaltung nutzen, die abrechnungsnahen Teile aber nicht sinnvoll.
-- postbuch.net ist ausschließlich für den privaten Gebrauch gebaut. Ein
-  gewerblicher, freiberuflicher oder Einsatz im Verein wirft viele Rechtsfragen
-  auf – vor allem Datenschutz/DSGVO, je nach Branche auch Berufsrecht –, für die
-  allein du als Betreiber verantwortlich bist. postbuch.net ist kein
-  Dienstanbieter und bietet keine der dafür nötigen Absicherungen (etwa einen
-  AVV).
-- In deiner postbuch.net-Instanz werden Gesundheits- und Finanzdaten
-  verarbeitet. Klare Empfehlung: Betreibe die Instanz nur im eigenen Netz oder
-  hinter einem VPN. Die postbuch.net-eigenen Security-Mechanismen sind nicht für
-  offenen Betrieb ausgelegt. HTTPS verschlüsselt nur die Übertragung, sichert
-  das Produkt selbst aber nicht gegen fremde Zugriffe ab.
-- Die Anwendung postbuch.net ist ein **reines Hobbyprojekt**, das selbst
-  **maßgeblich durch den Einsatz von KI-Coding-Tools entwickelt** wurde. Große
-  Teile des Codes sind nicht menschlich überprüft worden. Hieraus resultieren
-  entsprechende Sicherheitsrisiken. Die Anwendung ist nicht kommerziell, und es
-  gibt keine Garantie auf Funktion, Sicherheit oder Datenschutz. Du nutzt sie
-  auf eigenes Risiko.
-
-> [!NOTE]
->
-> **postbuch.net ist kein Cloud-Dienst**
->
-> postbuch.net ist der Name dieser Software, die du selbst hostest.
-> **postbuch.net ist kein Cloud-Dienst**. Wir bieten weder Speicherung noch
-> KI-Verarbeitung deiner Dokumente an, und wir haben keinen Zugriff auf deine
-> Daten. Wir bieten auch keinen Support für die Software an – nur die Community
-> kann helfen.
+Gedacht ist postbuch.net für alles, was als Brief oder PDF ins Haus kommt:
+Rechnungen, Verträge, Angebote, Kaufbelege, Gesundheitsunterlagen, Bescheide
+von Behörden, Versicherungen und Banken, Kontoauszüge, Steuerunterlagen und
+Urkunden.
 
 ## Funktionen
 
-- Posteingang (Dokumentenimport) über Netzwerkscanner, Datei-Upload im Browser
-  oder einen überwachten Cloud-Ordner – alles läuft in derselben Warteschlange
-  zusammen.
-- KI-Analyse statt Handarbeit: Das Modell liest jedes Dokument und trägt
-  Absender, Datum, Betrag und Dokumentart automatisch ein.
-- Arztrechnungen, PKV & Beihilfe: Belege sammeln, für die Einreichung bündeln,
-  nachhalten, Erstattungen und Kürzungen automatisch abgleichen.
-- Chat mit den eigenen Dokumenten – die Antwort kommt mit den Belegen, aus denen
-  sie stammt.
-- Ablage in OneDrive oder einer Nextcloud-Instanz (selbst-gehostet oder
-  kommerzielle Produkte wie z. B. MagentaCLOUD) – wechselbar, mit einer
-  Migration, die in beide Richtungen läuft.
-- Frei wählbarer KI-Anbieter: OpenAI, Anthropic, Bedrock oder jeder
-  OpenAI-kompatible Endpunkt, auch selbst gehostet.
-- PWA-Benachrichtigungen für neue Dokumente, Fehler, Duplikate, Fristen und
-  Wiedervorlagen. Die experimentelle Discord-Anbindung wird wegen möglicher
-  Datenoffenlegung bei Fehlkonfiguration nicht empfohlen.
-- Etikettendruck fürs Papieroriginal (unterstützt wird ausschließlich Niimbot
-  D110).
-- MCP-Server stellt postbuch.net als Datenquelle für externe Tools wie Claude
-  Desktop oder ChatGPT zur Verfügung.
-- Backup und Wiederherstellung der Datenbank direkt in der Oberfläche. Die
-  eigentlichen Dokumente sicherst du über die Ablage (OneDrive/Nextcloud)
-  selbst.
-- Läuft vollständig in Docker-Containern; ein Raspberry Pi mit mindestens 2 GB
-  RAM reicht.
+- Posteingang über Netzwerkscanner, Handykamera, Datei-Upload, das Teilen-Menü
+  des Smartphones oder einen überwachten Cloud-Ordner – alles läuft in
+  derselben Warteschlange zusammen.
+- KI-Analyse jedes Dokuments mit frei wählbarem Anbieter: OpenAI, Anthropic,
+  Mistral (mit EU-Rechenzentren), AWS Bedrock oder jeder OpenAI-kompatible
+  Endpunkt, auch selbst gehostet.
+- Ablage in OneDrive oder einer Nextcloud (selbst betrieben oder z. B.
+  MagentaCLOUD), mit einem Umzug, der in beide Richtungen läuft.
+- Semantische Suche und Chat mit den eigenen Dokumenten, jeweils mit Belegen.
+- Akten, Fristen, Wiedervorlagen und Verbleib der Papieroriginale.
+- Arztrechnungen, PKV und Beihilfe: Belege sammeln, für die Einreichung
+  bündeln, nachhalten, Erstattungen und Kürzungen automatisch abgleichen.
+- Auswertungen wie unbezahlte Rechnungen und Handwerkerkosten fürs Finanzamt,
+  Excel-Export und Export einer Akte, etwa für den Anwalt.
+- Push-Benachrichtigungen für neue Dokumente, Fehler, Duplikate, Fristen und
+  Wiedervorlagen.
+- Mehrere Personen im Haushalt mit Voll- oder Lesezugriff; ein Lesezugriff
+  lässt sich auf die eigenen Dokumente beschränken.
+- Etikettendruck fürs Papieroriginal (Niimbot D110).
+- MCP-Server: postbuch.net als Datenquelle für Claude Desktop, ChatGPT und
+  andere Tools.
+- Backup und Wiederherstellung der Datenbank in der Oberfläche; die Dokumente
+  selbst sicherst du über deine Ablage.
+- Signierte Releases; die Oberfläche meldet neue Versionen samt Änderungen.
+
+## Ist postbuch.net das Richtige für dich?
+
+postbuch.net passt gut, wenn
+
+- du **privat** Ordnung in deine Unterlagen bringen willst, allein oder im
+  Haushalt,
+- du **in Deutschland** lebst – Oberfläche, Doku und KI-Auswertung sind
+  deutsch, und Fachfunktionen wie PKV und Beihilfe, GOÄ/GOZ, der Steuerabzug
+  für Handwerkerleistungen oder deutsche IBANs setzen deutsche Verhältnisse
+  voraus,
+- du einen kleinen Server betreiben magst – die Installation ist geführt,
+  etwas Terminal-Grundwissen (per SSH verbinden, einen Befehl einfügen) solltest
+  du aber mitbringen.
+
+Weniger passend ist es für Unternehmen, Selbstständige und Vereine: Dafür
+bietet postbuch.net weder einen Auftragsverarbeitungsvertrag noch eine
+revisionssichere Ablage, und die Rechtsfragen lägen allein bei dir.
+
+postbuch.net archiviert **PDFs**. Fotos vom Handy wandelt die Kamerafunktion
+selbst in PDFs um. Ein Editor für Entwürfe ist es nicht.
+
+### Was du brauchst
+
+- **Einen Linux-Rechner, der durchläuft**, z. B. einen Raspberry Pi mit
+  mindestens 2 GB RAM. Docker richtet der Installer auf Debian/Ubuntu-artigen
+  Systemen selbst ein.
+- **Einen Zugang zu einem Sprachmodell**, z. B. einen API-Key bei OpenAI,
+  Mistral oder Anthropic. Bei OpenAI reicht die Mindestaufladung von 5
+  US-Dollar je nach Modellwahl in der Regel für viele Monate privater Nutzung.
+  Alternativ betreibst du einen eigenen KI-Server, etwa mit Ollama oder LM
+  Studio. Die Embeddings für Suche und Duplikatprüfung berechnet postbuch.net
+  mit einem eingebauten Dienst selbst.
+- **Eine Ablage**: ein Microsoft-Konto für OneDrive (der Assistent führt dich
+  durch die dafür nötige kostenlose Azure-App-Registrierung) **oder** eine
+  Nextcloud bzw. ownCloud, selbst betrieben oder bei einem Anbieter. OneDrive
+  und MagentaCLOUD bieten kostenlose Tarife, die für die meisten privaten
+  Archive reichen.
+- **Empfohlen:** eine kostenlose DuckDNS-Subdomain. Damit bekommt die Instanz
+  automatisch HTTPS, und App-Installation sowie Push-Nachrichten werden
+  möglich.
+- **Optional:** einen eSCL-fähigen Netzwerkscanner (das kann fast jedes
+  aktuelle Multifunktionsgerät) und einen Niimbot-D110-Etikettendrucker.
+
+Einzelheiten stehen unter [Voraussetzungen](docs/voraussetzungen.md).
+
+## Schnellstart
+
+Der empfohlene Weg ist ein einzelner Installationsbefehl – kein manuelles
+`git clone` und kein Editieren einer `.env`:
+
+```bash
+curl -fsSL https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.sh | bash
+```
+
+Der Installer lädt das aktuelle, signierte Release, prüft es, richtet Docker bei
+Bedarf selbst ein und fragt nur, was der Server selbst wissen muss:
+
+- Name der Instanz und Admin-Passwort – Datenbank- und Session-Secret erzeugt
+  der Installer selbst, zufällig,
+- ob ein vorhandenes Datenbank-Backup eingespielt werden soll (für Umzug oder
+  Neuaufbau),
+- optional eine DuckDNS-Domain für automatisches HTTPS und ob die Oberfläche
+  danach nur noch darüber erreichbar sein soll.
+
+Am Ende startet der Stack und der Installer nennt die Adresse. Dort meldest du
+dich als Admin an.
+
+### Danach: der Einrichtungsassistent
+
+Nach dem ersten Login öffnet sich der Einrichtungsassistent. Er führt durch
+Instanz und Netzwerk, Personen und Zugänge, die Verbindung zur Ablage samt
+Ordnerstruktur, KI und Embeddings, Scanner, Benachrichtigungen und Backup.
+Jeder Schritt prüft sein Ergebnis gegen den echten Dienst und zeigt an, was
+noch offen ist. Optionale Schritte wie Scanner und Benachrichtigungen dürfen
+offenbleiben; ohne verbundene Ablage hat postbuch.net dagegen keine
+Dokumentenfunktion. Alle Werte lassen sich später einzeln unter
+`Einstellungen` ändern.
+
+### Alternative: manuell mit Docker Compose
+
+Wer keine Installationsskripte per Pipe ausführen möchte: Repository klonen,
+`.env` aus `.env.example` selbst befüllen (Secrets, Ablage, Domain) und
+`docker compose up -d --build` starten. Alles, was der Installer automatisch
+setzt, gehört dann von Hand in die `.env`. Der Einrichtungsassistent läuft
+danach genauso. Ausführlich in [docs/installation.md](docs/installation.md).
+
+### Von unterwegs
+
+Die Instanz bleibt im Heimnetz. Von unterwegs erreichst du sie über ein VPN,
+etwa mit WireGuard auf der FRITZ!Box oder mit Tailscale – eine Portfreigabe
+für postbuch.net ist nicht nötig. Die gewohnte Adresse, die installierte App
+und Push-Nachrichten funktionieren dann wie zu Hause. Anleitung:
+[Zugriff von unterwegs](docs/zugriff-von-unterwegs.md).
+
+## Datenschutz, Sicherheit und Projektstatus
+
+Damit du weißt, worauf du dich einlässt:
+
+- **Deine Dokumente gehen dorthin, wohin du sie schickst.** postbuch.net ist
+  kein Cloud-Dienst: Das Projekt betreibt keine Server, speichert nichts und hat
+  keinen Zugriff auf deine Daten. Zum Lesen gehen die Dokumente an den
+  KI-Anbieter, den du auswählst, und abgelegt werden sie bei deinem
+  Speicher-Anbieter – beides mit deinen eigenen Zugangsdaten. Wähle diese
+  Anbieter bewusst, denn sie sehen deine Dokumente.
+- **Ein Betrieb ganz ohne Cloud ist möglich**, mit eigener Nextcloud und
+  lokalen KI-Modellen; der Cloud-frei-Check unter
+  `Einstellungen → Allgemein` zeigt, ob alles im eigenen Netz bleibt. Dafür
+  brauchst du passende Hardware und etwas Erfahrung, und bei kniffligen
+  Dokumenten bleibt die Qualität lokaler Modelle derzeit hinter Cloud-Modellen
+  zurück.
+- **Im Heimnetz betreiben, nicht offen im Internet.** postbuch.net verarbeitet
+  Gesundheits- und Finanzdaten, hat aber keine Zwei-Faktor-Anmeldung und ist
+  nicht für den offenen Betrieb gehärtet. Von unterwegs ist ein VPN der
+  passende Weg (siehe oben).
+- **Die Ablage-Verbindung reicht weit.** Bei OneDrive arbeiten neue
+  Verbindungen nur im eigenen App-Ordner; ältere mit Vollzugriff lassen sich
+  unter `Einstellungen → Dateiablage` darauf umstellen. Ein Nextcloud-App-Passwort gilt
+  dagegen meist für das ganze Konto; dass postbuch.net nur in seinem Ordner
+  bleibt, ist dort eine Selbstbeschränkung der Anwendung. Die Zugangsdaten
+  liegen unverschlüsselt in der Datenbank. Wer Zugriff auf den Server hat, hat
+  also auch Zugriff auf die Ablage. Wer das begrenzen will, nutzt ein eigenes
+  Konto nur für postbuch.net. Einzelheiten unter
+  [Sicherheit](docs/sicherheit.md#wie-weit-der-zugriff-auf-die-dateiablage-reicht).
+- **Ein Hobbyprojekt in der Public Beta.** postbuch.net ist bei seinem
+  Entwickler täglich im Einsatz, aber noch jung. Zwischen Versionen kann sich
+  einiges ändern, und Fehler kommen vor; regelmäßige Backups gehören deshalb
+  dazu. Der Code ist maßgeblich mit
+  KI-Coding-Werkzeugen entstanden und nicht vollständig von Menschen
+  gegengeprüft. Es gibt keine Garantie und keinen Support im kommerziellen
+  Sinn; Fehlerberichte und Fragen über GitHub-Issues sind willkommen.
+
+Weitere Hinweise:
+
+- Bei der manuellen Installation müssen die Platzhalter in der `.env` (u. a.
+  `APP_PASSWORD=CHANGEME`) vor dem ersten Start ersetzt werden. Die `.env`
+  enthält Admin-Passwort und Secrets im Klartext und gehört nie in ein
+  Repository.
+- Ein Datenbank-Backup ist standardmäßig verschlüsselt und enthält dann auch
+  die Zugangsdaten zu Ablage und KI. Unverschlüsselte Backups lassen die
+  Zugangsdaten weg, alle übrigen Daten stehen dann im Klartext darin.
+- Der Scanner-Webhook ist bei neuen Installationen nur auf dem Rechner selbst
+  erreichbar und wird unter `Einstellungen → Scanner` freigegeben.
+
+Sicherheitslücke gefunden? Bitte über GitHubs privates Vulnerability-Reporting
+melden (Tab „Security" → „Report a vulnerability"), nicht als öffentliches
+Issue – siehe [SECURITY.md](SECURITY.md).
 
 ## Architektur
 
@@ -184,168 +238,6 @@ Docker Compose betreibt folgende Dienste:
 - `scanner` + `cleaner`: eSCL-Scanner-Webhook und
   OCR-/Bildbereinigungs-Pipeline, gemeinsam optional über das Compose-Profil
   `scanner`
-
-## Voraussetzungen
-
-- Ein Linux-Server mit sudo-Rechten – ein Raspberry Pi mit mindestens 2 GB RAM
-  reicht. Docker selbst richtet der Installer auf Debian/Ubuntu-artigen Systemen
-  bei Bedarf ein.
-- Ein API-Key eines geeigneten KI-Anbieters (z. B. OpenAI) mit etwas Guthaben.
-  Alternativ kannst du auch einen eigenen LLM-Server betreiben, z. B. über
-  Ollama oder LM Studio. Du brauchst mindestens ein Modell für Embeddings und
-  ein weiteres als Sprachmodell für die Analyse.
-- Eine Ablage:
-  - OneDrive: ein Microsoft-Konto – dazu gehört eine kostenlose eigene
-    Azure-App-Registrierung, durch die dich der Einrichtungsassistent nach dem
-    ersten Login Schritt für Schritt führt. Neue Verbindungen erhalten nur
-    Zugriff auf den eigenen App-Ordner, siehe
-    [Sicherheitshinweise](#sicherheitshinweise), **oder**
-  - Nextcloud/owncloud: ein eigener Server oder ein kommerzieller Anbieter
-- Optional, aber empfohlen: eine Domain für automatisches HTTPS – eine
-  kostenlose DuckDNS-Subdomain reicht
-- eSCL-fähiger Scanner (optional; quasi jeder moderne
-  Scanner/Multifunktionsdrucker)
-- Niimbot D110 Etikettendrucker (optional)
-
-> [!TIP]
->
-> **Schnellstart mit zwei Diensten: OneDrive/MagentaCLOUD und OpenAI**
->
-> postbuch.net ist auf Microsofts OneDrive als Cloud-Ablage optimiert. Viele
-> haben bereits ein Microsoft-Konto und damit Zugriff auf den Dienst. In der
-> kostenfreien Version bietet OneDrive genügend Speicherplatz für die meisten
-> privaten Dokumentenarchive. Alternativ kann z. B. MagentaCLOUD genutzt werden,
-> die auf Nextcloud basiert und ebenfalls einen leistungsstarken kostenfreien
-> Tarif bietet.
->
-> Embeddings und LLMs per API aus einer Hand bietet z. B. OpenAI
-> (https://openai.com/de-DE/api/) an. Einmal mit dem Mindestbetrag von 5
-> US-Dollar (einschließlich Steuern rund 5 Euro) aufgeladen, reicht das Guthaben
-> abhängig von der Modellwahl und der Nutzungsintensität in der Regel für viele
-> Monate privater Nutzung. Anthropic bietet keine Embeddings an, nur LLMs -
-> daher reicht ein Anthropic-API-Key allein nicht aus, um postbuch.net zu
-> betreiben.
->
-> Wähle deine Anbieter aber bewusst und mit Bedacht: Sie erhalten vollen Zugriff
-> auf deine Dokumente!
-
-## Schnellstart
-
-Der empfohlene Weg ist ein einzelner Installationsbefehl – kein manuelles
-`git clone` oder Editieren einer `.env`:
-
-```bash
-curl -fsSL https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.sh | bash
-```
-
-Der Installer lädt das aktuelle, signierte Release, prüft es, richtet Docker bei
-Bedarf selbst ein und stellt danach nur noch die Fragen, die der Server selbst
-beantwortet haben muss:
-
-- Name der Instanz und Admin-Passwort – Datenbank- und Session-Secret erzeugt
-  der Installer selbst, zufällig
-- ob ein vorhandenes Datenbank-Backup eingespielt werden soll: für Umzug oder
-  Neuaufbau startet der Stack leer und zeigt am Ende die Adresse, unter der die
-  Sicherung hochgeladen wird
-- eine kostenlose DuckDNS-Domain für automatisches HTTPS, wenn PWA oder Push
-  genutzt werden sollen. Diese Funktionen brauchen eine gleichbleibend
-  erreichbare HTTPS-Adresse. Die OneDrive-Verknüpfung per Gerätecode, der
-  Standard, kommt ohne Callback-URL aus; nur der alternative Browser-Redirect
-  nutzt die Adresse als Callback.
-- mit DuckDNS: ob die Oberfläche nur noch über HTTPS erreichbar sein soll –
-  später umschaltbar unter `Einstellungen → Allgemein → Erreichbarkeit`
-
-Mehr fragt der Installer nicht. Ablage, KI-Anbieter, Scanner,
-Benachrichtigungen und Backup gehören in die Oberfläche und werden dort
-eingerichtet – mit Prüfung jeder Verbindung, statt blind in eine Datei
-geschrieben.
-
-Am Ende startet der Stack automatisch. Die angezeigte Adresse öffnen und als
-Admin einloggen.
-
-### Danach: der Einrichtungsassistent
-
-Nach dem ersten Admin-Login öffnet sich automatisch der
-Web-Einrichtungsassistent. Hier passiert die gesamte fachliche Einrichtung:
-Instanz und Netzwerk, Personen und Zugänge, Ablage verbinden, Ordnerstruktur
-anlegen und durchtesten, KI und Embeddings, Scanner suchen (falls vorhanden),
-Benachrichtigungen, Backup, Abschlussprüfung.
-
-Was der Installer nicht abfragt, wird hier erledigt: die Anleitung durch
-die Azure-App-Registrierung für OneDrive bzw. die Anmeldung an der eigenen
-Nextcloud, und die KI-Anbieter samt Modellwahl. Jeder Schritt prüft sein
-Ergebnis gegen den echten Dienst und zeigt in der Schrittleiste an, was noch
-offen ist.
-
-Optionale Schritte wie Scanner und Benachrichtigungen dürfen offenbleiben. Die
-Ablage ist dagegen zwingend: Ohne verbundenes und geprüftes OneDrive- oder
-WebDAV-Backend hat postbuch.net keine Dokumentenfunktion. Der Assistent lässt
-sich später über `Einstellungen` erneut öffnen; dieselben Werte lassen sich
-danach auch einzeln dort ändern.
-
-### Alternative: manuell mit Docker Compose
-
-Für alle, die keine Installationsskripte per Pipe ausführen wollen, oder für
-Entwicklung: das Repository klonen, `.env` aus `.env.example` selbst befüllen
-(Secrets, Ablage, Domain), dann `docker compose up -d --build`. Es gibt dabei
-keinen geführten Dialog und keine automatisch erzeugten Secrets – alles, was der
-Installer oben automatisch setzt, muss hier von Hand in die `.env`. Der
-Einrichtungsassistent läuft danach genauso wie nach einer Installer-Installation.
-Ausführlich in [docs/installation.md](docs/installation.md).
-
-## Sicherheitshinweise
-
-> [!WARNING]
->
-> **Die Ablage-Verbindung reicht weit.**
->
-> Bei OneDrive nutzen neue Verbindungen die Berechtigung
-> `Files.ReadWrite.AppFolder`: postbuch.net arbeitet nur in seinem eigenen
-> App-Ordner unter `Apps/`, der über OneDrive-App, Explorer und onedrive.com
-> wie ein gewöhnlicher Ordner erreichbar ist. Ältere Verbindungen nutzen
-> `Files.ReadWrite.All` – lesen, ändern und löschen in **allen** Ordnern des
-> verbundenen Microsoft-Kontos –, bis sie unter `Einstellungen → Dateiablage`
-> auf den App-Ordner umgestellt werden. Ein Nextcloud-/WebDAV-App-Passwort
-> gilt meist für das ganze Cloud-Konto; dass postbuch.net nur in seinem Ordner
-> arbeitet, ist dort eine Selbstbeschränkung der Anwendung. Es lässt sich
-> allerdings einzeln widerrufen.
->
-> Token bzw. App-Passwort liegen **unverschlüsselt in der Datenbank** und in
-> jedem verschlüsselten Backup; unverschlüsselte Backups enthalten keine
-> Zugangsdaten. Wer Zugriff auf den Server, auf die Datenbank oder auf ein
-> verschlüsseltes Backup samt Passwort hat, hat vollen Zugriff auf die
-> Ablage – beim OneDrive-Vollzugriff auf das komplette OneDrive, auch auf
-> alles, was mit postbuch.net nichts zu tun hat.
->
-> Wer das nicht möchte: ein separates Microsoft-Konto nur für postbuch.net
-> verwenden oder eine eigene Nextcloud betreiben. Einzelheiten in
-> [docs/sicherheit.md](docs/sicherheit.md#wie-weit-der-zugriff-auf-die-dateiablage-reicht).
-
-- Der Installer fragt Admin-Passwort und Instanzname ab und erzeugt Datenbank-
-  und Session-Secret selbst, zufällig. Bei der manuellen Installation aus dem
-  Quellcode ist das eigene Aufgabe – die Platzhalter in `.env` (u. a.
-  `APP_PASSWORD=CHANGEME`) müssen vor dem ersten Start ersetzt werden.
-- HTTPS für jede Administration bevorzugen. Der direkte Web-Port 3420 ist im
-  eigenen Netz erreichbar, solange er nicht unter
-  `Einstellungen → Allgemein → Erreichbarkeit` geschlossen ist; das eigene
-  Netz dann als vertrauenswürdig behandeln. Der Scanner-Webhook-Port ist bei
-  neuen Installationen nur auf dem Rechner selbst erreichbar und wird unter
-  `Einstellungen → Scanner` freigegeben; jeder Aufruf braucht den
-  Scanner-Token.
-- `.env` niemals committen oder weitergeben – sie enthält Admin-Passwort sowie
-  Datenbank- und Session-Secret im Klartext. KI-Provider-Keys und
-  OneDrive-/Nextcloud-Zugangsdaten stehen dort nicht: Sie werden im
-  Einrichtungsassistenten bzw. unter `Einstellungen` eingetragen und liegen in
-  der Datenbank. Nur bei der manuellen Installation kann ein KI-Key als
-  Startwert in der `.env` stehen. Ein Datenbank-Backup ist standardmäßig
-  verschlüsselt und enthält die Zugangsdaten; wer das Backup samt Passwort
-  hat, hat damit auch Zugriff auf Ablage und KI-Konten. Ist die
-  Verschlüsselung abgelehnt oder deaktiviert, lässt postbuch.net die
-  Zugangsdaten weg; alle übrigen Daten stehen dann im Klartext darin.
-
-Sicherheitslücke melden: siehe [SECURITY.md](SECURITY.md) – bitte GitHubs
-privates Vulnerability-Reporting nutzen (Tab „Security" → „Report a
-vulnerability"), keinen öffentlichen Issue öffnen.
 
 ## Lizenz
 
@@ -390,7 +282,7 @@ Die ausführliche Dokumentation liegt in [`docs/`](docs/README.md).
 - [Suche und Assistent](docs/suche-und-assistent.md) – Volltext, semantische Suche, Chat mit den eigenen Dokumenten
 - [PKV, Beihilfe und Abrechnung](docs/abrechnung-pkv-beihilfe.md) – Arztrechnungen, Einreichungen, Erstattungen, Kürzungen
 - [Export und Import](docs/export-import.md) – Akte für den Anwalt, Auswertung, Umzug zwischen Instanzen
-- [Mobil und PWA](docs/mobil-und-pwa.md) – Querformat-Sperre, Dokumentansicht durch Drehen, App-Installation
+- [Mobil und PWA](docs/mobil-und-pwa.md) – Mobilansicht, Bedienung auf Touch-Geräten, App-Installation
 - [Etiketten drucken](docs/etiketten-drucken.md) – Niimbot D110, Etikettenaufbau, Browser-Voraussetzungen
 - [MCP-Zugriff](docs/mcp.md) – postbuch.net als Datenquelle für Claude, ChatGPT und andere Tools
 - [Benachrichtigungen](docs/benachrichtigungen.md) – empfohlene PWA-/Browser-Push-Nachrichten und experimentelles Discord
@@ -401,6 +293,7 @@ Die ausführliche Dokumentation liegt in [`docs/`](docs/README.md).
 - [KI-Anbieter](docs/ki-provider.md) – Provider, Modellstufen, Embeddings, cloudfreier Betrieb
 - [Backup und Wiederherstellung](docs/backup-wiederherstellung.md) – Datenbank **und** Dokumente sichern, Restore, Notfallwiederherstellung
 - [Sicherheit](docs/sicherheit.md) – Rollenmodell, Netzwerk, Secrets, Meldewege
+- [Zugriff von unterwegs](docs/zugriff-von-unterwegs.md) – per VPN ins Heimnetz: WireGuard über die FRITZ!Box oder Tailscale
 - [Architektur](docs/architektur.md) – Dienste, Datenfluss, Datenmodell, Schema-Pflege
 - [Betrieb und Troubleshooting](docs/betrieb-troubleshooting.md) – Updates, Neustart, Logs, häufige Fehlerbilder
 - [FAQ](docs/faq.md) – kurze Antworten auf wiederkehrende Fragen

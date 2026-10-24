@@ -41,6 +41,47 @@ export async function ladeErsetzung(db, postid) {
   };
 }
 
+/**
+ * Ersetzungskanten für viele Dokumente auf einmal (Suchtreffer). Liefert eine
+ * Map postid → { ersetzt_durch, ersetzt_rechnung }; Dokumente ohne Kante fehlen.
+ */
+export async function ladeErsetzungen(db, postids) {
+  const map = new Map();
+  if (!postids.length) return map;
+  const { rows } = await db.query(
+    `SELECT von_postid, zu_postid
+       FROM postbuch.dokument_beziehung
+      WHERE art = 'ersetzt' AND (von_postid = ANY($1) OR zu_postid = ANY($1))`,
+    [postids],
+  );
+  const eintrag = (postid) => {
+    if (!map.has(postid)) map.set(postid, { ersetzt_durch: null, ersetzt_rechnung: null });
+    return map.get(postid);
+  };
+  for (const r of rows) {
+    eintrag(r.zu_postid).ersetzt_durch = r.von_postid;
+    eintrag(r.von_postid).ersetzt_rechnung = r.zu_postid;
+  }
+  for (const id of [...map.keys()]) if (!postids.includes(id)) map.delete(id);
+  return map;
+}
+
+/**
+ * Klartext-Hinweis für KI-Werkzeuge, die nur den Dokumentinhalt liefern
+ * (Volltext, Vision, PDF über MCP): Der Beleg selbst weiß nicht, dass er
+ * ersetzt wurde. Liefert null ohne Ersetzungskante.
+ */
+export async function ersetzungsHinweis(db, postid) {
+  const { ersetzt, ersetzt_durch: durch } = await ladeErsetzung(db, postid);
+  if (durch) {
+    return `Diese Rechnung ist durch die Korrekturrechnung ${durch.postid} ersetzt und gilt als erledigt. Ihr Inhalt ist überholt: Beträge, Zahlungen und offener Rest stehen bei ${durch.postid}.`;
+  }
+  if (ersetzt) {
+    return `Diese Korrekturrechnung ersetzt die Rechnung ${ersetzt.postid}; maßgeblich sind die Werte dieser Korrekturrechnung, ${ersetzt.postid} zählt nicht mehr.`;
+  }
+  return null;
+}
+
 export const ARTWECHSEL_GESPERRT =
   'Wiederverarbeitung gesperrt: Die Rechnung ist mit einer Korrekturrechnung verknüpft und muss eine Rechnung derselben Art bleiben. Bitte zuerst die Ersetzung aufheben.';
 

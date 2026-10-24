@@ -10,6 +10,7 @@ import postbuchRouter from './routes/postbuch.js';
 import searchRouter from './routes/search.js';
 import filesRouter from './routes/files.js';
 import statsRouter from './routes/stats.js';
+import { appLog } from './app-log.js';
 import actionsRouter from './routes/actions.js';
 import analyseRouter from './routes/analyse.js';
 import authRouter from './routes/auth.js';
@@ -185,6 +186,19 @@ app.get('/.well-known/assetlinks.json', (req, res) => {
 // Health check (unprotected)
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
+});
+
+// Schreibende Anfragen, die ein Browser aus einem fremden Kontext auslöst,
+// abweisen (Sec-Fetch-Site). SameSite=strict deckt nur fremde Sites ab;
+// „same-site“ umfasst auch andere Ports auf demselben Host. Fehlt der Header
+// (Cleaner-Webhook, MCP-Clients, alte Browser), greift die übrige Auth.
+app.use('/api', (req, res, next) => {
+  const site = req.get('Sec-Fetch-Site');
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && (site === 'cross-site' || site === 'same-site')) {
+    appLog('WARN', 'security', `Schreibanfrage aus fremdem Kontext abgewiesen (Sec-Fetch-Site: ${site}): ${req.method} ${req.baseUrl}${req.path}`);
+    return res.status(403).json({ error: 'Anfrage aus fremdem Kontext abgewiesen' });
+  }
+  next();
 });
 
 // Auth routes (unprotected — login/logout/check)

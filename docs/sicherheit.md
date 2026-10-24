@@ -55,7 +55,7 @@ Ausbildungsvertrag, Post von der Krankenkasse an sie selbst.
 
 Wer nur die eigenen Dokumente sieht, bekommt eine bewusst schlanke Oberfläche:
 die Dokumentliste, die Dokumentansicht mit PDF, die Suche (Volltext und
-semantisch), die Hilfe und in den Einstellungen das eigene Konto.
+semantisch), die Hilfe und in den Einstellungen den Bereich **Persönlich**.
 Übersicht, Analyse, Krankenversicherung, Akten, Wiedervorlagen, Verbleib,
 Anpinnen, der Assistent, Export, Logs und Benachrichtigungen fehlen ganz. Sie
 würden sonst Beträge, Namen oder Zusammenhänge aus fremden Dokumenten
@@ -114,10 +114,11 @@ alten Admin-Sitzungen sind ungültig.
 ## Was von außen erreichbar ist
 
 Im Auslieferungszustand hört postbuch.net auf **Port 3420** und ist damit im
-lokalen Netz erreichbar, nicht aus dem Internet. Wer von unterwegs zugreifen
-will, stellt einen Reverse-Proxy davor – mitgeliefert ist Caddy im Profil
-`caddy`, mit automatischem Zertifikat über DuckDNS oder eine eigene Domain
-(siehe [Installation](installation.md)).
+lokalen Netz erreichbar, nicht aus dem Internet. Für HTTPS steht Caddy im
+Profil `caddy` bereit, mit automatischem Zertifikat über DuckDNS oder eine
+eigene Domain (siehe [Installation](installation.md)). Von unterwegs führt der
+empfohlene Weg über ein VPN ins Heimnetz, nicht über eine Portfreigabe – siehe
+[Zugriff von unterwegs](zugriff-von-unterwegs.md).
 
 Ohne HTTPS fehlen drei Dinge gleichzeitig: die Installation als PWA, der
 Service-Worker und das `Secure`-Flag am Sitzungscookie. Eine dauerhaft
@@ -201,7 +202,10 @@ Einrichtung mit dem Admin-Passwort und einer Fehlversuchsbegrenzung geschützt.
 
 Der Webserver setzt außerdem `X-Content-Type-Options: nosniff`,
 `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` und eine
-`Permissions-Policy`, die Kamera, Mikrofon und Standort abschaltet.
+`Permissions-Policy`, die Mikrofon und Standort abschaltet und die Kamera nur
+der eigenen Seite erlaubt (für den Kamerascan). Eingebettete fremde Seiten
+bekommen keinen Kamerazugriff; die Bilder verlassen das Gerät erst als
+fertige PDF beim Hochladen.
 
 ### MCP-Token
 

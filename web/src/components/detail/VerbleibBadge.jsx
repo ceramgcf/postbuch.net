@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { useQuery } from '@tanstack/react-query';
 import * as LucideIcons from 'lucide-react';
 import { ShieldCheck, X, Printer } from 'lucide-react';
-import { renderLabelCanvas, downloadLabelPng } from '@/lib/labelRenderer';
+import { renderLabelCanvas } from '@/lib/labelRenderer';
+import { etikettIconSvg } from '@/lib/etikettIcon';
 import { api } from '@/api/client';
 import { Badge } from '@/components/ui/badge';
 import { useVerbleibKategorien } from '@/hooks/useVerbleib';
@@ -26,14 +26,10 @@ function VerbleibIcon({ name, className }) {
   return <Icon className={className} />;
 }
 
-function iconToSvg(name) {
-  const Icon = resolveIcon(name);
-  return renderToStaticMarkup(<Icon size={64} color="#000" strokeWidth={2.5} />);
-}
 
 export function VerbleibBadge({ data }) {
   const { canWrite } = useAuth();
-  const { isConnected, connect, print } = usePrinter();
+  const { printOrDownload } = usePrinter();
   const [open, setOpen] = useState(false);
   const [ortQuery, setOrtQuery] = useState('');
   const [ortDropdownOpen, setOrtDropdownOpen] = useState(false);
@@ -174,34 +170,15 @@ export function VerbleibBadge({ data }) {
 
   async function handlePrintLabel() {
     setOpen(false);
-    const verbleibIconSvg = verbleib?.icon ? iconToSvg(verbleib.icon) : null;
-    const urkundeIconSvg = urkundeFlag ? iconToSvg('ShieldCheck') : null;
+    const verbleibIconSvg = verbleib?.icon ? etikettIconSvg(verbleib.icon) : null;
+    const urkundeIconSvg = urkundeFlag ? etikettIconSvg('ShieldCheck') : null;
     const instanceName = appSettings?.instance_name?.value?.trim() ?? '';
     const canvas = await renderLabelCanvas(data.postid, {
       verbleibIconSvg,
       urkundeIconSvg,
       instanceName,
     });
-
-    if (isConnected) {
-      try {
-        await print(canvas);
-        return;
-      } catch {
-        // Drucker-Fehler: Fallback auf Download
-      }
-    } else {
-      // Kein Drucker verbunden: versuche zu verbinden (Button-Click = User Gesture)
-      try {
-        await connect();
-        await print(canvas);
-        return;
-      } catch {
-        // Verbindung abgebrochen oder Druckfehler: Fallback auf Download
-      }
-    }
-
-    downloadLabelPng(canvas, data.postid);
+    await printOrDownload(canvas, data.postid);
   }
 
   const activeKategorie = verbleib && !isDefault ? verbleib : null;
@@ -338,7 +315,7 @@ export function VerbleibBadge({ data }) {
                         onKeyDown={(e) => {
                           if (e.key === 'Escape') { setOrtDropdownOpen(false); setOrtQuery(''); }
                         }}
-                        placeholder="Ablage suchen…"
+                        placeholder="Sammelmappe suchen…"
                         className="w-full text-sm bg-transparent border border-border rounded px-2 py-1 outline-none focus:ring-1 focus:ring-ring"
                         autoComplete="off"
                       />
@@ -346,7 +323,7 @@ export function VerbleibBadge({ data }) {
                         <div className="absolute left-0 right-0 top-full mt-0.5 z-10 bg-popover border border-border rounded shadow-md max-h-48 overflow-y-auto">
                           {filteredAblagen.length === 0 ? (
                             <div className="px-3 py-2 text-xs text-muted-foreground">
-                              {ortQuery ? 'Keine passenden Ablagen' : 'Keine aktiven Ablagen'}
+                              {ortQuery ? 'Keine passenden Sammelmappen' : 'Keine aktiven Sammelmappen'}
                             </div>
                           ) : (
                             filteredAblagen.map((ablage) => (

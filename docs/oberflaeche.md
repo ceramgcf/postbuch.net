@@ -1,10 +1,12 @@
 # Die Oberfläche
 
-Die Web-App besteht aus einer Seitenleiste links und dem Inhaltsbereich rechts.
-Die Seitenleiste ist ab Werk dauerhaft ausgeklappt. Über das ![Anheften-Symbol](icons/pin.svg) Pinnadel-Symbol
+Ab 1024 px Bildschirmbreite besteht die Web-App aus einer Seitenleiste links
+und dem Inhaltsbereich rechts. Schmalere Bildschirme wie Smartphones und kleine
+Tablets zeigen automatisch die [Mobilansicht](mobil-und-pwa.md#die-mobilansicht)
+mit Kopfleiste und Burgermenü. Die Seitenleiste ist ab Werk dauerhaft ausgeklappt. Über das ![Anheften-Symbol](icons/pin.svg) Pinnadel-Symbol
 wechselt sie zum dynamischen Modus, in dem sie nur beim Überfahren mit der Maus
-bzw. Antippen ausklappt. Für kleine Bildschirme z. B. von Mobilgeräten wird der
-dynamische Modus empfohlen.
+bzw. Antippen ausklappt. Für kleine Bildschirme wird der dynamische Modus
+empfohlen.
 
 ![Dashboard mit angehefteter, ausgeklappter Seitenleiste](screenshots/oberflaeche-sidebar.jpg)
 
@@ -15,7 +17,7 @@ dynamische Modus empfohlen.
 | ![Dashboard-Symbol](icons/layout-dashboard.svg) **Dashboard**   | Kennzahlen, offene Entscheidungen, Wiedervorlagen, Warnbanner |
 | ![Import-Symbol](icons/upload.svg) **Importieren** | Scannen, hochladen, Dokumentenübergabe einspielen             |
 | ![Dokumente-Symbol](icons/file-text.svg) **Dokumente**   | Die Liste aller Dokumente mit Filtern, Sortierung und Export  |
-| ![Akten-Symbol](icons/folder-open.svg) **Akten**       | Elektronische Akten und die Verwaltung der Papier-Ablagen     |
+| ![Akten-Symbol](icons/folder-open.svg) **Akten**       | Elektronische Akten und die Verwaltung der Sammelmappen       |
 | ![Suche-Symbol](icons/search.svg) **Suche**       | Volltext- und semantische Suche über Dokumente und Akten      |
 | ![Assistent-Symbol](icons/message-circle.svg) **Assistent**   | Chat mit den eigenen Dokumenten                               |
 | ![Logs-Symbol](icons/scroll-text.svg) **Logs**        | Systemprotokolle (für Nicht-Admins ausblendbar)               |
@@ -42,7 +44,7 @@ breiten Bildschirmen rechts ein Inhaltsverzeichnis.
 
 Über der Fußzeile der Seitenleiste erscheint eine
 **Rückgängig/Wiederholen**-Leiste, sobald es etwas rückgängig zu machen gibt.
-Sie merkt sich die letzten **10** schreibenden Aktionen, lebt nur im Browser-Tab
+In der Mobilansicht stehen die beiden Knöpfe in der Kopfleiste. Die Leiste merkt sich die letzten **10** schreibenden Aktionen, lebt nur im Browser-Tab
 und ist nach einem Neuladen der Seite wieder leer.
 
 ### Aufgabenanzeige
@@ -56,7 +58,13 @@ lebt im aktuellen Browser-Tab.
 
 ## Dashboard
 
-Gibt es mehr als eine Person, steht ganz oben der **Personenfilter**: je Person
+Liegt eine nicht bestätigte Sitzung des
+[Abrechnungs-Assistenten](abrechnung-pkv-beihilfe.md#4-periode-einreichen--der-abrechnungs-assistent)
+vor, steht ganz oben der Hinweis **Offene Abrechnung** mit Kostenträger und
+Personen. **Fortsetzen** öffnet die Sitzung im Assistenten wieder. Den Hinweis
+sehen nur Benutzer mit Schreibrecht.
+
+Gibt es mehr als eine Person, folgt der der **Personenfilter**: je Person
 ein Knopf in ihrer Farbe, dazu **ohne Zuordnung** und **Alle**. Mehrere
 Personen lassen sich gleichzeitig wählen; **Alle** hebt die Auswahl auf. Der
 Filter wirkt nur auf das Dashboard. Dokumente, Rechnungen, Wiedervorlagen und
@@ -116,6 +124,29 @@ Sortierung an.
 
 Ein Klick auf das ![Auge-Symbol](icons/eye.svg) am rechten Rand einer Zeile
 öffnet die zugehörige PDF direkt in einem Viewer am rechten Bildschirmrand.
+Die Zeile des angezeigten Dokuments ist farbig hervorgehoben, ihr Auge wird zum
+![Durchgestrichenes-Auge-Symbol](icons/eye-off.svg) durchgestrichenen Auge. Ein
+Klick darauf schließt den Viewer wieder; ein Klick auf das Auge einer anderen
+Zeile wechselt das angezeigte Dokument.
+
+**Karten statt Tabelle.** Reicht die Breite nicht für alle eingeblendeten
+Spalten und einen gut lesbaren Betreff – etwa bei einem kleineren Fenster, auf
+einem Tablet oder bei geöffnetem PDF-Viewer –, zeigt die Liste die Dokumente
+als Karten: Kontakt fett, darunter der Betreff, Typ und Status als Abzeichen.
+Alle Karten sind gleich hoch, lange Texte werden einzeilig gekürzt.
+Das ![Auge-Symbol](icons/eye.svg) sitzt dann unten rechts in der Karte, die Karte
+des angezeigten Dokuments ist hervorgehoben. Ändert sich durch den Viewer die
+Darstellung oder die Zahl der Einträge pro Seite, blättert die Liste auf die
+Seite, die das angezeigte Dokument enthält, und holt es in den sichtbaren
+Bereich. Dasselbe gilt beim Schließen des Viewers, auch wenn zwischendurch
+weitergeblättert wurde. Wer Spalten ausblendet, gewinnt Platz; die Tabelle
+kommt zurück, sobald die Breite wieder reicht.
+
+**Blätterleiste unter der Liste.** Die Leiste mit Bereichsangabe, Blättern und
+der Auswahl „pro Seite“ bleibt immer einzeilig. Wird sie zu schmal, entfällt
+zuerst die Auswahl – die Liste stellt dann fest auf **Auto**, also so viele
+Einträge, wie auf den Bildschirm passen –, bei noch weniger Platz auch die
+Bereichsangabe „1–20 von 543“. Das Blättern bleibt immer erhalten.
 
 ![Archiv-Symbol](icons/archive.svg) **Historisch** – abgeschlossene Vorgänge bzw. überholte Dokumente (z. B. ein alter, gekündigter Stromliefervertrag) lassen sich als _historisch_ markieren.
 Sie verschwinden aus den Standardansichten, bleiben aber auffindbar.
@@ -150,7 +181,7 @@ Immer vorhanden:
 - ![Wiedervorlage-Symbol](icons/calendar-clock.svg) **Wiedervorlage** – Datum plus Anlass
 - **Verbleib** – wo das Papieroriginal liegt, mit Etikettendruck
   ![Drucker-Symbol](icons/printer.svg). Das Symbol des Verbleibs richtet sich
-  nach der gewählten Originalablage.
+  nach der Kategorie, in der das Original liegt.
 - ![Akten-Symbol](icons/folder-open.svg) **Akten** – Zugehörigkeit anlegen oder lösen
 
 In der Aktionsleiste:
@@ -177,10 +208,11 @@ Zwei Registerkarten:
 hinzufügen; die ganze Akte lässt sich als PDF, ZIP, Excel-Tabelle oder
 Dokumentenübergabe exportieren.
 
-![Originale-Symbol](icons/archive.svg) **Originale** – die Verwaltung der physischen Ablagen: Obergruppen (Kategorien)
-und die konkreten Ablagen darin, jeweils mit der Zahl der zugeordneten
-Dokumente. Ablagen lassen sich archivieren oder _auflösen_, wobei ihre Dokumente
-auf eine andere Ablage umgezogen werden.
+![Originale-Symbol](icons/archive.svg) **Originale** – die Verwaltung der Papierablage: Obergruppen (Kategorien)
+und die Sammelmappen darin, jeweils mit Mappennummer und der Zahl der
+zugeordneten Dokumente. Sammelmappen lassen sich archivieren oder _auflösen_,
+wobei ihre Dokumente in eine andere Sammelmappe umziehen; je Sammelmappe
+lassen sich Etiketten für den Ordnerrücken drucken.
 
 Details in [Akten, Verbleib und Wiedervorlagen](akten-und-organisation.md).
 
@@ -207,19 +239,19 @@ Die beiden Seiten erscheinen nur bei versicherten Personen. Siehe
 ## Einstellungen
 
 Elf Registerkarten. Für **Admins** sind alle sichtbar. Nicht-Admins sehen nur
-![Konto-Symbol](icons/key-round.svg) **Konto** und ![Benachrichtigungen-Symbol](icons/bell.svg) **Benachrichtigungen**, Schreibberechtigte zusätzlich
+![Persönlich-Symbol](icons/user-round.svg) **Persönlich** und ![Benachrichtigungen-Symbol](icons/bell.svg) **Benachrichtigungen**, Schreibberechtigte zusätzlich
 ![MCP-Symbol](icons/plug.svg) **MCP-Zugriff**.
 
 | Tab                    | Inhalt                                                                                                                       | Kapitel                                     |
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| ![Konto-Symbol](icons/key-round.svg) **Konto**              | Eigenes Passwort ändern                                                                                                      |                                             |
-| ![Allgemein-Symbol](icons/globe.svg) **Allgemein**          | Instanzname, Basis-URL, Sichtbarkeit einzelner Menüpunkte, Parallelität der Verarbeitungs-Pipeline, Cloud-frei-Check, Update | [Betrieb](betrieb-troubleshooting.md)       |
+| ![Persönlich-Symbol](icons/user-round.svg) **Persönlich**     | Eigenes Passwort ändern, automatisch folgen beim Import                                                                                           | [Importieren](dokumente-importieren.md#automatisch-folgen) |
+| ![Allgemein-Symbol](icons/globe.svg) **Allgemein**          | Instanzname, Basis-URL, Sichtbarkeit einzelner Menüpunkte, Parallelität der Verarbeitungs-Pipeline, Debug-Modus, Cloud-frei-Check, Update | [Betrieb](betrieb-troubleshooting.md)       |
 | ![KI-Symbol](icons/bot.svg) **KI**                 | Anbieter, Modellwahl und -stufen, Empfehlungen, Embedding-Modell                                                            | [KI-Anbieter](ki-provider.md)               |
 | ![Scanner-Symbol](icons/scan-line.svg) **Scanner**            | Scanner suchen und einbinden, Auflösung, Farbmodus                                                                           | [Importieren](dokumente-importieren.md)     |
 | ![Ablage-Symbol](icons/hard-drive.svg) **Dateiablage**             | OneDrive/Nextcloud verbinden, Ordner, Umzug                                                                                  | [Dateiablage-Backends](storage-backends.md)      |
 | ![Personen-Symbol](icons/users.svg) **Personen & Zugänge** | Menschen anlegen, Rollen, PKV-/Beihilfe-Sätze                                                                                | [Sicherheit](sicherheit.md)                 |
 | ![Verbleib-Symbol](icons/folder.svg) **Verbleib**           | Kategorien für Papierablagen                                                                                                 | [Akten](akten-und-organisation.md)          |
-| ![Drucker-Symbol](icons/printer.svg) **Drucker**            | Niimbot D110 verbinden                                                                                                       | [Etiketten drucken](etiketten-drucken.md)   |
+| ![Drucker-Symbol](icons/printer.svg) **Drucker**            | Niimbot D110 verbinden, Etiketten-Adressen für den Kamerascan                                                                | [Etiketten drucken](etiketten-drucken.md)   |
 | ![MCP-Symbol](icons/plug.svg) **MCP-Zugriff**        | Tokens für externe Tools                                                                                                     | [MCP](mcp.md)                               |
 | ![Backup-Symbol](icons/archive.svg) **Backup**             | Zeitplan, Aufbewahrung, Wiederherstellung                                                                                    | [Backup](backup-wiederherstellung.md)       |
 | ![Benachrichtigungen-Symbol](icons/bell.svg) **Benachrichtigungen** | PWA-/Browser-Push (empfohlen), Discord (experimentell)                                                                       | [Benachrichtigungen](benachrichtigungen.md) |

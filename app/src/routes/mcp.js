@@ -25,6 +25,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { runChatAgent } from '../service/chat-agent.js';
 import { retrieveDocument } from '../service/document-retriever.js';
+import { ersetzungsHinweis } from '../service/rechnung-ersetzung.js';
+import pool from '../db.js';
 
 const SERVER_NAME = 'postbuch';
 const SERVER_VERSION = '1.0.0';
@@ -127,11 +129,14 @@ function buildServer(principal, abortSignal) {
         return { content: [{ type: 'text', text: 'Ungültige postid (erwartet Format PXXXXXX, z.B. P000123).' }], isError: true };
       }
       try {
-        const { pdf, filename } = await retrieveDocument(postid);
+        const [{ pdf, filename }, hinweis] = await Promise.all([
+          retrieveDocument(postid),
+          ersetzungsHinweis(pool, postid),
+        ]);
         const base64 = pdf.toString('base64');
         return {
           content: [
-            { type: 'text', text: `${filename} — ${pdf.length} Bytes` },
+            { type: 'text', text: `${filename} — ${pdf.length} Bytes${hinweis ? `\nHinweis: ${hinweis}` : ''}` },
             {
               type: 'resource',
               resource: {

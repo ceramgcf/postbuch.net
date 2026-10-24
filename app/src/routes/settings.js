@@ -47,7 +47,8 @@ import {
 } from '../service/onedrive-watcher.js';
 import { stopAutoCacheMode } from '../lib/cache-mode.js';
 import { holeScannerCapabilities, normalisiereScannerEndpoint } from '../lib/scanner-capabilities.js';
-import { scannerProfilAutoSchalten } from '../service/host-agent.js';
+import { scannerProfilAutoSchalten, embeddingProfilAutoSchalten } from '../service/host-agent.js';
+import { starteNeuberechnung, neuberechnungStatus } from '../service/embedding-neuberechnung.js';
 import {
   findeScannerImCidr, bauCidr, netzVorschlagAusIp,
 } from '../service/scanner-discovery.js';
@@ -71,8 +72,10 @@ import {
 import { RASTER_MAX_SEITEN } from '../lib/pdf.js';
 import { clientSafeError } from '../lib/net-guard.js';
 import {
-  embeddingConfig, probeEmbeddingDimension, signatureOf, STORAGE_DIM,
+  embeddingConfig, embeddingSlot, probeEmbeddingDimension, signatureOf, STORAGE_DIM, VORSILBE_MAX,
 } from '../lib/embedding.js';
+import { vorsilbenVorschlag } from '../lib/embedding-vorsilben.js';
+import { EINGEBAUTES_EMBEDDING } from '../lib/embedding-eingebaut.js';
 import { getHelpEmbeddingStatus, startHelpEmbeddingJob } from '../service/help-corpus.js';
 import { buildLxdClassificationPrompt } from '../prompts/classification-lxd.js';
 import { PRE_ANALYSIS_SYSTEM_PROMPT, PRE_ANALYSIS_USER_MESSAGE } from '../prompts/pre-analysis.js';
@@ -97,6 +100,8 @@ const ALLOWED_SETTING_KEYS = new Set([
   // gebunden) sind ein undokumentiertes Experten-Feature, per Default
   // deaktiviert (außer bei Altinstanzen mit bereits bestehenden Quellen).
   'salden_quellen_aktiv',
+  // Etiketten-QR im Kamerascan: weitere Adressen der Instanz bzw. Adresse egal
+  'etikett_qr_erkennung',
   // OneDrive
   'onedrive_polling',
   // KI: Modellwahl (einfach/gestaffelt) und Modell je Stufe
@@ -180,6 +185,25 @@ const ALLOWED_SETTING_KEY_PATTERNS = [
 function isAllowedSettingKey(key) {
   return ALLOWED_SETTING_KEYS.has(key)
     || ALLOWED_SETTING_KEY_PATTERNS.some((re) => re.test(key));
+}
+
+// Aliase sind reine Host-Angaben („host“ oder „host:port“), so wie sie im
+// Etiketten-QR vor „/postbuch/…“ stehen. Schema und Pfad werden abgeschnitten.
+const ETIKETT_QR_HOST = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*(:\d{1,5})?$|^\[[0-9a-f:.]+\](:\d{1,5})?$/;
+
+function normalisiereEtikettQr(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Ungültiger Wert.');
+  const roh = Array.isArray(value.aliase) ? value.aliase : [];
+  if (roh.length > 20) throw new Error('Höchstens 20 weitere Adressen.');
+  const aliase = [];
+  for (const eintrag of roh) {
+    const host = String(eintrag ?? '').trim().toLowerCase()
+      .replace(/^[a-z][a-z0-9+.-]*:\/\//, '').split('/')[0];
+    if (!host) continue;
+    if (host.length > 253 || !ETIKETT_QR_HOST.test(host)) throw new Error(`Keine gültige Adresse: ${String(eintrag).slice(0, 80)}`);
+    if (!aliase.includes(host)) aliase.push(host);
+  }
+  return { aliase, alleAdressen: value.alleAdressen === true };
 }
 
 async function upsertSetting(key, value) {
@@ -742,6 +766,13 @@ router.put('/:key', async (req, res) => {
       intervalSec: Number.isFinite(rawInterval) ? Math.max(10, Math.floor(rawInterval)) : 60,
     };
   }
+  if (key === 'etikett_qr_erkennung') {
+    try {
+      normalizedValue = normalisiereEtikettQr(value);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  }
   if (key === 'llm_modellwahl' && !MODELLWAHLEN.includes(value)) {
     return res.status(400).json({ error: `Ungültige Modellwahl. Erlaubt: ${MODELLWAHLEN.join(', ')}.` });
   }
@@ -800,7 +831,7 @@ router.put('/:key', async (req, res) => {
 
     res.json({ ok: true, key, value: normalizedValue });
   } catch (err) {
-    console.error(`[settings] PUT /${key} Fehler:`, err);
+    console.error('[settings] PUT /%s Fehler:', key, err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1638,6 +1669,12 @@ router.put('/ai/providers/:id', async (req, res) => {
   try {
     const settings = await loadDynamicSettings();
     const vorhanden = listProviders(settings).find((p) => p.id === id);
+    // Adresse und private Ziele des eingebauten Dienstes sind fest verdrahtet
+    // (registry.js, EINGEBAUT_ID); ein gespeicherter Eintrag würde ohnehin
+    // ignoriert und soll gar nicht erst entstehen.
+    if (vorhanden?.fest) {
+      return res.status(400).json({ error: 'Der eingebaute Embedding-Dienst ist nicht einstellbar.' });
+    }
     const eintrag = { ...normalisiereProviderEingabe(req.body || {}, vorhanden), id };
     if (eintrag.typ === 'subscription' && !subscriptionFeatureUnlocked()) {
       return res.status(403).json({ error: 'Diese Funktion ist nicht freigeschaltet.' });
@@ -1701,8 +1738,12 @@ router.put('/ai/providers/:id/key', async (req, res) => {
   if (typeof key !== 'string') return res.status(400).json({ error: '"key" fehlt oder ist kein String.' });
   try {
     const settings = await loadDynamicSettings();
-    if (!listProviders(settings).some((p) => p.id === id)) {
+    const eintrag = listProviders(settings).find((p) => p.id === id);
+    if (!eintrag) {
       return res.status(404).json({ error: 'Provider nicht gefunden.' });
+    }
+    if (eintrag.fest) {
+      return res.status(400).json({ error: 'Der eingebaute Embedding-Dienst braucht keinen Schlüssel.' });
     }
     const provider = getProvider(settings, id);
     if (provider?.typ === 'subscription' && !subscriptionFeatureUnlocked()) {
@@ -1767,7 +1808,7 @@ router.post('/ai/providers/:id/test', async (req, res) => {
   } catch (err) {
     // Fehler-Body eines privaten Ziels NICHT durchreichen — sonst wäre diese
     // Route ein generisches HTTP-Lesegerät fürs LAN.
-    console.warn(`[settings] Provider-Test "${id}" fehlgeschlagen:`, err.message);
+    console.warn('[settings] Provider-Test "%s" fehlgeschlagen:', id, err.message);
     res.status(502).json({ ok: false, error: clientSafeError(err) });
   }
 });
@@ -1792,9 +1833,11 @@ router.get('/ai/embedding', async (_req, res) => {
     const hilfe = await getHelpEmbeddingStatus(settings);
     res.json({
       ...cfg,
+      vorsilben: cfg.vorsilben || { anfrage: '', dokument: '' },
       signature: aktiv,
       storageDim: STORAGE_DIM,
       bestand: { passend, gesamt, veraltet: gesamt - passend, verteilung: verteilung.rows },
+      neuberechnung: neuberechnungStatus(),
       hilfe,
     });
   } catch (err) {
@@ -1802,7 +1845,37 @@ router.get('/ai/embedding', async (_req, res) => {
   }
 });
 
-// PUT /api/settings/ai/embedding — { providerId, model }
+// GET /api/settings/ai/embedding/vorsilben-vorschlag?model=… — Vorbelegung der
+// Vorsilben für ein noch nicht gespeichertes Modell. Der Katalog bleibt so an
+// einer Stelle; die Oberfläche fragt ihn nur ab.
+router.get('/ai/embedding/vorsilben-vorschlag', (req, res) => {
+  res.json(vorsilbenVorschlag(typeof req.query.model === 'string' ? req.query.model : ''));
+});
+
+/**
+ * Vorsilben aus dem Request: fehlen sie, gilt der Katalogvorschlag für das
+ * Modell; sonst genau das Übergebene (auch ausdrücklich leer).
+ */
+function vorsilbenAusBody(vorsilben, model) {
+  if (vorsilben === undefined || vorsilben === null) return vorsilbenVorschlag(model);
+  if (typeof vorsilben !== 'object' || Array.isArray(vorsilben)) {
+    throw Object.assign(new Error('"vorsilben" muss ein Objekt { anfrage, dokument } sein.'), { status: 400 });
+  }
+  const erg = {};
+  for (const rolle of ['anfrage', 'dokument']) {
+    const wert = vorsilben[rolle] ?? '';
+    if (typeof wert !== 'string' || wert.length > VORSILBE_MAX) {
+      throw Object.assign(
+        new Error(`Vorsilbe „${rolle}" muss Text mit höchstens ${VORSILBE_MAX} Zeichen sein.`),
+        { status: 400 },
+      );
+    }
+    erg[rolle] = wert;
+  }
+  return erg;
+}
+
+// PUT /api/settings/ai/embedding — { providerId, model, vorsilben? }
 // Die Dimension wird NICHT vom Client übernommen, sondern per Probing ermittelt:
 // ein einziger embed("test")-Call, Ergebnis autoritativ. Das ist die einzige
 // Stelle mit Capability-Probing im System — hier ist es richtig, weil die
@@ -1812,6 +1885,12 @@ router.put('/ai/embedding', async (req, res) => {
   if (!providerId || typeof model !== 'string' || !model.trim()) {
     return res.status(400).json({ error: '"providerId" und "model" sind erforderlich.' });
   }
+  let vorsilben;
+  try {
+    vorsilben = vorsilbenAusBody(req.body.vorsilben, model.trim());
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
   try {
     const settings = await loadDynamicSettings();
     const prov = getProvider(settings, providerId);
@@ -1820,17 +1899,48 @@ router.put('/ai/embedding', async (req, res) => {
       return res.status(400).json({ error: `Der Provider "${prov.label}" ist nicht als embedding-fähig konfiguriert.` });
     }
 
-    const dim = await probeEmbeddingDimension(providerId, model.trim(), settings);
-    const cfg = { providerId, model: model.trim(), dim };
+    // Der Probeaufruf ist zugleich die Sperre gegen einen Dienst, der nicht
+    // läuft: Ohne Antwort bleibt die bisherige Wahl unverändert.
+    let dim;
+    try {
+      dim = await probeEmbeddingDimension(providerId, model.trim(), settings);
+    } catch (err) {
+      if (providerId !== EINGEBAUTES_EMBEDDING.providerId) throw err;
+      console.warn('[settings] Eingebauter Embedding-Dienst nicht erreichbar:', err.message);
+      return res.status(400).json({
+        error: 'Der eingebaute Embedding-Dienst läuft auf diesem Gerät nicht. Die bisherige Wahl bleibt unverändert. '
+          + 'Er lässt sich über den Host-Agenten einrichten, ohne ihn gehört „embedding“ in COMPOSE_PROFILES der .env '
+          + '(danach docker compose up -d --build embedding).',
+      });
+    }
+    const vorherEingebaut = embeddingConfig(settings).providerId === EINGEBAUTES_EMBEDDING.providerId;
+    const cfg = embeddingSlot({ providerId, model: model.trim(), dim, vorsilben });
     await upsertSetting('llm_embedding', cfg);
     await upsertSetting('llm_embedding_signature', signatureOf(cfg));
     appLog('INFO', 'settings', `Embedding-Modell gesetzt: ${signatureOf(cfg)}`, {
       entity: 'settings', entityId: req.session?.username || null,
     });
-    res.json({ ok: true, ...cfg, signature: signatureOf(cfg) });
+    // Wechsel und Neuberechnung bestätigt die Oberfläche gemeinsam; ohne den
+    // Lauf bliebe die Suche bis zu einem zweiten Handgriff praktisch leer.
+    // Die Hilfe gleicht der eigene Job ab (mitgelieferte Vektoren zuerst).
+    let neuberechnung = { started: 0 };
+    try {
+      neuberechnung = await starteNeuberechnung({ grund: 'modellwechsel' });
+    } catch (e) {
+      console.error('[settings] Embedding-Neuberechnung nicht gestartet:', e.message);
+      appLog('ERROR', 'embedding', `Neuberechnung nach Modellwechsel nicht gestartet: ${e.message}`);
+    }
+    res.json({ ok: true, ...cfg, signature: signatureOf(cfg), neuberechnung });
     // Erstinstallation und Providerwechsel: Die Antwort wartet nicht auf den
     // externen Anbieter; der idempotente Job ist in der Aufgabenanzeige sichtbar.
     startHelpEmbeddingJob({ reason: 'provider-konfiguriert' });
+    // Weg vom eingebauten Dienst: Er hat dann nichts mehr zu tun und gibt
+    // seinen Speicher frei. Verlustfrei und best effort wie beim Scanner.
+    if (vorherEingebaut && providerId !== EINGEBAUTES_EMBEDDING.providerId) {
+      embeddingProfilAutoSchalten(false, req.session?.username || null).catch((e) => {
+        console.error('[settings] Embedding-Profil-Auto-Aus fehlgeschlagen:', e.message);
+      });
+    }
   } catch (err) {
     console.warn('[settings] Embedding-Konfiguration fehlgeschlagen:', err.message);
     res.status(400).json({ error: clientSafeError(err) });
@@ -2034,7 +2144,7 @@ router.get('/ai/models/:provider', async (req, res) => {
     res.json(await listProviderModels(settings, id, { fresh: req.query.fresh === '1' }));
   } catch (err) {
     // listProviderModels wirft bereits mit client-sicherem Text.
-    console.warn(`[settings] ai/models "${id}" Fehler:`, err.message);
+    console.warn('[settings] ai/models "%s" Fehler:', id, err.message);
     res.status(502).json({ error: clientSafeError(err) });
   }
 });

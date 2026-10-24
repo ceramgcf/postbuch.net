@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { useAuth } from '@/hooks/useAuth';
+import { hatGeteilteDateien } from '@/lib/geteilteDateien';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -62,7 +63,9 @@ export default function LoginPage() {
       await login(username, password);
       setAttemptsLeft(null);
       setLockSeconds(0);
-      navigate('/');
+      // Vor der Anmeldung geteilte PDFs (Share-Target) warten im Cache des
+      // Service-Workers – dann direkt zur Jobs-Ansicht, die sie abholt.
+      navigate((await hatGeteilteDateien()) ? '/logs?geteilt=1' : '/');
     } catch (err) {
       // 429 = Sperre; retryAfterSec startet den Countdown. 401 liefert
       // verbleibendeVersuche erst, wenn es knapp wird (Server entscheidet).

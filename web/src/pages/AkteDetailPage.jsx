@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useZurueckZiel } from '@/hooks/useBackButtonGuard';
 import { useParams, useNavigate, useLocation, useOutletContext, Link } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -27,8 +28,31 @@ import { api } from '@/api/client';
 import {
   ArrowLeft, Plus, Trash2, Eye, GripVertical,
   Pencil, X, Check, FileText, Sparkles, Download, Archive,
-  MessageCircle,
+  MessageCircle, MoreHorizontal,
 } from 'lucide-react';
+import { KartenListe } from '@/components/listen/DataView';
+import { useDarstellung } from '@/hooks/useDarstellung';
+
+// Mobile Karte eines Aktendokuments (Plätze siehe DataView). Die Reihenfolge
+// ändert mobil nur die Sortierung – Ziehen gibt es nur in der Tabelle.
+const DOK_KARTE = [
+  { key: 'postid', mobil: 'meta', zelle: (d) => <span className="font-mono">{d.postid}</span> },
+  { key: 'datum', mobil: 'meta', zelle: (d) => formatDate(d.briefdatum) },
+  { key: 'betrag', mobil: 'rechts', zelle: (d) => d.betrag != null && <span className="font-mono">{formatCurrency(d.betrag)}</span> },
+  { key: 'betreff', mobil: 'titel', zelle: (d) => d.betreff || d.kontakt || '–' },
+  { key: 'typ', mobil: 'badges', zelle: (d) => (
+    <><LebensbereichBadge lebensbereich={d.lebensbereich} compact /><ArtBadge art={d.dokumentart || d.art} /></>
+  ) },
+  { key: 'entfernen', mobil: 'aktion', zelle: (d, { canWrite, onRemove }) => canWrite && (
+    <button
+      onClick={(e) => { e.stopPropagation(); onRemove(d.postid); }}
+      className="-m-2 p-2 text-muted-foreground active:text-destructive"
+      aria-label="Aus Akte entfernen"
+    >
+      <X className="h-4 w-4" />
+    </button>
+  ) },
+];
 import { useUndoHistory } from '@/hooks/useUndoHistory';
 
 function EditableField({ label, value, onSave, multiline, highlight }) {
@@ -273,6 +297,7 @@ export default function AkteDetailPage() {
   const aktenwahlPostId = location.state?.aktenwahlPostId || null;
   const aktenwahlBackTo = location.state?.aktenwahlBackTo || null;
   const backLabel = getBackLabel(location.state?.from);
+  useZurueckZiel(true, () => navigate(location.state?.from || '/akten', { state: { skipAutoforward: true, zurueck: true } }));
 
   const { data, isLoading, error } = useAkteDetail(akteid);
   const updateAkte = useUpdateAkte();
@@ -300,6 +325,8 @@ export default function AkteDetailPage() {
   const [exportPhase, setExportPhase]             = useState('scope');
   const [exportScope, setExportScope]             = useState(null);
   const [selectionMode, setSelectionMode]         = useState(false);
+  const { istMobil } = useDarstellung();
+  const [mehrOffen, setMehrOffen] = useState(false);
   const [selectedExportIds, setSelectedExportIds] = useState(() => new Set());
   const { isExporting, exportProgress, runExport } = useExportJob();
 
@@ -537,13 +564,13 @@ export default function AkteDetailPage() {
       <div className="flex-1 overflow-auto p-6 lg:p-8 space-y-6">
         {/* Navigation */}
         <div className="flex items-center gap-2 flex-wrap">
-          <Link to={location.state?.from || '/akten'} state={{ skipAutoforward: true }}>
+          <Link to={location.state?.from || '/akten'} state={{ skipAutoforward: true, zurueck: true }}>
             <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground hover:text-foreground">
               <ArrowLeft className="h-4 w-4" />
               {backLabel}
             </Button>
           </Link>
-          <span className="text-sm text-muted-foreground font-mono">{akteid}</span>
+          <span className="text-sm text-muted-foreground font-mono max-sm:hidden">{akteid}</span>
         </div>
 
         {/* Aktenwahlmodus banner */}
@@ -565,8 +592,46 @@ export default function AkteDetailPage() {
           </div>
         )}
 
+        {/* Mobil: Hauptaktion breit, der Rest im Aktionsblatt (wie Dokumentdetail). */}
+        {istMobil && (
+          <div className="flex items-center gap-2">
+            {canWrite && (
+              <Button onClick={handleAddDocuments} className="h-10 flex-1 gap-1.5">
+                <Plus className="h-4 w-4" />
+                Dokument hinzufügen
+              </Button>
+            )}
+            <Button variant="outline" className="h-10 w-10 shrink-0 p-0" onClick={() => setMehrOffen(true)} aria-label="Weitere Aktionen">
+              <MoreHorizontal className="h-5 w-5" />
+            </Button>
+          </div>
+        )}
+        <Dialog open={mehrOffen} onOpenChange={setMehrOffen}>
+          <DialogTitle>Aktionen für {akteid}</DialogTitle>
+          <div className="mt-3 -mx-1">
+            {[
+              { icon: MessageCircle, label: 'Im Chat besprechen', onClick: () => navigate('/assistent', { state: { prefill: `#${akteid} ` } }) },
+              ...(canWrite ? [
+                { icon: Archive, label: akte.historisch ? 'Historisch-Markierung entfernen' : 'Archivieren', onClick: handleToggleArchive, disabled: setAkteHistorisch.isPending },
+                { icon: Trash2, label: 'Akte löschen', onClick: () => setShowDeleteDialog(true), gefahr: true },
+              ] : []),
+            ].map(({ icon: Icon, label, onClick, disabled, gefahr }) => (
+              <button
+                key={label}
+                disabled={disabled}
+                onClick={() => { setMehrOffen(false); onClick(); }}
+                className={`flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-[15px] active:bg-muted disabled:opacity-50 ${gefahr ? 'text-destructive' : ''}`}
+              >
+                <Icon className="h-5 w-5 shrink-0" />
+                <span className="flex-1">{label}</span>
+              </button>
+            ))}
+          </div>
+        </Dialog>
+
         {/* Action buttons – Schreibaktionen nur für Schreib-Rollen, der
             Chat-Einstieg auch für Lesezugriff (Chat funktioniert read-only) */}
+        {!istMobil && (
         <div className="flex items-center justify-between gap-x-3 gap-y-2 flex-wrap">
           {/* Gruppe 1 – Diskussion: Chat */}
           <div className="flex items-center flex-wrap">
@@ -619,6 +684,7 @@ export default function AkteDetailPage() {
           </>
         )}
         </div>
+        )}
 
         {/* Metadata Card */}
         <Card>
@@ -714,9 +780,9 @@ export default function AkteDetailPage() {
         {/* Documents list */}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base font-semibold flex items-center gap-2">
+            <CardTitle className="text-base font-semibold flex flex-wrap items-center gap-2">
               <FileText className="h-4 w-4 text-primary" />
-              Dokumente ({dokOrder.length})
+              <span className="whitespace-nowrap">Dokumente ({dokOrder.length})</span>
               {dokOrder.length > 0 && (
                 <div className="ml-auto flex items-center gap-2">
                   {/* Sort toggle */}
@@ -787,6 +853,28 @@ export default function AkteDetailPage() {
             {dokOrder.length === 0 ? (
               <div className="p-6 text-center text-muted-foreground text-sm">
                 Noch keine Dokumente in dieser Akte.
+              </div>
+            ) : istMobil ? (
+              <div className="p-3">
+                <KartenListe
+                  spalten={DOK_KARTE}
+                  daten={displayDocs}
+                  zeilenKey="postid"
+                  onZeile={(d) => handleViewDoc(d.postid)}
+                  ctx={{ canWrite, onRemove: setRemovingPostId }}
+                  auswahl={selectionMode ? { aktiv: true, ids: selectedExportIds, toggle: handleToggleExportSelect } : null}
+                />
+                {(() => {
+                  const rechnungen = dokOrder.filter(d => d.betrag != null);
+                  if (rechnungen.length === 0) return null;
+                  const total = rechnungen.reduce((sum, d) => sum + parseFloat(d.betrag), 0);
+                  return (
+                    <div className="mt-3 flex justify-end gap-4 border-t pt-2 text-sm font-semibold">
+                      <span className="text-muted-foreground">Gesamtsumme</span>
+                      <span className="font-mono">{formatCurrency(total)}</span>
+                    </div>
+                  );
+                })()}
               </div>
             ) : (
               <Table>

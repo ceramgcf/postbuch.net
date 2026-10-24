@@ -6,9 +6,10 @@ willst. Dafür gibt es drei Werkzeuge.
 
 ## Akten
 
-Eine **Akte** bündelt Dokumente zu einem Vorgang. Sie hat eine eigene Nummer
+Eine **Akte** bündelt elektronische Dokumente zu einem Vorgang. Sie hat eine eigene Nummer
 (`A000123`), einen Betreff, eine Beschreibung, Schlagwörter und eine Notiz –
-genau wie ein Dokument.
+genau wie ein Dokument. Das Gegenstück auf Papier ist die
+[Sammelmappe](#aufbau): Sie hält fest, wo die Originale tatsächlich liegen.
 
 ### Dokumente hinzufügen
 
@@ -145,34 +146,37 @@ des Aufbewahrungsortes, z. B. „Ordner", „Dokumentenmappe", „Bankschließfa
 mit einem Symbol. Die Kategorie „Unbekannt" ist fest eingebaut und lässt sich
 nicht entfernen.
 
-![Ablage-Symbol](icons/folder-open.svg) **Ablage** – der konkrete Ort innerhalb
-einer Kategorie, z. B. Ordner „Versicherungen 2020–2025". Neue Ablagen legt
-jeder mit Schreibrechten ausschließlich unter
+![Sammelmappe-Symbol](icons/folder-open.svg) **Sammelmappe** – die konkrete
+Papierablage innerhalb einer Kategorie, z. B. Ordner „Versicherungen
+2020–2025". Anders als eine [Akte](#akten), die elektronische Dokumente
+bündelt, steht eine Sammelmappe für einen Ort, an dem Papier liegt. Neue
+Sammelmappen legt jeder mit Schreibrechten ausschließlich unter
 ![Akten-Symbol](icons/folder-open.svg) `Akten → Originale` an – dort Kategorie
-wählen, Name vergeben. Auf der Dokumentdetailseite selbst lässt sich nur unter
-bereits **bestehenden** Ablagen wählen bzw. suchen, dort kann keine neue Ablage
-entstehen.
+wählen, Name vergeben. Jede Sammelmappe bekommt dabei eine feste
+**Mappennummer** im Format `S000123`. Auf der Dokumentdetailseite selbst lässt
+sich nur unter bereits **bestehenden** Sammelmappen wählen bzw. suchen, dort
+kann keine neue Sammelmappe entstehen.
 
 ### Zuordnen
 
 Auf der Dokumentdetailseite trägt das **Verbleib-Abzeichen** den aktuellen Ort.
 Ein Klick öffnet die Auswahl: zuerst die Kategorie, danach – sofern die
-Kategorie das vorsieht – eine Ablage darin, durchsuchbar bei vielen Einträgen.
+Kategorie das vorsieht – eine Sammelmappe darin, durchsuchbar bei vielen Einträgen.
 Ohne bewusste Zuordnung steht ein Dokument auf der Kategorie „Unbekannt".
 
 ### Niemals aussondern: der Urkundenflag
 
-Unabhängig von Kategorie und Ablage lässt sich ein Dokument zusätzlich als
+Unabhängig von Kategorie und Sammelmappe lässt sich ein Dokument zusätzlich als
 ![Urkunde-Symbol](icons/shield-check.svg) **„Niemals aussondern"** markieren –
 für Originale, die grundsätzlich nie vernichtet werden dürfen (Geburtsurkunde,
 Testament, Grundbuchauszug), unabhängig davon, wo sie gerade liegen oder ob sie
 später einmal umziehen. Der Schalter sitzt direkt in der Verbleib-Auswahl auf
-der Dokumentdetailseite und lässt sich unabhängig von Kategorie/Ablage ein- und
+der Dokumentdetailseite und lässt sich unabhängig von Kategorie/Sammelmappe ein- und
 ausschalten.
 
 Gesetzt erscheint das Symbol bernsteinfarben im Verbleib-Abzeichen und – falls
 ein Etikett gedruckt wird – zusätzlich mit auf dem Etikett. Unter
-`Akten → Originale` zeigt jede Ablage zusätzlich die Zahl der ihr zugeordneten
+`Akten → Originale` zeigt jede Sammelmappe zusätzlich die Zahl der ihr zugeordneten
 Urkunden als eigenes Badge an, wenn sie mindestens eine enthält. Über die
 Filterleiste der Dokumentliste lässt sich gezielt nach urkundengeflaggten
 Dokumenten filtern.
@@ -186,28 +190,29 @@ drucken** und aufs Papier kleben. Auf dem Etikett stehen die Postnummer und ein
 QR-Code, der direkt zur Dokumentseite führt – vom Blatt Papier zurück in die
 Datenbank in einem Scan. Siehe [Etiketten drucken](etiketten-drucken.md).
 
-### Ablagen verwalten
+### Sammelmappen verwalten
 
 Unter ![Akten-Symbol](icons/folder-open.svg) `Akten → Originale` stehen alle
-Ablagen mit der Zahl der zugeordneten Dokumente (und ggf. Urkunden), filterbar
-nach aktiv/archiviert/alle.
+Sammelmappen mit Mappennummer und der Zahl der zugeordneten Dokumente (und ggf.
+Urkunden), filterbar nach aktiv/archiviert/alle.
 
 | Aktion                                                                   | Wirkung                                                                                                                                                                                  |
 | ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ![Neu-Symbol](icons/plus.svg) **Neue Ablage**                            | Kategorie wählen, Name vergeben – der einzige Ort, an dem Ablagen entstehen                                                                                                              |
-| ![Bearbeiten-Symbol](icons/pencil.svg) **Umbenennen / Kategorie ändern** | Ändert nur die Bezeichnung bzw. Einordnung, zugeordnete Dokumente bleiben in der Ablage                                                                                                  |
-| ![Archiv-Symbol](icons/archive.svg) **Archivieren**                      | Die Ablage verschwindet aus der Auswahl bei neuen Zuordnungen, bestehende Zuordnungen bleiben unverändert bestehen                                                                       |
-| ![Umzug-Symbol](icons/arrow-left.svg) **Auflösen**                       | Für den echten Umzug: alle Dokumente dieser Ablage wandern auf eine andere Ablage, auf „Unbekannt" oder bleiben nur der Kategorie zugeordnet – danach wird die Ablage endgültig gelöscht |
-| ![Löschen-Symbol](icons/trash-2.svg) **Löschen**                         | Nur möglich, wenn kein Dokument mehr in dieser Ablage liegt – sonst bietet postbuch.net stattdessen „Auflösen" an                                                                        |
+| ![Neu-Symbol](icons/plus.svg) **Neue Sammelmappe**                       | Kategorie wählen, Name vergeben – der einzige Ort, an dem Sammelmappen entstehen                                                                                                         |
+| ![Drucken-Symbol](icons/printer.svg) **Etiketten drucken** | Etiketten für den Ordnerrücken: Nummer mit QR-Code und Titel mit Kategoriesymbol, einzeln oder beide, siehe [Etiketten für Sammelmappen](etiketten-drucken.md#etiketten-für-sammelmappen) |
+| ![Bearbeiten-Symbol](icons/pencil.svg) **Umbenennen / Kategorie ändern** | Ändert nur die Bezeichnung bzw. Einordnung, zugeordnete Dokumente bleiben in der Sammelmappe                                                                                             |
+| ![Archiv-Symbol](icons/archive.svg) **Archivieren**                      | Die Sammelmappe verschwindet aus der Auswahl bei neuen Zuordnungen, bestehende Zuordnungen bleiben unverändert bestehen                                                                  |
+| ![Umzug-Symbol](icons/arrow-left.svg) **Auflösen**                       | Für den echten Umzug: alle Dokumente dieser Sammelmappe wandern in eine andere Sammelmappe, auf „Unbekannt" oder bleiben nur der Kategorie zugeordnet – danach wird die Sammelmappe endgültig gelöscht |
+| ![Löschen-Symbol](icons/trash-2.svg) **Löschen**                         | Nur möglich, wenn kein Dokument mehr in dieser Sammelmappe liegt – sonst bietet postbuch.net stattdessen „Auflösen" an                                                                   |
 
 Ein Dokument kann auch **nur** einer Kategorie zugeordnet sein, ohne konkrete
-Ablage darin („lose" in der Kategorie) – etwa solange noch unklar ist, in
-welchen Ordner es am Ende kommt. Für diesen Sammelzustand gibt es unter
+Sammelmappe darin („lose" in der Kategorie) – etwa solange noch unklar ist, in
+welche Sammelmappe es am Ende kommt. Für diesen Sammelzustand gibt es unter
 `Akten → Originale` einen eigenen Auflösen-Dialog je Kategorie, der alle so
-losen Dokumente auf einen Schlag in eine bestimmte Ablage übernimmt oder auf
+losen Dokumente auf einen Schlag in eine bestimmte Sammelmappe übernimmt oder auf
 „Unbekannt" zurücksetzt.
 
-Der typische Fall: Ein voller Ordner wird auf zwei neue aufgeteilt. Neue Ablagen
+Der typische Fall: Ein voller Ordner wird auf zwei neue aufgeteilt. Neue Sammelmappen
 anlegen, alten Ordner auflösen, Dokumente umziehen – die Etiketten auf dem
 Papier bleiben gültig, weil der QR-Code auf die Postnummer zeigt und nicht auf
 den Ort.

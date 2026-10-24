@@ -2,7 +2,8 @@
 
 postbuch.net bringt kein eigenes Sprachmodell mit. Es ruft Modelle auf, die du
 selbst bereitstellst – als Cloud-Dienst mit API-Schlüssel oder als lokalen
-Server auf deiner eigenen Hardware. Alles dazu steht unter
+Server auf deiner eigenen Hardware. Für Embeddings gibt es dagegen einen
+[eingebauten Dienst](#der-eingebaute-embedding-dienst) im eigenen Stack. Alles dazu steht unter
 ![Einstellungen-Symbol](icons/settings.svg) **Einstellungen → KI** (nur für
 Administratoren sichtbar).
 
@@ -10,11 +11,11 @@ Ein erreichbares Sprachmodell ist Voraussetzung für die Dokumentverarbeitung. E
 übernimmt die automatische Klassifikation und ermöglicht den Büroassistenten;
 Embeddings ergänzen semantische Suche und Duplikatprüfung.
 
-Für einen schnellen Einstieg kann ein OpenAI-Entwicklerkonto mit kleinem
-Guthaben sowohl Sprachmodelle als auch Embeddings liefern. Das ist ein Beispiel
-für einen kurzen Ein-Konto-Weg, keine Anbieterempfehlung und keine
-Preisgarantie. Cloudfrei geht es mit einem lokalen OpenAI-kompatiblen Chatmodell
-und einem lokalen Embedding-Modell.
+Für einen schnellen Einstieg genügt ein Entwicklerkonto mit kleinem Guthaben bei
+einem Anbieter von Sprachmodellen, etwa OpenAI. Das ist ein Beispiel, keine
+Anbieterempfehlung und keine Preisgarantie. Cloudfrei geht es mit einem lokalen
+OpenAI-kompatiblen Chatmodell; die Embeddings liefert ohnehin der eingebaute
+Dienst.
 
 ![Karte "KI-Provider"](screenshots/ki-provider.jpg)
 
@@ -24,8 +25,10 @@ und einem lokalen Embedding-Modell.
 
 Ein **Provider** ist eine API-Adresse plus ein Schlüssel plus eine Liste von
 Fähigkeiten. Drei Einträge sind eingebaut und lassen sich bearbeiten, aber nicht
-löschen: `anthropic`, `openai` und `bedrock`. Alles Weitere legst du selbst an –
-beliebig viele.
+löschen: `anthropic`, `openai` und `bedrock`. Ein vierter, der **Eingebaute
+Embedding-Dienst**, hat nichts Einstellbares: Er lässt sich nur testen und
+steht auf „nicht gewählt“, solange er nicht das Embedding-Modell ist. Alles
+Weitere legst du selbst an – beliebig viele.
 
 Beim Anlegen hilft eine Vorlage:
 
@@ -201,8 +204,8 @@ eine stumm gekürzte Liste sähe aus wie ein Defekt.
 
 Die Liste enthält auch eine Empfehlung für das **Embedding-Modell**. Diese Zeile
 ist bewusst ein Sonderfall: „Alle übernehmen" fasst sie **nicht** an, und beim
-einzelnen Übernehmen fragt postbuch.net ausdrücklich nach – denn ein Wechsel
-entwertet alle vorhandenen Embeddings, bis sie neu berechnet sind (siehe
+einzelnen Übernehmen fragt postbuch.net ausdrücklich nach – denn nach einem
+Wechsel werden alle vorhandenen Embeddings automatisch neu berechnet (siehe
 Abschnitt _Embeddings_). Die Dimension wird auch hier nicht aus der Empfehlung
 übernommen, sondern mit einem Testaufruf an deinem Provider ermittelt.
 
@@ -233,7 +236,7 @@ Maßgeblich ist deshalb immer die Abrechnung des Providers.
 | Dokument- oder Aktenmetadaten ändern   | Relevante Dokumentfelder werden neu eingebettet. Auch Aktenanlage, Betreff/Beschreibung sowie Hinzufügen oder Entfernen eines Dokuments erneuern das Akten-Embedding. | normalerweise **unter 0,01 ct je Objekt**                                                                                                                  |
 | KI-Metadaten für eine Akte vorschlagen | Ein kurzer LLM-Aufruf mit den Akten- und Dokumentmetadaten                                                                                                            | gewöhnlich **unter 1 ct**                                                                                                                                  |
 | Embedding-Modell speichern             | Ein winziger Test-Embedding-Aufruf ermittelt die Vektor-Dimension                                                                                                     | deutlich **unter 0,01 ct**                                                                                                                                 |
-| Alle Embeddings neu berechnen          | Je ein Aufruf pro veraltetem Dokument, pro veralteter Akte und pro nicht wiederverwendbarem Hilfeabschnitt                                                            | Beispiel: **500 Dokumente, 20 Akten und 250 Hilfeabschnitte etwa 2–10 ct**, je nach Embedding-Modell und Textlänge                                         |
+| Embedding-Modell wechseln              | Nach dem Bestätigen startet automatisch je ein Aufruf pro Dokument und Akte; Hilfeabschnitte nur, wenn sie nicht mitgeliefert oder wiederverwendbar sind              | Beispiel: **500 Dokumente, 20 Akten und 250 Hilfeabschnitte etwa 2–10 ct**, je nach Embedding-Modell und Textlänge                                         |
 
 Ein normaler Import besteht also nicht aus „einem KI-Aufruf". Fällt ein Modell
 aus oder liefert unbrauchbare Daten, kann die Fallback-Kette mehrere Versuche
@@ -272,11 +275,68 @@ Embeddings sind Zahlenvektoren, die Inhalte beschreiben. Sie tragen die
 **semantische Dokumentensuche**, die **Duplikatprüfung** und die **Hilfesuche
 des Assistenten** – ohne sie bleibt die Suche eine reine Volltextsuche.
 
-Welches Modell empfohlen wird, steht in den mit dem Release ausgelieferten
-Modellempfehlungen – die Karte nennt es beim gewählten Provider direkt, und es
-ist zugleich die Voreinstellung einer frischen Installation. Wer ohne Cloud
-arbeitet, betreibt ein eigenes Embedding-Modell auf einem selbst gehosteten,
-embedding-fähigen Provider; auch dafür steht ein Kandidat in der Liste.
+Eine neue Installation verwendet den eingebauten Embedding-Dienst. Ein
+anderer Dienst lässt sich nur bewusst unter
+![Einstellungen-Symbol](icons/settings.svg) `Einstellungen → KI → Embeddings`
+wählen; der Einrichtungsassistent bietet keinen an.
+
+### Der eingebaute Embedding-Dienst
+
+postbuch.net bringt einen eigenen Embedding-Dienst mit, den Docker-Dienst
+`embedding`. Er rechnet mit **Snowflake Arctic Embed M v2.0**, einem
+mehrsprachigen offenen Modell (Lizenz Apache 2.0), auf dem Prozessor des
+Servers. Dokumentinhalte verlassen dafür den Rechner nicht, und es fallen keine
+Kosten je Aufruf an.
+
+- Der Dienst ist von außen nicht erreichbar; nur die App spricht ihn im
+  Docker-Netz an.
+- Das Modell lädt erst bei der ersten Anfrage und wird nach zehn Minuten ohne
+  Anfrage wieder entladen. Geladen belegt es rund 300 MB Arbeitsspeicher, der
+  Container ist auf 640 MB begrenzt.
+- Das erste Einbetten nach einer Pause dauert deshalb einige Sekunden länger.
+- Sehr lange Texte werden für das Embedding auf 512 Token gekürzt.
+- Die Vektoren haben 768 Dimensionen.
+
+Mit dem Release kommen die Vektoren der Anwenderhilfe für dieses Modell gleich
+mit. Eine neue Instanz muss die Hilfe deshalb nicht selbst einbetten.
+
+Der Dienst ist ein eigenes Compose-Profil `embedding` und läuft nur dort, wo
+er gewählt ist. Eine neue Installation schaltet das Profil ein. Eine
+bestehende Instanz behält beim Update ihr bisher gewähltes Embedding-Modell;
+der Dienst wird dabei weder gebaut noch gestartet.
+
+Oben in der Embedding-Karte zeigt der Abschnitt **Eingebauter Dienst**, wie es
+um ihn steht:
+
+- **Einrichten und verwenden** – der Dienst ist auf diesem Gerät noch nicht
+  eingerichtet. Der Host-Agent baut ihn im Hintergrund, lädt dabei einmalig
+  das Modell (rund 300 MB) und startet ihn. Ist er bereit, wird er gewählt.
+  Das dauert je nach Gerät und Leitung einige Minuten.
+- **Verwenden** und **Abschalten** – der Dienst läuft, ist aber nicht gewählt.
+  Abschalten hält ihn an und gibt den Arbeitsspeicher frei; das Image bleibt,
+  ein erneutes Einschalten lädt nichts nach.
+- **Dienst einrichten** – der eingebaute Dienst ist gewählt, läuft auf diesem
+  Gerät aber nicht, etwa nach dem Wiederherstellen einer Sicherung auf einem
+  anderen Server. Bis er läuft, arbeiten Ähnlichkeitssuche, Duplikatprüfung
+  und Hilfe ohne Vektoren.
+
+Wer danach einen anderen Dienst wählt, dessen eingebauter Dienst wird
+automatisch abgeschaltet. Den gewählten Dienst abzuschalten, lehnt
+postbuch.net ab.
+
+Ohne [Update-Agent](betrieb-troubleshooting.md#der-update-agent) wird das
+Profil von Hand eingeschaltet: `embedding` in `COMPOSE_PROFILES` der `.env`
+ergänzen (kommagetrennt, etwa `COMPOSE_PROFILES=scanner,embedding`) und
+`docker compose up -d --build embedding` ausführen. Danach lässt sich der
+Dienst in der Karte mit **Verwenden** wählen.
+
+Der Wechsel auf den eingebauten Dienst ist ein Modellwechsel: Sind schon
+Dokumente vorhanden, fragt postbuch.net vorher nach und berechnet deren
+Embeddings danach automatisch neu (siehe unten). Die Hilfe muss dabei nicht
+berechnet werden, ihre Vektoren kommen mitgeliefert. Antwortet der Dienst beim
+Speichern nicht, bleibt das bisherige Modell aktiv.
+
+### Anderen Dienst wählen
 
 Zur Auswahl stehen nur Provider, die _Embeddings erzeugen_ können. Die
 **Vektor-Dimension wird nicht eingegeben**: Der Server ermittelt sie mit einem
@@ -285,13 +345,38 @@ einzigen Testaufruf, und dieses Ergebnis ist verbindlich.
 Die in der Oberfläche sichtbare Vorgabe ist zunächst nur ein **Vorschlag** und
 noch keine gespeicherte Konfiguration.
 
+### Vorsilben
+
+Manche offenen Embedding-Modelle sind darauf trainiert, dass vor einer
+Suchanfrage oder vor einem gespeicherten Text eine feste Anweisung steht, etwa
+`query: ` vor der Anfrage. Ohne diese **Vorsilben** finden sie spürbar
+schlechter. Unter `Vorsilben` in der Embedding-Karte stehen zwei Felder:
+**Vor Suchanfragen** gilt für die semantische Suche, die Recherche des
+Assistenten und die Hilfesuche; **Vor Dokumenten** gilt für alles, was
+gespeichert wird – Dokumente, Akten und Hilfeabschnitte – und für die
+Duplikatprüfung, die neue Dokumente mit gespeicherten vergleicht.
+
+Für bekannte Modelle wie Qwen3-Embedding, Snowflake Arctic Embed,
+EmbeddingGemma, nomic-embed-text, mxbai-embed-large und die e5-Familie belegt
+postbuch.net beide Felder beim Auswählen des Modells vor. OpenAI und Mistral
+brauchen keine Vorsilben; dort bleiben die Felder leer. Gespeichert wird
+genau das, was in den Feldern steht. Ein späteres Update ändert gespeicherte
+Vorsilben nicht.
+
 **Wichtig beim Wechsel des Embedding-Modells:** Jede Zeile trägt eine Signatur
-aus Provider, Modell und Dimension, und Suche wie Duplikatprüfung
+aus Provider, Modell und Dimension, bei gesetzten Vorsilben zusätzlich mit einer
+Kennung für diese. Eine Änderung der Vorsilben wirkt deshalb wie ein
+Modellwechsel. Suche wie Duplikatprüfung
 berücksichtigen **ausschließlich** Zeilen mit der aktuell aktiven Signatur.
-Direkt nach dem Umschalten findet die semantische Suche deshalb schlagartig
-weniger – bis der Neuberechnungslauf durch ist. Die Karte zeigt den Fortschritt
-an. Das ist kein Defekt, sondern die Alternative zu einem stillen Mischbestand
-aus unvergleichbaren Vektoren.
+Ein Wechsel berechnet deshalb alle vorhandenen Embeddings neu. Sind schon
+Dokumente da, nennt ein Dialog vor dem Wechsel ihre Zahl und bei einem
+Cloud-Anbieter die anfallenden Kosten; **Wechseln und neu berechnen**
+bestätigt beides zusammen. Der Lauf startet danach von selbst im Hintergrund,
+die Karte und die Aufgabenanzeige zeigen den Fortschritt. Bis er durch ist,
+findet die semantische Suche weniger. Das ist kein Defekt, sondern die
+Alternative zu einem stillen Mischbestand aus unvergleichbaren Vektoren.
+Bleiben einzelne Einträge zurück, etwa weil der Anbieter zwischendurch nicht
+antwortete, holt **Fehlende Embeddings nachberechnen** sie nach.
 
 Die mit der jeweiligen postbuch.net-Version ausgelieferte Hilfe wird ebenfalls
 in kleine Abschnitte zerlegt und im Hintergrund eingebettet. So kann der
@@ -300,17 +385,19 @@ sobald bei einer Neuinstallation ein Embedding-Provider konfiguriert wurde,
 zusammen mit einer notwendigen Neuberechnung nach einem Provider- oder
 Modellwechsel und nach jedem Anwendungsupdate. Ein Hash sorgt dafür, dass
 unveränderte Hilfe nicht noch einmal berechnet wird; unveränderte Abschnitte
-können aus dem vorherigen Korpus übernommen werden.
+können aus dem vorherigen Korpus übernommen werden. Mit dem eingebauten Dienst
+stammen die Vektoren der Hilfe aus der mitgelieferten Datei; berechnet werden
+nur Abschnitte, die darin fehlen.
 
 > [!IMPORTANT]
 >
-> Ein Update kann deshalb kurz nach dem Neustart kostenpflichtige
-> Embedding-Aufrufe auslösen. Bei unverändertem Embedding-Modell werden nur neue
+> Mit einem Cloud-Anbieter für Embeddings kann ein Update deshalb kurz nach
+> dem Neustart kostenpflichtige Embedding-Aufrufe auslösen. Bei unverändertem Embedding-Modell werden nur neue
 > oder inhaltlich geänderte Hilfeabschnitte berechnet; Dokumente und Akten
 > werden durch ein gewöhnliches Update nicht pauschal neu eingebettet. Nach
-> einem Provider-, Modell- oder Dimensionswechsel ist dagegen der vollständige
-> Neuberechnungslauf für Dokumente, Akten und Hilfe nötig. Die Karte zeigt vor
-> dem Start, wie viele Einträge veraltet sind.
+> einem Provider-, Modell- oder Dimensionswechsel berechnet postbuch.net
+> dagegen alle Dokumente und Akten neu; der Bestätigungsdialog nennt vorher
+> ihre Zahl.
 
 Ein neuer Hilfekorpus wird erst aktiviert, wenn er vollständig ist. Während des
 Aufbaus oder bei einem Providerfehler bleibt deshalb der letzte vollständige
@@ -481,8 +568,8 @@ erlaubt“ (jede Person kann Push jederzeit für sich einschalten) oder „vom A
 abgeschaltet“.
 
 Wer postbuch.net vollständig ohne fremde Dienste betreiben will, braucht: einen
-WebDAV-Speicher im eigenen Netz, einen lokalen Modellserver für Klassifikation
-**und** Embeddings. Discord bleibt unkonfiguriert, und Push wird unter
+WebDAV-Speicher im eigenen Netz und einen lokalen Modellserver für die
+Klassifikation. Die Embeddings übernimmt der eingebaute Dienst. Discord bleibt unkonfiguriert, und Push wird unter
 **Einstellungen → Benachrichtigungen → Push auf dieser Instanz**
 [für alle abgeschaltet](benachrichtigungen.md#push-für-die-ganze-instanz-abschalten).
 Erst damit ist ausgeschlossen, dass jemand Push später für sich einschaltet. Der

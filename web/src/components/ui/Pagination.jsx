@@ -15,13 +15,53 @@ import { PER_PAGE_OPTIONS } from '@/hooks/usePerPage';
  *   autoRows     – computed rows when auto mode is active (shown as "Auto (N)")
  *   total        – total item count
  *   onPageChange(page)     – called when page changes
- *   onPerPageChange(value) – called with 'auto' or a number
+ *   onPerPageChange(value, { automatisch }) – called with 'auto' or a number; automatisch,
+ *                  wenn die Leiste zu schmal wurde und deshalb fest auf Auto fällt
  *   className    – optional container class
  */
 export function Pagination({ page, totalPages, perPage, perPageRaw, autoRows, total, onPageChange, onPerPageChange, className }) {
   const selectValue = perPageRaw ?? perPage;
   const [pageInput, setPageInput] = useState(String(page));
   const inputRef = useRef(null);
+  const leisteRef = useRef(null);
+  const bereichRef = useRef(null);
+  const blaetternRef = useRef(null);
+  const auswahlRef = useRef(null);
+  // Breiten der weglassbaren Teile, gemessen solange sie sichtbar sind (Startwerte geschätzt)
+  const auswahlBreiteRef = useRef(240);
+  const bereichBreiteRef = useRef(110);
+  const [ohneAuswahl, setOhneAuswahl] = useState(false);
+  const [ohneBereich, setOhneBereich] = useState(false);
+  const sichtbar = total > 0;
+  const mitAuswahl = !!onPerPageChange;
+
+  // Die Leiste bricht nicht um: Wird sie zu schmal, entfällt zuerst die Seitengrößen-
+  // Auswahl, danach die Bereichsangabe („1–20 von 543“); das Blättern bleibt immer.
+  // Gemessen wird die natürliche Breite der Teile (alle whitespace-nowrap).
+  useEffect(() => {
+    const leiste = leisteRef.current;
+    if (!sichtbar || !leiste) return undefined;
+    const pruefe = () => {
+      if (auswahlRef.current) auswahlBreiteRef.current = auswahlRef.current.offsetWidth;
+      if (bereichRef.current) bereichBreiteRef.current = bereichRef.current.offsetWidth;
+      const blaettern = blaetternRef.current?.offsetWidth ?? 0;
+      const verfuegbar = leiste.clientWidth;
+      // gap-x-4 = 16px zwischen den Teilen
+      const mitBereich = bereichBreiteRef.current + 16 + blaettern;
+      setOhneAuswahl(mitAuswahl && mitBereich + 16 + auswahlBreiteRef.current > verfuegbar);
+      setOhneBereich(mitBereich > verfuegbar);
+    };
+    pruefe();
+    const obs = new ResizeObserver(pruefe);
+    obs.observe(leiste);
+    return () => obs.disconnect();
+  }, [sichtbar, mitAuswahl]);
+
+  // Ohne sichtbare Auswahl gilt fest Auto – eine feste Seitengröße ließe sich nicht mehr
+  // erkennen oder ändern.
+  useEffect(() => {
+    if (ohneAuswahl && selectValue !== 'auto') onPerPageChange?.('auto', { automatisch: true });
+  }, [ohneAuswahl, selectValue]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep input in sync when page changes externally – but only if the input is not focused
   useEffect(() => {
@@ -62,14 +102,16 @@ export function Pagination({ page, totalPages, perPage, perPageRaw, autoRows, to
   if (total <= 0) return null;
 
   return (
-    <div className={`flex items-center justify-between gap-4 text-sm ${className || ''}`}>
+    <div ref={leisteRef} className={`flex flex-wrap items-center ${ohneBereich ? 'justify-center' : 'justify-between'} gap-x-4 gap-y-2 text-sm ${className || ''}`}>
       {/* Left: item range */}
-      <span className="text-muted-foreground tabular-nums whitespace-nowrap">
-        {start}–{end} von {total}
-      </span>
+      {!ohneBereich && (
+        <span ref={bereichRef} className="text-muted-foreground tabular-nums whitespace-nowrap">
+          {start}–{end} von {total}
+        </span>
+      )}
 
       {/* Center: page navigation */}
-      <div className="flex items-center gap-1.5">
+      <div ref={blaetternRef} className="flex items-center gap-1.5">
         <Button
           variant="outline"
           size="icon"
@@ -128,8 +170,9 @@ export function Pagination({ page, totalPages, perPage, perPageRaw, autoRows, to
         </Button>
       </div>
 
-      {/* Right: per-page selector */}
-      <div className="flex items-center gap-1.5 whitespace-nowrap">
+      {/* Right: per-page selector – entfällt, wenn die Leiste sonst umbräche */}
+      {mitAuswahl && !ohneAuswahl && (
+      <div ref={auswahlRef} className="flex items-center gap-1.5 whitespace-nowrap">
         <Select
           value={selectValue}
           onChange={(e) => {
@@ -145,6 +188,7 @@ export function Pagination({ page, totalPages, perPage, perPageRaw, autoRows, to
         </Select>
         <span className="text-muted-foreground text-xs">pro Seite</span>
       </div>
+      )}
     </div>
   );
 }

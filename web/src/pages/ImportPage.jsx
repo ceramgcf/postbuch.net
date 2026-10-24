@@ -9,6 +9,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Progress } from '@/components/ui/progress';
 import { useUndoHistory } from '@/hooks/useUndoHistory';
 import { useAuth } from '@/hooks/useAuth';
+import { useDarstellung } from '@/hooks/useDarstellung';
 import {
   Upload, Scan, FileText, Trash2, Play, X, CheckCircle2, AlertTriangle, AlertCircle,
   ArrowUp, ArrowDown, Layers, Inbox, Loader2, StopCircle, GripVertical,
@@ -17,6 +18,8 @@ import {
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import PersonenZuordnung, { KEINE } from '@/components/import/PersonenZuordnung';
 import { MenschDialog } from '@/components/settings/MenschenCard';
+import { leseImportFolgen, folgenUrl } from '@/lib/importFolgen';
+import KameraScanKarte from '@/components/kamerascan/KameraScanKarte';
 
 // ── Scanner-Konfiguration ───────────────────────────────────────────────────
 
@@ -93,6 +96,19 @@ function fileToBase64(file) {
   });
 }
 
+function istPdf(f) {
+  return f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+}
+
+function alsEintrag(f) {
+  return {
+    id: `${f.name}_${f.size}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    file: f,
+    name: f.name,
+    size: f.size,
+  };
+}
+
 function formatSize(bytes) {
   if (!bytes) return '–';
   const mb = bytes / 1024 / 1024;
@@ -131,6 +147,12 @@ function buildReplaceUndoRedo(postid, result) {
 // abgeschlossen ist; gibt das gespeicherte payload zurück (enthält old/new
 // State für Undo). Wird im Scanner-Replace-Pfad genutzt, da der eigentliche
 // PDF-Tausch erst nach OCR im Webhook passiert.
+// Wie lange die Importseite nach einem Scan auf dessen Job wartet, bevor sie
+// das automatische Folgen aufgibt. Der Cleaner meldet einen Scan vor der OCR
+// an, arbeitet Dateien aber nacheinander ab – steckt er noch in der OCR eines
+// früheren Scans (~60–90 s je Datei), erscheint der Job entsprechend später.
+const SCAN_FOLGEN_TIMEOUT_MS = 10 * 60 * 1000;
+
 async function pollScannerReplaceResult(postid, { timeoutMs = 8 * 60 * 1000 } = {}) {
   const POLL_INTERVAL = 3000;
   const deadline = Date.now() + timeoutMs;
@@ -299,7 +321,7 @@ function WebhookUrlField({ source, dpi, mode, size }) {
         <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Webhook-URL</label>
         <div className="relative group">
           <Info className="h-3.5 w-3.5 text-muted-foreground/60 cursor-help" />
-          <div className="absolute left-0 bottom-full mb-1.5 z-50 w-80 rounded-lg border border-border bg-background px-3 py-2.5 text-xs text-muted-foreground shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none">
+          <div className="absolute left-0 bottom-full mb-1.5 z-50 w-80 max-w-[calc(100vw-2rem)] max-sm:hidden max-sm:group-hover:block rounded-lg border border-border bg-background px-3 py-2.5 text-xs text-muted-foreground shadow-lg opacity-0 group-hover:opacity-100 transition-opacity duration-150 pointer-events-none">
             Über diese URL kann ein Scan jederzeit auch außerhalb dieser Anwendung ausgelöst werden, sofern der Aufruf aus demselben Netzwerk erfolgt. Sie bildet eine Schnittstelle für andere Anwendungen (z. B. Heimautomatisierung oder Skripte). Sie enthält einen geheimen Token – wer sie kennt, kann scannen.
             {source?.session && (
               <>
@@ -436,6 +458,9 @@ function ScannerCard({ replaceForPostId = null, onReplaceComplete }) {
   const [lastSuccess, setLastSuccess] = useState(null);
   const [lastWarning, setLastWarning] = useState(null);
   const [waitingForReplace, setWaitingForReplace] = useState(false);
+  const [wartetAufPipeline, setWartetAufPipeline] = useState(false);
+  const pipelineWarten = useRef(null);
+  const navigate = useNavigate();
   const [hinweisDialog, setHinweisDialog] = useState(null); // null | 'simple' | 'batch' | 'finish'
   const [hinweisText, setHinweisText] = useState('');
 
@@ -549,6 +574,41 @@ function ScannerCard({ replaceForPostId = null, onReplaceComplete }) {
     }
   }
 
+  // Automatisch folgen (Gerätevorgabe): Erst wenn der Cleaner den Scan bei der
+  // App angemeldet hat (scan-registered, Job-Bezeichnung = Scanner-Dateiname),
+  // geht es zu Logs → Jobs. Bis dahin bleibt die Importseite mit Hinweis stehen.
+  useEffect(() => () => { pipelineWarten.current = null; }, []);
+
+  async function folgeScan(dateien) {
+    const namen = (dateien || []).filter(Boolean);
+    if (replaceForPostId || namen.length === 0 || !leseImportFolgen().scan) return;
+    const lauf = {};
+    pipelineWarten.current = lauf;
+    setWartetAufPipeline(true);
+    const ende = Date.now() + SCAN_FOLGEN_TIMEOUT_MS;
+    try {
+      while (pipelineWarten.current === lauf && Date.now() < ende) {
+        try {
+          const r = await api.jobs.list();
+          const jobs = [...(r.active || []), ...(r.recent || [])];
+          if (jobs.some((j) => j.type === 'doc-process' && namen.includes(j.label))) {
+            if (pipelineWarten.current === lauf) navigate(folgenUrl({ scanDateien: namen }));
+            return;
+          }
+        } catch { /* nächster Versuch */ }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      if (pipelineWarten.current === lauf) {
+        setLastWarning('Der Scan ist noch nicht in der Pipeline angekommen. Den Fortschritt siehst du unter Logs → Jobs.');
+      }
+    } finally {
+      if (pipelineWarten.current === lauf) {
+        pipelineWarten.current = null;
+        setWartetAufPipeline(false);
+      }
+    }
+  }
+
   // Start-Button-Logik je nach Quelle
   async function startSimple(hinweis = '') {
     try {
@@ -557,6 +617,7 @@ function ScannerCard({ replaceForPostId = null, onReplaceComplete }) {
       const verb = replaceForPostId ? 'wird ausgetauscht' : 'wird verarbeitet';
       setLastSuccess(`Scan OK · ${r.file || ''} (${r.pages || 1} Seite${(r.pages || 1) !== 1 ? 'n' : ''}) · ${verb}`);
       if (replaceForPostId) awaitReplaceResult();
+      else folgeScan([r.file]);
     } catch (err) {
       setLastError(err.message);
     }
@@ -577,6 +638,7 @@ function ScannerCard({ replaceForPostId = null, onReplaceComplete }) {
       } else {
         setLastSuccess(`Scan OK · ${anzahl} Dokument${anzahl !== 1 ? 'e' : ''} aus ${r.pages || 0} Seite${(r.pages || 0) !== 1 ? 'n' : ''} · wird verarbeitet`);
       }
+      folgeScan(r.files);
     } catch (err) {
       setLastError(err.message);
     }
@@ -601,6 +663,7 @@ function ScannerCard({ replaceForPostId = null, onReplaceComplete }) {
       const verb = replaceForPostId ? 'wird ausgetauscht' : 'wird verarbeitet';
       setLastSuccess(`Scan abgeschlossen · ${r.file || ''} (${r.pages || 0} Seiten) · ${verb}`);
       if (replaceForPostId) awaitReplaceResult();
+      else folgeScan([r.file]);
     } catch (err) {
       setLastError(err.message);
     }
@@ -776,6 +839,14 @@ function ScannerCard({ replaceForPostId = null, onReplaceComplete }) {
               <span className="text-amber-700 dark:text-amber-400">{lastWarning}</span>
             </div>
           )}
+          {wartetAufPipeline && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg bg-primary/5 border border-primary/20 px-3 py-2 text-sm">
+              <Loader2 className="h-4 w-4 animate-spin text-primary flex-shrink-0 mt-0.5" />
+              <span className="text-primary">
+                Warte, bis der Scan in der Pipeline ankommt – danach geht es zu Logs → Jobs …
+              </span>
+            </div>
+          )}
           {waitingForReplace && (
             <div className="mt-3 flex items-start gap-2 rounded-lg bg-primary/5 border border-primary/20 px-3 py-2 text-sm">
               <Loader2 className="h-4 w-4 animate-spin text-primary flex-shrink-0 mt-0.5" />
@@ -896,26 +967,20 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
   const [hinweisDialog, setHinweisDialog] = useState(false);
   const [hinweisText, setHinweisText] = useState('');
   const fileInputRef = useRef(null);
+  const navigate = useNavigate();
 
   // Drag-state
   const [dragIndex, setDragIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
 
   const addFiles = useCallback((fileList) => {
-    const pdfs = Array.from(fileList || []).filter(f =>
-      f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
-    );
+    const pdfs = Array.from(fileList || []).filter(istPdf);
     if (pdfs.length === 0) return;
     setItems(prev => {
       const existing = new Set(prev.map(i => `${i.name}|${i.size}`));
       const fresh = pdfs
         .filter(f => !existing.has(`${f.name}|${f.size}`))
-        .map(f => ({
-          id: `${f.name}_${f.size}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-          file: f,
-          name: f.name,
-          size: f.size,
-        }));
+        .map(alsEintrag);
       return [...prev, ...fresh];
     });
     setFeedback(null);
@@ -1010,9 +1075,13 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
       const payloadName = (mergedFilename || '').trim() ||
         (items.length === 1 ? items[0].name : `merged_${items.length}_docs.pdf`);
       const res = await api.import.uploadMerged(payloadName, files, hinweis);
-      setFeedback({ type: 'success', msg: `Merge erfolgreich · ${res.mergedCount} Datei(en) → ${res.filename} · Job ${res.jobId.slice(0, 8)}…` });
       setItems([]);
       setMergedFilename('');
+      if (leseImportFolgen().datei) {
+        navigate(folgenUrl({ jobIds: [res.jobId] }));
+        return;
+      }
+      setFeedback({ type: 'success', msg: `Merge erfolgreich · ${res.mergedCount} Datei(en) → ${res.filename} · Job ${res.jobId.slice(0, 8)}…` });
     } catch (err) {
       setFeedback({ type: 'error', msg: err.message });
     } finally {
@@ -1023,30 +1092,37 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
 
   // ── Batch: jede Datei einzeln in die Pipeline ────────────────────────────
 
-  async function submitBatch(hinweis = '') {
-    if (items.length === 0) return;
+  async function submitBatch(hinweis = '', liste = items) {
+    if (liste.length === 0) return;
     setBusy(true);
     setFeedback(null);
     setProgress(null);
     let ok = 0;
     let fail = 0;
     const failures = [];
+    const jobIds = [];
     try {
-      for (let i = 0; i < items.length; i++) {
-        setProgress({ current: i, total: items.length, phase: `Lade ${items[i].name}` });
+      for (let i = 0; i < liste.length; i++) {
+        setProgress({ current: i, total: liste.length, phase: `Lade ${liste[i].name}` });
         try {
-          const dataB64 = await fileToBase64(items[i].file);
+          const dataB64 = await fileToBase64(liste[i].file);
           // Gesamtanzahl mitgeben → Auto-Cache springt schon bei der ersten Datei an.
-          await api.import.upload(items[i].name, dataB64, hinweis, items.length);
+          const res = await api.import.upload(liste[i].name, dataB64, hinweis, liste.length);
+          jobIds.push(res.jobId);
           ok++;
         } catch (err) {
           fail++;
-          failures.push(`${items[i].name}: ${err.message}`);
+          failures.push(`${liste[i].name}: ${err.message}`);
         }
       }
       if (fail === 0) {
-        setFeedback({ type: 'success', msg: `${ok} Datei(en) in die Pipeline gegeben.` });
         setItems([]);
+        // Mit Fehlern bleibt die Seite stehen, damit die Meldung sichtbar ist.
+        if (leseImportFolgen().datei) {
+          navigate(folgenUrl({ jobIds }));
+          return;
+        }
+        setFeedback({ type: 'success', msg: `${ok} Datei(en) in die Pipeline gegeben.` });
       } else {
         setFeedback({
           type: 'error',
@@ -1673,12 +1749,19 @@ function CacheModePanel() {
 }
 
 export default function ImportPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { pushAction } = useUndoHistory();
   const { isAdmin } = useAuth();
+  const { istTouch } = useDarstellung();
 
   const replaceParam = searchParams.get('replace') || '';
+  // Ältere Service-Worker-Stände leiten geteilte PDFs noch hierher; die
+  // Abholung und Verfolgung sitzt in der Jobs-Ansicht.
+  const geteilt = searchParams.get('geteilt');
+  useEffect(() => {
+    if (geteilt) navigate(`/logs?geteilt=${encodeURIComponent(geteilt)}`, { replace: true });
+  }, [geteilt, navigate]);
   const replaceForPostId = POSTID_RE.test(replaceParam) ? replaceParam : null;
 
   // Nur für die Banner-Formulierung: ist die bisherige Datei bereits als
@@ -1733,6 +1816,10 @@ export default function ImportPage() {
           </div>
         </div>
 
+        <KameraScanKarte
+          replaceForPostId={replaceForPostId}
+          onReplaceComplete={handleReplaceComplete}
+        />
         <ScannerCard
           replaceForPostId={replaceForPostId}
           onReplaceComplete={handleReplaceComplete}
@@ -1752,7 +1839,7 @@ export default function ImportPage() {
         <h1 className="text-xl font-semibold">Dokumentenimport</h1>
       </div>
       <p className="text-sm text-muted-foreground -mt-2">
-        Neue Dokumente per Scanner oder Datei-Upload in die Verarbeitungs-Pipeline geben. Laufende Jobs sind im Task-Monitor in der Seitenleiste sichtbar.
+        Neue Dokumente per Kamera, Scanner oder Datei-Upload in die Verarbeitungs-Pipeline geben. Laufende Jobs sind im Task-Monitor in der Seitenleiste sichtbar.
       </p>
 
       {/* Diese Seite ist nur einer von sechs Eingangswegen – der überwachte
@@ -1770,8 +1857,11 @@ export default function ImportPage() {
       </Link>
 
       <CacheModePanel />
+      {/* Auf Touch-Geräten ist die Kamera der naheliegende Weg, am Rechner nicht. */}
+      {istTouch && <KameraScanKarte />}
       <ScannerCard />
       <UploadCard />
+      {!istTouch && <KameraScanKarte />}
       {isAdmin && <ArchivImportCard />}
     </div>
   );

@@ -5,6 +5,7 @@ import { GlowHeading } from '@/components/ui/GlowHeading';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '@/components/ui/table';
 import { Pagination } from '@/components/ui/Pagination';
 import { PageLoader, EmptyState } from '@/components/ui/spinner';
+import { useDebugModus } from '@/hooks/useDebugModus';
 import { ScrollText, AlertTriangle, AlertCircle, Info, ChevronDown, ChevronRight, Bug } from 'lucide-react';
 import { JobsMonitor } from '@/components/JobsMonitor';
 import TokenLogView from '@/components/logs/TokenLogView';
@@ -42,46 +43,21 @@ function EntityIdCell({ entity, entityId }) {
   );
 }
 
-// ── Debug-Mode Toggle ────────────────────────────────────────────────────────
+// ── Debug-Modus-Hinweis ──────────────────────────────────────────────────────
+// Geschaltet wird er unter Einstellungen → Allgemein (nur Admins); hier nur
+// sichtbar, solange er an ist.
 
-function DebugModeToggle() {
-  const [enabled, setEnabled] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    api.settingsPublic.getDebugMode().then((r) => setEnabled(r.enabled ?? false)).catch(() => {}).finally(() => setLoading(false));
-  }, []);
-
-  const toggle = async () => {
-    setSaving(true);
-    try {
-      const next = !enabled;
-      await api.settingsPublic.setDebugMode(next);
-      setEnabled(next);
-    } catch (err) {
-      console.error('Debug-Mode toggle fehlgeschlagen:', err.message);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (loading) return null;
-
+function DebugModusHinweis() {
+  const an = useDebugModus();
+  if (!an) return null;
   return (
-    <button
-      onClick={toggle}
-      disabled={saving}
-      title="Debug-Modus: Detaillierte Pipeline-Logs (JSON) werden pro Dokument in OneDrive gespeichert"
-      className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors ${
-        enabled
-          ? 'border-amber-500/60 bg-amber-500/15 text-amber-400 hover:bg-amber-500/25'
-          : 'border-border text-muted-foreground hover:text-foreground hover:border-border/80'
-      } ${saving ? 'opacity-50 cursor-wait' : ''}`}
+    <span
+      title="Debug-Modus: Ausführliche Pipeline-Protokolle (JSON) werden je Dokument in der Ablage gespeichert"
+      className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/60 bg-amber-500/15 px-2.5 py-1 text-xs font-medium text-amber-400"
     >
       <Bug className="h-3.5 w-3.5" />
-      Debug-Modus {enabled ? 'AN' : 'AUS'}
-    </button>
+      Debug-Modus an
+    </span>
   );
 }
 
@@ -370,7 +346,16 @@ const SYSTEM_VIEWED_KEY = 'systemLogsLastViewed';
 export default function LogsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const urlPage = Math.max(1, parseInt(searchParams.get('page') || '1', 10));
-  const urlTab = VALID_TABS.includes(searchParams.get('tab')) ? searchParams.get('tab') : 'jobs';
+  // Verfolgte Importe landen immer im Jobs-Tab: geteilte PDFs (?geteilt=1),
+  // Dateiimporte (?folgen=<jobId>) und in der App gestartete Scans (?scan=<datei>).
+  const geteilt = searchParams.get('geteilt');
+  const folgenIds = searchParams.getAll('folgen').filter(Boolean).slice(0, 50);
+  const scanDateien = searchParams.getAll('scan').filter(Boolean).slice(0, 50);
+  const verfolgt = Boolean(geteilt) || folgenIds.length > 0 || scanDateien.length > 0;
+  const urlTab = !verfolgt && VALID_TABS.includes(searchParams.get('tab')) ? searchParams.get('tab') : 'jobs';
+  const verfolgungUebernommen = useCallback(() => {
+    setSearchParams((p) => { p.delete('geteilt'); p.delete('folgen'); p.delete('scan'); return p; }, { replace: true });
+  }, [setSearchParams]);
 
   const [tab, setTab] = useState(urlTab);
   const [page, setPage] = useState(urlPage);
@@ -453,12 +438,12 @@ export default function LogsPage() {
     <div className="px-6 pt-4 pb-6 lg:px-8 lg:pb-8 space-y-4">
       <div className="flex items-center justify-between gap-4">
         <GlowHeading>Aktivitätslog</GlowHeading>
-        <DebugModeToggle />
+        <DebugModusHinweis />
       </div>
       <TabBar tab={tab} onTabChange={handleTabChange} systemCounts={systemCounts} activeJobCount={activeJobCount} />
       <div className="space-y-4">
         {tab === 'jobs' ? (
-          <JobsMonitor />
+          <JobsMonitor geteilt={geteilt} folgenIds={folgenIds} scanDateien={scanDateien} onUrlErledigt={verfolgungUebernommen} />
         ) : tab === 'token' ? (
           <TokenLogView />
         ) : tab === 'activity' ? (

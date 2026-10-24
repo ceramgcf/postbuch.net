@@ -14,6 +14,27 @@ import { FilterPopover, FilterChip, FilterLeiste, AuswahlLeiste } from '@/compon
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { Scissors, Check } from 'lucide-react';
 import { KuerzungStatusActions } from '@/components/detail/KuerzungStatusActions';
+import { KartenListe } from '@/components/listen/DataView';
+import { useDarstellung } from '@/hooks/useDarstellung';
+
+// Bedienelemente in einer Karte dürfen den Karten-Klick nicht auslösen.
+const stopp = (e) => e.stopPropagation();
+
+// Mobile Karte einer Kürzung (Plätze siehe DataView). ctx: { status(k) }.
+const KUERZUNG_KARTE = [
+  { key: 'arz', mobil: 'meta', zelle: (k) => k.arz_postid && <span className="font-mono">{k.arz_postid}</span> },
+  { key: 'patient', mobil: 'meta', zelle: (k) => k.behandelte_person },
+  { key: 'betrag', mobil: 'rechts', zelle: (k) => (
+    <span className="font-mono text-red-600">{formatCurrency(k.kuerzungsbetrag_effektiv ?? k.kuerzungsbetrag)}</span>
+  ) },
+  { key: 'arzt', mobil: 'titel', zelle: (k) => k.name_arzt || '–' },
+  { key: 'leistung', mobil: 'text', zelle: (k) => [
+    k.arz_leistung, k.arz_ziffer && `(${k.arz_ziffer})`, k.begruendung && `– ${k.begruendung}`,
+  ].filter(Boolean).join(' ') },
+  { key: 'status', mobil: 'badges', zelle: (k, { status }) => (
+    <div className="flex flex-col gap-1.5 items-start" onClick={stopp}>{status(k)}</div>
+  ) },
+];
 
 // URL-Parameter: gesehen = offen (Standard, ohne Parameter) | gesehen | alle;
 // person, kostentraeger, jahre = kommagetrennt, ohne Parameter alle;
@@ -33,6 +54,7 @@ const jahrVon = (k) => (k.bescheiddatum ? String(k.bescheiddatum).slice(0, 4) : 
 const liste = (wert) => (wert ? wert.split(',').filter(Boolean) : null);
 
 export default function KuerzungenPage() {
+  const { istMobil } = useDarstellung();
   const [searchParams, setSearchParams] = useSearchParams();
   // Immer alle laden – Statuswechsel braucht so keinen neuen Abruf, und der
   // Cache-Eintrag ist derselbe wie auf Periodenseite und im Abrechnungsassistenten.
@@ -217,70 +239,12 @@ export default function KuerzungenPage() {
               .filter(k => k.arz_postid && !seenArz.has(k.arz_postid) && seenArz.add(k.arz_postid))
               .map(k => ({ postid: k.arz_postid, kontakt: k.name_arzt })),
           ];
-
-          return (
-          <Card key={group.eb_postid}>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => navigate(`/postbuch/${group.eb_postid}`, {
-                      state: { from: location.pathname + location.search, navList: groupNavList, navIndex: 0 },
-                    })}
-                    className="text-primary hover:underline font-mono font-bold cursor-pointer"
-                  >
-                    {group.eb_postid}
-                  </button>
-                  <Badge variant="outline">{group.kostentraeger}</Badge>
-                  <span className="text-sm text-muted-foreground">{formatDate(group.bescheiddatum)}</span>
-                </div>
-                <span className="text-red-600 font-medium font-mono">{formatCurrency(group.summe)}</span>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <Table className="table-fixed w-full">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-28">Arztrechnung</TableHead>
-                    <TableHead className="w-28">Patient</TableHead>
-                    <TableHead className="w-36">Arzt</TableHead>
-                    <TableHead className="w-44">Leistung / Ziffer</TableHead>
-                    <TableHead className="w-32 text-right">Kürzungsbetrag</TableHead>
-                    <TableHead>Begründung</TableHead>
-                    <TableHead className="w-56">Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {group.kuerzungen.map((k, i) => {
-                    const arzNavIndex = groupNavList.findIndex(n => n.postid === k.arz_postid);
-                    const bestaetigenPending = ohneRechnungsbezugMutation.isPending
-                      && ohneRechnungsbezugMutation.variables?.postid === group.eb_postid
-                      && ohneRechnungsbezugMutation.variables?.subid === k.eb_subid;
-
-                    return (
-                    <TableRow key={i}>
-                      <TableCell>
-                        {k.arz_postid ? (
-                          <button
-                            onClick={() => navigate(`/postbuch/${k.arz_postid}`, {
-                              state: { from: location.pathname + location.search, navList: groupNavList, navIndex: arzNavIndex >= 0 ? arzNavIndex : undefined },
-                            })}
-                            className="text-primary hover:underline font-mono text-xs cursor-pointer"
-                          >
-                            {k.arz_postid}
-                          </button>
-                        ) : '–'}
-                      </TableCell>
-                      <TableCell>{k.behandelte_person || '–'}</TableCell>
-                      <TableCell className="truncate">{k.name_arzt || '–'}</TableCell>
-                      <TableCell>
-                        {k.arz_leistung || '–'}
-                        {k.arz_ziffer && <span className="ml-1 text-muted-foreground font-mono text-xs">({k.arz_ziffer})</span>}
-                      </TableCell>
-                      <TableCell className="text-right font-mono text-red-600">{formatCurrency(k.kuerzungsbetrag_effektiv ?? k.kuerzungsbetrag)}</TableCell>
-                      <TableCell className="text-sm">{k.begruendung || '–'}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-1.5 items-start">
+          const statusZelle = (k) => {
+            const bestaetigenPending = ohneRechnungsbezugMutation.isPending
+              && ohneRechnungsbezugMutation.variables?.postid === group.eb_postid
+              && ohneRechnungsbezugMutation.variables?.subid === k.eb_subid;
+            return (
+              <>
                           <KuerzungStatusActions
                             ebPostid={group.eb_postid}
                             ebSubid={k.eb_subid}
@@ -313,6 +277,87 @@ export default function KuerzungenPage() {
                               </Button>
                             </div>
                           )}
+              </>
+            );
+          };
+          const oeffneArz = (k) => {
+            if (!k.arz_postid) return;
+            const idx = groupNavList.findIndex(n => n.postid === k.arz_postid);
+            navigate(`/postbuch/${k.arz_postid}`, {
+              state: { from: location.pathname + location.search, navList: groupNavList, navIndex: idx >= 0 ? idx : undefined },
+            });
+          };
+
+          return (
+          <Card key={group.eb_postid}>
+            <CardHeader className="pb-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <button
+                    onClick={() => navigate(`/postbuch/${group.eb_postid}`, {
+                      state: { from: location.pathname + location.search, navList: groupNavList, navIndex: 0 },
+                    })}
+                    className="text-primary hover:underline font-mono font-bold cursor-pointer"
+                  >
+                    {group.eb_postid}
+                  </button>
+                  <Badge variant="outline">{group.kostentraeger}</Badge>
+                  <span className="text-sm text-muted-foreground">{formatDate(group.bescheiddatum)}</span>
+                </div>
+                <span className="text-red-600 font-medium font-mono">{formatCurrency(group.summe)}</span>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {istMobil ? (
+                <KartenListe
+                  spalten={KUERZUNG_KARTE}
+                  daten={group.kuerzungen.map((k, i) => ({ ...k, _i: i }))}
+                  zeilenKey="_i"
+                  onZeile={oeffneArz}
+                  ctx={{ status: statusZelle }}
+                />
+              ) : (
+              <Table className="table-fixed w-full">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-28">Arztrechnung</TableHead>
+                    <TableHead className="w-28">Patient</TableHead>
+                    <TableHead className="w-36">Arzt</TableHead>
+                    <TableHead className="w-44">Leistung / Ziffer</TableHead>
+                    <TableHead className="w-32 text-right">Kürzungsbetrag</TableHead>
+                    <TableHead>Begründung</TableHead>
+                    <TableHead className="w-56">Status</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {group.kuerzungen.map((k, i) => {
+                    const arzNavIndex = groupNavList.findIndex(n => n.postid === k.arz_postid);
+
+                    return (
+                    <TableRow key={i}>
+                      <TableCell>
+                        {k.arz_postid ? (
+                          <button
+                            onClick={() => navigate(`/postbuch/${k.arz_postid}`, {
+                              state: { from: location.pathname + location.search, navList: groupNavList, navIndex: arzNavIndex >= 0 ? arzNavIndex : undefined },
+                            })}
+                            className="text-primary hover:underline font-mono text-xs cursor-pointer"
+                          >
+                            {k.arz_postid}
+                          </button>
+                        ) : '–'}
+                      </TableCell>
+                      <TableCell>{k.behandelte_person || '–'}</TableCell>
+                      <TableCell className="truncate">{k.name_arzt || '–'}</TableCell>
+                      <TableCell>
+                        {k.arz_leistung || '–'}
+                        {k.arz_ziffer && <span className="ml-1 text-muted-foreground font-mono text-xs">({k.arz_ziffer})</span>}
+                      </TableCell>
+                      <TableCell className="text-right font-mono text-red-600">{formatCurrency(k.kuerzungsbetrag_effektiv ?? k.kuerzungsbetrag)}</TableCell>
+                      <TableCell className="text-sm">{k.begruendung || '–'}</TableCell>
+                      <TableCell>
+                        <div className="flex flex-col gap-1.5 items-start">
+                          {statusZelle(k)}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -320,6 +365,7 @@ export default function KuerzungenPage() {
                   })}
                 </TableBody>
               </Table>
+              )}
             </CardContent>
           </Card>
           );

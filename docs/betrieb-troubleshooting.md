@@ -38,6 +38,33 @@ Antwortet das, laufen `web`, `app` und die Verbindung dazwischen.
 
 ![Logs-Bereich, Registerkarte System, mit aufgeklappter Fehlerzeile](screenshots/logs-system.png)
 
+### Debug-Modus
+
+Für die Fehlersuche gibt es unter ![Einstellungen-Symbol](icons/settings.svg)
+**Einstellungen → Allgemein** den Schalter **Debug-Modus**. Er gilt für die
+ganze Instanz, wirkt sofort und lässt sich nur von Admins umlegen. Solange er
+an ist,
+
+- speichert die Verarbeitungs-Pipeline je Dokument ein ausführliches Protokoll
+  (JSON) im Ordner `_debug` der [Dateiablage](storage-backends.md),
+- zeigt die Seite **Importieren** neben **Kamera öffnen** den Knopf
+  **Kamera-Diagnose**: Nach der Aufnahme stehen über der Vorschau die Kenndaten
+  von Live-Bild und Foto (Kamera, Auflösung, Zoom) und wie das Foto auf den
+  Live-Ausschnitt zugeschnitten wurde; **Kopieren** legt diese Angaben als JSON
+  in die Zwischenablage,
+- bietet das ![Zahnrad-Symbol](icons/settings.svg) Zahnrad im Kamerascan
+  unter der [Kamerawahl](dokumente-importieren.md#mit-der-kamera-in-postbuchnet)
+  zusätzlich die Größe des **Livebilds**. **Maximal** ist der Standard: Nur die
+  volle Sensorgröße zeigt auf vielen Handys den ganzen Bildwinkel, kleinere
+  Größen sind dort bloß ein Ausschnitt aus der Bildmitte. Läuft das Livebild
+  auf einem älteren Gerät träge, hilft eine kleinere Größe. Die Wahl wirkt
+  sofort, gilt nur für diesen Browser und bleibt auch nach dem Ausschalten des
+  Debug-Modus bestehen,
+- steht im Bereich **Logs** oben der Hinweis **Debug-Modus an**.
+
+Nach der Fehlersuche wieder ausschalten: Die Protokolle im Ordner `_debug`
+sammeln sich sonst ungebremst an.
+
 ## Updates
 
 postbuch.net fragt täglich bei der eingetragenen Bezugsquelle nach, ob es eine
@@ -272,9 +299,22 @@ Der Scanner-Container läuft nur mit dem Profil `scanner`. `docker compose ps`
 muss ihn zeigen. Fehlt er, wurde der Stack ohne das Profil gestartet.
 
 Ohne Host-Agent lässt sich das Profil auf dem Server von Hand aktivieren:
-`COMPOSE_PROFILES=scanner` in `.env` setzen und anschließend `./restart.sh`
-ausführen. Die Scanner-Adresse selbst wird danach im Web-Assistenten gesucht
-oder eingetragen.
+`scanner` in `COMPOSE_PROFILES` der `.env` ergänzen und anschließend
+`./restart.sh` ausführen. Die Profile stehen dort kommagetrennt, etwa
+`COMPOSE_PROFILES=embedding,scanner`. Ein bereits eingetragenes `embedding`
+muss stehen bleiben, sonst startet der eingebaute Embedding-Dienst nicht mehr.
+Die Scanner-Adresse selbst wird danach im Web-Assistenten gesucht oder
+eingetragen.
+
+**Ähnlichkeitssuche und Hilfe finden nichts, der eingebaute Embedding-Dienst
+ist gewählt.**
+Der Dienst läuft nur mit dem Profil `embedding`; `docker compose ps` muss den
+Container `embedding` zeigen. Fehlt er, meldet das auch die Embedding-Karte
+unter ![Einstellungen-Symbol](icons/settings.svg) `Einstellungen → KI` und
+bietet **Dienst einrichten** an. Ohne Host-Agent gilt dasselbe wie beim
+Scanner: `embedding` in `COMPOSE_PROFILES` ergänzen und `./restart.sh`
+ausführen. Siehe
+[Der eingebaute Embedding-Dienst](ki-provider.md#der-eingebaute-embedding-dienst).
 
 **Die App zeigt nach einem Update noch die alte Oberfläche.**
 Selten, weil Startseite und Service-Worker nicht zwischengespeichert werden.

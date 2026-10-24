@@ -131,6 +131,35 @@ services:
     networks:
       - postbuch
 
+  embedding:
+    build: ./embedding
+    # Fester Image-Name wie bei caddy: Das Image ist release-unabhängig, der
+    # Installer baut es nur, wenn es fehlt. Änderung in embedding/ → Tag hoch.
+    image: postbuch-embedding:local2
+    # Eigenes Profil: Der Dienst läuft nur, wo er gewählt ist. Neue
+    # Installationen schalten es ein, bestehende über Einstellungen → KI →
+    # Embeddings (Host-Agent, postbuch-hostconfig.sh).
+    profiles:
+      - embedding
+    container_name: postbuch-embedding
+    restart: unless-stopped
+    # Kein Port nach außen: nur die App spricht den Dienst im Docker-Netz an.
+    # Das Modell lädt erst bei der ersten Anfrage und wird nach zehn Minuten
+    # Leerlauf entladen. Die Grenze fängt einen Ausreißer im Container ab,
+    # bevor er auf einem Pi mit 1 GB den ganzen Stack mitreißt.
+    mem_limit: 640m
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: Europe/Berlin
+    networks:
+      - postbuch
+
   scanner:
     build: ./scanner
     profiles:

@@ -168,7 +168,19 @@ function normalizeCaps(typ, caps) {
 // Reservierte IDs. Sie können im UI bearbeitet (Label, Caps, baseUrl), aber
 // nicht gelöscht oder umbenannt werden — sonst zeigen bestehende
 // llm_model_*-Werte ins Leere.
-export const BUILTIN_PROVIDER_IDS = ['anthropic', 'openai', 'bedrock', 'subscription'];
+export const BUILTIN_PROVIDER_IDS = ['anthropic', 'openai', 'bedrock', 'subscription', 'eingebaut'];
+
+/**
+ * Der eingebaute Embedding-Dienst (Compose-Dienst `embedding`, Verzeichnis
+ * embedding/). Anders als die übrigen Built-ins ist an ihm NICHTS
+ * einstellbar: die Adresse liegt im Docker-Netz und braucht deshalb
+ * allowPrivate. Wäre die baseUrl überschreibbar (UI, Backup-Restore,
+ * Handeintrag in `_settings.llm_providers`), hätte man einen Provider mit
+ * fest eingeschalteten privaten Zielen auf beliebiger Adresse. Deshalb
+ * erzwingt listProviders() den Eintrag unabhängig von gespeicherten Werten,
+ * und die Schreibroute lehnt ihn ab.
+ */
+export const EINGEBAUT_ID = 'eingebaut';
 
 const BUILTINS = {
   anthropic: {
@@ -191,7 +203,23 @@ const BUILTINS = {
     id: 'subscription', typ: 'subscription', label: 'Claude-Abo',
     baseUrl: null, legacyKeySetting: 'llm_claude_oauth_token',
   },
+  [EINGEBAUT_ID]: {
+    id: EINGEBAUT_ID, typ: 'openai-compatible', label: 'Eingebauter Embedding-Dienst',
+    baseUrl: 'http://embedding:8080/v1', legacyKeySetting: null,
+    capsOverride: { pdf: false, vision: false, tools: false, streaming: false, promptCache: false, embeddings: true },
+    fest: true,
+  },
 };
+
+/** Fester Eintrag des eingebauten Embedding-Dienstes (siehe EINGEBAUT_ID). */
+function eingebautEintrag() {
+  const b = BUILTINS[EINGEBAUT_ID];
+  return {
+    id: b.id, typ: b.typ, label: b.label, baseUrl: b.baseUrl, dialekt: 'openai',
+    aktiv: true, caps: { ...b.capsOverride }, builtin: true,
+    nurEmbedding: true, fest: true, erlaubtPrivateZiele: true,
+  };
+}
 
 // ── Presets fürs UI ──────────────────────────────────────────────────────────
 // LM Studio ist unter /v1 OpenAI-kompatibel (chat/completions, embeddings,
@@ -249,6 +277,10 @@ export function listProviders(settings) {
 
   for (const id of BUILTIN_PROVIDER_IDS) {
     const b = BUILTINS[id];
+    if (b.fest) {
+      byId.set(id, eingebautEintrag());
+      continue;
+    }
     byId.set(id, {
       id: b.id,
       typ: b.typ,
@@ -266,6 +298,7 @@ export function listProviders(settings) {
     const id = String(raw.id);
     if (!PROVIDER_ID_RE.test(id)) continue;
     const vorhanden = byId.get(id);
+    if (vorhanden?.fest) continue;
     // Built-ins: Typ und ID sind fix, alles andere darf überschrieben werden.
     const typ = vorhanden?.builtin
       ? vorhanden.typ

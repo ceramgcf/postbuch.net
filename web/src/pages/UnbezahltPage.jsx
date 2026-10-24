@@ -10,6 +10,34 @@ import { LebensbereichBadge } from '@/components/postbuch/LebensbereichBadge';
 import { PageLoader, EmptyState } from '@/components/ui/spinner';
 import { formatDate, formatCurrency, daysOverdue } from '@/lib/utils';
 import { CheckCircle, AlertCircle } from 'lucide-react';
+import { KartenListe } from '@/components/listen/DataView';
+import { useDarstellung } from '@/hooks/useDarstellung';
+
+// Mobile Kartenansicht, gleiche Inhalte wie die Desktop-Tabelle.
+const RECHNUNG_KARTE = [
+  { key: 'postid', mobil: 'meta', zelle: (r) => <span className="font-mono">{r.postid}</span> },
+  { key: 'faellig', mobil: 'meta', zelle: (r) => r.faelligkeit && `fällig ${formatDate(r.faelligkeit)}` },
+  { key: 'betrag', mobil: 'rechts', zelle: (r) => <span className="font-mono">{formatCurrency(r.offener_betrag)}</span> },
+  { key: 'absender', mobil: 'titel', zelle: (r) => r.name_arzt || r.kontakt || '–' },
+  { key: 'patient', mobil: 'text', zelle: (r) => r.behandelte_person },
+  {
+    key: 'marken', mobil: 'badges',
+    zelle: (r) => {
+      const overdue = daysOverdue(r.faelligkeit);
+      return (
+        <>
+          <LebensbereichBadge lebensbereich={r.lebensbereich} compact />
+          <ArtBadge art={r.dokumentart || r.art} />
+          {overdue && (
+            <span className={`text-xs font-medium ${overdue > 30 ? 'text-red-600' : 'text-amber-600'}`}>
+              {overdue} Tage überfällig
+            </span>
+          )}
+        </>
+      );
+    },
+  },
+];
 
 export default function UnbezahltPage() {
   const { data, isLoading, error } = useUnbezahlt();
@@ -17,14 +45,16 @@ export default function UnbezahltPage() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const [perPage, setPerPage] = usePerPage();
+  const { istMobil } = useDarstellung();
 
   const urlPage = parseInt(searchParams.get('page') || '1', 10);
   const [page, setPageState] = useState(urlPage);
 
   const rows = data?.data || [];
   // perPage kann 'auto' sein – in dem Fall 50 als Fallback (keine Container-Messung hier).
-  const effectivePerPage = perPage === 'auto' ? 50 : Number(perPage);
+  // Mobil wird nicht geblättert, sondern die ganze Liste gescrollt.
   const total = rows.length;
+  const effectivePerPage = istMobil ? Math.max(total, 1) : perPage === 'auto' ? 50 : Number(perPage);
   const totalPages = Math.max(1, Math.ceil(total / effectivePerPage));
   const safePage = Math.min(page, totalPages);
 
@@ -34,7 +64,7 @@ export default function UnbezahltPage() {
   );
 
   // The global index offset for navList/navIndex
-  const pageOffset = (safePage - 1) * perPage;
+  const pageOffset = (safePage - 1) * effectivePerPage;
 
   const handlePageChange = (p) => {
     setPageState(p);
@@ -46,9 +76,9 @@ export default function UnbezahltPage() {
     }, { replace: true });
   };
 
-  const handlePerPageChange = (value) => {
+  const handlePerPageChange = (value, { automatisch = false } = {}) => {
     setPerPage(value);
-    handlePageChange(1);
+    if (!automatisch) handlePageChange(1);
   };
 
   if (isLoading) return <PageLoader />;
@@ -81,6 +111,16 @@ export default function UnbezahltPage() {
       ) : (
         <>
           {showPagination && <Pagination {...paginationProps} />}
+          {istMobil ? (
+            <KartenListe
+              spalten={RECHNUNG_KARTE}
+              daten={pagedRows}
+              zeilenKey="postid"
+              onZeile={(row) => navigate(`/postbuch/${row.postid}`, {
+                state: { from: fromPath, navList: rows, navIndex: rows.indexOf(row) },
+              })}
+            />
+          ) : (
           <Table>
             <TableHeader>
               <TableRow>
@@ -125,6 +165,7 @@ export default function UnbezahltPage() {
               })}
             </TableBody>
           </Table>
+          )}
           {showPagination && <Pagination {...paginationProps} />}
         </>
       )}

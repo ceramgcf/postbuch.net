@@ -37,11 +37,17 @@ import {
   istNeuer, semver, hatFeedQuelle, feedQuelleFingerprint, githubQuelle,
 } from '../lib/postbuch-feed.js';
 import db from '../db.js';
+import { loadDynamicSettings } from '../config.js';
+import { embeddingConfig } from '../lib/embedding.js';
+import { EINGEBAUTES_EMBEDDING } from '../lib/embedding-eingebaut.js';
 
 const router = Router();
 
 /** Port-Freigaben, die der Host-Agent umschalten kann (SCANNER_BIND/WEB_BIND). */
 const FREIGABE_WERTE = ['scanner:lan', 'scanner:lokal', 'web:lan', 'web:lokal'];
+
+/** Compose-Profile, die der Host-Agent ein- und ausschalten kann. */
+const MODULE_WERTE = ['scanner:an', 'scanner:aus', 'embedding:an', 'embedding:aus'];
 
 /**
  * Der Fallback für Instanzen ohne Agenten. Konstanter String — NIE aus dem
@@ -189,6 +195,7 @@ async function gesamtbild() {
       capabilities: agent.capabilities,
       letzterLaufAm: agent.letzterLaufAm,
       scannerProfilAktiv: agent.scannerProfilAktiv,
+      embeddingProfilAktiv: agent.embeddingProfilAktiv,
       freigaben: agent.freigaben,
       webBestaetigungBis: agent.webBestaetigungBis,
     },
@@ -335,8 +342,23 @@ router.post('/hostconfig', async (req, res) => {
   try {
     const agent = await leseAgentStatus();
     const typ = String(req.body?.typ || '');
-    const capability = ['module', 'port', 'freigabe'].includes(typ) ? typ : 'netzwerk';
     const wert = String(req.body?.wert || '');
+    // Das Embedding-Profil kennt erst ein Agent, der es meldet; ein älterer
+    // Agent würde den Auftrag sonst annehmen und am unbekannten Wert scheitern.
+    const capability = typ === 'module' && wert.startsWith('embedding:')
+      ? 'embedding'
+      : (['module', 'port', 'freigabe'].includes(typ) ? typ : 'netzwerk');
+    if (typ === 'module') {
+      if (!MODULE_WERTE.includes(wert)) return res.status(400).json({ error: 'Unbekanntes Modul.' });
+      // Den Dienst abzuschalten, auf dem die Suche gerade läuft, legte sie
+      // lahm. Maßgeblich ist die gespeicherte Wahl, nicht die Angabe des Clients.
+      if (wert === 'embedding:aus'
+        && embeddingConfig(await loadDynamicSettings()).providerId === EINGEBAUTES_EMBEDDING.providerId) {
+        return res.status(409).json({
+          error: 'Der eingebaute Dienst ist für die Embeddings gewählt. Zuerst einen anderen Dienst wählen.',
+        });
+      }
+    }
     if (typ === 'freigabe') {
       if (!FREIGABE_WERTE.includes(wert)) return res.status(400).json({ error: 'Unbekannte Freigabe.' });
       // Die Oberfläche lässt sich nur aus einer HTTPS-Sitzung umschalten: Wer

@@ -17,6 +17,7 @@ import {
   activeSignature, embedText, embeddingConfig,
 } from '../lib/embedding.js';
 import { getProvider } from '../lib/llm.js';
+import { vorberechneteHilfevektoren } from '../lib/hilfe-vektoren.js';
 import { appVersion } from '../lib/app-version.js';
 import { appLog } from '../app-log.js';
 import * as tracker from '../jobs/tracker.js';
@@ -259,6 +260,8 @@ export async function reconcileHelpCorpus({ settings = null, reason = 'manuell',
 
     let embedded = 0;
     let reused = 0;
+    let mitgeliefert = 0;
+    const vorberechnet = await vorberechneteHilfevektoren(signature);
     for (let i = 0; i < source.chunks.length; i++) {
       const chunk = source.chunks[i];
       onItem?.(i + 1, source.chunks.length, chunk);
@@ -285,6 +288,23 @@ export async function reconcileHelpCorpus({ settings = null, reason = 'manuell',
       );
       if (copy.rowCount > 0) {
         reused++;
+        continue;
+      }
+
+      // Mit dem Release ausgelieferter Vektor desselben Texts und derselben
+      // Signatur (lib/hilfe-vektoren.js).
+      const literal = vorberechnet(chunk.inhaltHash);
+      if (literal) {
+        await client.query(
+          `INSERT INTO postbuch._hilfe_abschnitt
+             (korpus_id, abschnitt_id, kapitel, kapitel_titel, ueberschrift, anker,
+              route, sort_order, inhalt, inhalt_hash, embedding, embedding_signature)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::postbuch.halfvec, $12)`,
+          [korpusId, chunk.abschnittId, chunk.kapitel, chunk.kapitelTitel,
+            chunk.ueberschrift, chunk.anker, chunk.route, chunk.sortOrder,
+            chunk.inhalt, chunk.inhaltHash, literal, signature],
+        );
+        mitgeliefert++;
         continue;
       }
 
@@ -331,9 +351,9 @@ export async function reconcileHelpCorpus({ settings = null, reason = 'manuell',
         )`,
     );
     appLog('INFO', 'hilfe-embedding',
-      `Hilfekorpus aktiviert: ${source.chunks.length} Abschnitte (${embedded} neu, ${reused} übernommen; ${reason})`,
+      `Hilfekorpus aktiviert: ${source.chunks.length} Abschnitte (${embedded} neu, ${reused} übernommen, ${mitgeliefert} mitgeliefert; ${reason})`,
       { entity: 'hilfe', entityId: korpusId });
-    return { status: 'bereit', korpusId, total: source.chunks.length, embedded, reused };
+    return { status: 'bereit', korpusId, total: source.chunks.length, embedded, reused, mitgeliefert };
   } catch (err) {
     await client.query(
       `UPDATE postbuch._hilfe_korpus
@@ -456,7 +476,7 @@ export async function searchHelp(query, settings = null, { limit = 4, meta = nul
       [signature],
     );
     if (active.rows.length > 0) {
-      const erg = await embedText(safeQuery, s, { ...meta, kategorie: 'chat', entity: 'hilfe-suche' });
+      const erg = await embedText(safeQuery, s, { ...meta, kategorie: 'chat', entity: 'hilfe-suche', rolle: 'anfrage' });
       if (!erg) throw new Error('Der konfigurierte Embedding-Provider ist nicht einsatzbereit.');
       const r = await pool.query(
         `SELECT a.abschnitt_id, a.kapitel, a.kapitel_titel, a.ueberschrift,

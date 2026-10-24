@@ -469,6 +469,10 @@ CREATE TABLE IF NOT EXISTS postbuch._abrechnung_sessions (
     -- bewusst keine eigene Tabelle.
     artefakte jsonb NOT NULL DEFAULT '[]'::jsonb,
     expires_at timestamp with time zone,
+    -- Erster Download/erstes Teilen eines fertigen PDFs. Ab dann kann die
+    -- Abrechnung beim Kostenträger liegen: kein Timeout mehr, die Session
+    -- endet nur noch durch Bestätigen oder Abbrechen.
+    ausgeliefert_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now(),
     updated_at timestamp with time zone DEFAULT now(),
     completed_at timestamp with time zone
@@ -814,6 +818,17 @@ CREATE TABLE IF NOT EXISTS postbuch.verbleib_ablage (
     archived     BOOLEAN NOT NULL DEFAULT FALSE,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Mappennummer im Format S000123 (S = Sammelmappe, die Papierablage; eine Akte
+-- ist dagegen eine Sammlung elektronischer Dokumente). Aus der ID abgeleitet:
+-- bestehende Sammelmappen sind damit ohne Backfill nummeriert, und eine Nummer
+-- wird nie neu vergeben.
+ALTER TABLE postbuch.verbleib_ablage
+    ADD COLUMN IF NOT EXISTS ablageid character varying(7)
+    GENERATED ALWAYS AS (('S'::text || lpad((id)::text, 6, '0'::text))) STORED;
+
+CREATE UNIQUE INDEX IF NOT EXISTS verbleib_ablage_ablageid_unique
+    ON postbuch.verbleib_ablage(ablageid);
 
 -- Keine doppelten aktiven Ablagen pro Kategorie
 CREATE UNIQUE INDEX IF NOT EXISTS verbleib_ablage_name_aktiv_unique
@@ -2244,6 +2259,9 @@ ALTER TABLE postbuch._abrechnung_sessions
 
 ALTER TABLE postbuch._abrechnung_sessions
     ADD COLUMN IF NOT EXISTS artefakte jsonb NOT NULL DEFAULT '[]'::jsonb;
+
+ALTER TABLE postbuch._abrechnung_sessions
+    ADD COLUMN IF NOT EXISTS ausgeliefert_at timestamp with time zone;
 
 -- Ein Zieltripel (Person/Kostenträger/Periode) darf höchstens eine aktive
 -- Session haben – verhindert parallele Abrechnungsläufe auf demselben Ziel.

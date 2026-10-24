@@ -686,9 +686,13 @@ export const api = {
       // Client übernommen – eine erfundene `dim` vergiftet still jede Suche.
       embedding: {
         get: () => request('/settings/ai/embedding'),
-        set: (providerId, model) => request('/settings/ai/embedding', {
-          method: 'PUT', body: JSON.stringify({ providerId, model }),
+        // vorsilben weglassen → der Server belegt sie aus seinem Modellkatalog.
+        set: (providerId, model, vorsilben) => request('/settings/ai/embedding', {
+          method: 'PUT', body: JSON.stringify({ providerId, model, vorsilben }),
         }),
+        vorsilbenVorschlag: (model) => request(
+          `/settings/ai/embedding/vorsilben-vorschlag?model=${encodeURIComponent(model)}`,
+        ),
         // alle=false (Default) rechnet nur Zeilen mit abweichender Signatur neu.
         rebuild: (alle = false) => request('/actions/rebuild-embeddings', {
           method: 'POST', body: JSON.stringify({ alle }),
@@ -950,6 +954,7 @@ export const api = {
     chunkUrl: (id, groupIndex, chunkIndex) => `/api/abrechnungsperiode/sessions/${id}/pdf/${groupIndex}/chunk/${chunkIndex}`,
     confirm: (id) => request(`/abrechnungsperiode/sessions/${id}/confirm`, { method: 'POST' }),
     reject: (id) => request(`/abrechnungsperiode/sessions/${id}/reject`, { method: 'POST' }),
+    ausgeliefert: (id) => request(`/abrechnungsperiode/sessions/${id}/ausgeliefert`, { method: 'POST' }),
     setStatus: (person, kostentraeger, periode, targetStatus, expectedCurrentStatus) =>
       request('/abrechnungsperiode/periode/status', {
         method: 'POST',

@@ -89,7 +89,9 @@ function ProviderRow({ p, health, capKeys, onEdit, onTested }) {
 
         {/* Status */}
         <div className="flex items-center gap-1.5 w-[130px] justify-end">
-          {!konfiguriert ? (
+          {h?.ruhend ? (
+            <span className="text-[11px] text-muted-foreground">nicht gewählt</span>
+          ) : !konfiguriert ? (
             <span className="text-[11px] text-muted-foreground">nicht konfiguriert</span>
           ) : laeuft ? (
             <><ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
@@ -105,9 +107,12 @@ function ProviderRow({ p, health, capKeys, onEdit, onTested }) {
                   disabled={mTest.isPending} onClick={() => mTest.mutate()}>
             {mTest.isPending ? <Spinner className="h-3.5 w-3.5" /> : <PlayCircle className="h-3.5 w-3.5" />}
           </Button>
-          <Button variant="ghost" size="icon" className="h-7 w-7" title="Bearbeiten" onClick={onEdit}>
-            <Settings2 className="h-3.5 w-3.5" />
-          </Button>
+          {/* Der eingebaute Embedding-Dienst hat nichts Einstellbares. */}
+          {!p.fest && (
+            <Button variant="ghost" size="icon" className="h-7 w-7" title="Bearbeiten" onClick={onEdit}>
+              <Settings2 className="h-3.5 w-3.5" />
+            </Button>
+          )}
         </div>
       </div>
 

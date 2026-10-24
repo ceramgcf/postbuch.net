@@ -13,6 +13,68 @@ import { ExcelExportButton } from '@/components/ExcelExportButton';
 import { FilterPopover, FilterChip, FilterLeiste, AuswahlLeiste } from '@/components/AnalyseFilter';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { HeartPulse, Archive, Hourglass, PawPrint, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { KartenListe } from '@/components/listen/DataView';
+import { useDarstellung } from '@/hooks/useDarstellung';
+
+// Kennzeichen einer Rechnung – in Tabelle und Karte gleich.
+function Marken({ r }) {
+  const ausstehend = r.erstattung_ausstehend || [];
+  return (
+    <>
+      {r.historisch && (
+        <span
+          className="inline-flex items-center gap-1 rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 font-sans text-[10px] font-medium text-slate-600"
+          title="Archiviert – zählt trotzdem mit"
+        >
+          <Archive className="h-2.5 w-2.5" />
+          Archiviert
+        </span>
+      )}
+      {r.vollerstattet && (
+        <span
+          className="inline-flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 font-sans text-[10px] font-medium text-emerald-800"
+          title="Vollständig erstattet – kein Eigenbehalt"
+        >
+          <CheckCircle2 className="h-2.5 w-2.5" />
+          Voll erstattet
+        </span>
+      )}
+      {ausstehend.length > 0 && (
+        <span
+          className="inline-flex items-center gap-1 rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 font-sans text-[10px] font-medium text-sky-800"
+          title={`Steckt in einer laufenden Abrechnungsperiode (${ausstehend.join(', ')}) – der Eigenbehalt ist vorläufig`}
+        >
+          <Hourglass className="h-2.5 w-2.5" />
+          {ausstehend.join('/')} ausstehend
+        </span>
+      )}
+    </>
+  );
+}
+
+// Mobile Karte (Plätze siehe DataView): Eigenbehalt rechts, weil er der
+// Steuerbetrag ist; Rechnungssumme und Erstattung in der Fußzeile.
+const RECHNUNG_KARTE = [
+  { key: 'postid', mobil: 'meta', zelle: (r) => <span className="font-mono">{r.postid}</span> },
+  { key: 'zahldatum', mobil: 'meta', zelle: (r) => r.zahldatum && `bezahlt ${formatDate(r.zahldatum)}` },
+  { key: 'eigenbehalt', mobil: 'rechts', zelle: (r) => (
+    <span className={`font-mono ${r.vollerstattet ? 'text-rose-400/60 dark:text-rose-400/40' : 'text-rose-700'}`}>
+      {r.vollerstattet ? '–' : formatCurrency(r.eigenbehalt)}
+    </span>
+  ) },
+  { key: 'gegenstelle', mobil: 'titel', zelle: (r) => r.gegenstelle || '–' },
+  { key: 'betreff', mobil: 'text', zelle: (r) => r.betreff },
+  { key: 'marken', mobil: 'badges', zelle: (r) => (r.historisch || r.vollerstattet || (r.erstattung_ausstehend || []).length > 0) && <Marken r={r} /> },
+  { key: 'summen', mobil: 'aktion', zelle: (r) => (
+    <span className="flex flex-col items-end text-[11px] font-mono leading-tight">
+      <span className="inline-flex items-center gap-1">
+        {r.bestritten_betrag != null && <AlertTriangle className="h-3 w-3 text-amber-600" />}
+        {formatCurrency(r.rechnungssumme)}
+      </span>
+      {parseFloat(r.erstattet) !== 0 && <span className="text-emerald-700">−{formatCurrency(r.erstattet)}</span>}
+    </span>
+  ) },
+];
 
 // Schlüssel der API: Jahr 'YYYY' oder 'offen' (noch nicht bezahlt),
 // Person = Kurzname, 'ohne' (Mensch ohne Zuordnung) oder 'ohne_tier'.
@@ -90,6 +152,7 @@ function GesamtZeile({ rechnung, erstattet, eigenbehalt }) {
 }
 
 export default function GesundheitskostenPage() {
+  const { istMobil } = useDarstellung();
   const { data, isLoading, error } = useGesundheitskosten();
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
@@ -344,6 +407,25 @@ export default function GesundheitskostenPage() {
                     {p.ist_tier && <PawPrint className="h-3.5 w-3.5 text-muted-foreground" />}
                     {personLabel(p.person)}
                   </h3>
+                  {istMobil ? (
+                    <>
+                      <KartenListe
+                        spalten={RECHNUNG_KARTE}
+                        daten={p.rechnungen}
+                        zeilenKey="postid"
+                        onZeile={(r) => navigate(`/postbuch/${r.postid}`, {
+                          state: { from: fromUrl, navList, navIndex: navList.findIndex((n) => n.postid === r.postid) },
+                        })}
+                        zeilenKlasse={(r) => (r.historisch ? 'bg-muted/40' : '')}
+                      />
+                      <div className="mt-2 flex flex-wrap justify-end gap-x-4 gap-y-1 border-t pt-2 text-sm font-semibold">
+                        <span className="text-muted-foreground">Summe {personLabel(p.person)}</span>
+                        <span className="font-mono">{formatCurrency(p.summe_rechnung)}</span>
+                        <span className="font-mono text-emerald-700">{formatCurrency(p.summe_erstattet)}</span>
+                        <span className="font-mono text-rose-700">{formatCurrency(p.summe_eigenbehalt)}</span>
+                      </div>
+                    </>
+                  ) : (
                   <div className="overflow-x-auto">
                     <Table>
                       <TableHeader>
@@ -360,7 +442,6 @@ export default function GesundheitskostenPage() {
                       <TableBody>
                         {p.rechnungen.map((r) => {
                           const navIndex = navList.findIndex((n) => n.postid === r.postid);
-                          const ausstehend = r.erstattung_ausstehend || [];
                           return (
                             <TableRow
                               key={r.postid}
@@ -372,33 +453,7 @@ export default function GesundheitskostenPage() {
                               <TableCell className="font-mono font-bold text-primary">
                                 <span className="flex items-center gap-1.5">
                                   {r.postid}
-                                  {r.historisch && (
-                                    <span
-                                      className="inline-flex items-center gap-1 rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 font-sans text-[10px] font-medium text-slate-600"
-                                      title="Archiviert – zählt trotzdem mit"
-                                    >
-                                      <Archive className="h-2.5 w-2.5" />
-                                      Archiviert
-                                    </span>
-                                  )}
-                                  {r.vollerstattet && (
-                                    <span
-                                      className="inline-flex items-center gap-1 rounded border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 font-sans text-[10px] font-medium text-emerald-800"
-                                      title="Vollständig erstattet – kein Eigenbehalt"
-                                    >
-                                      <CheckCircle2 className="h-2.5 w-2.5" />
-                                      Voll erstattet
-                                    </span>
-                                  )}
-                                  {ausstehend.length > 0 && (
-                                    <span
-                                      className="inline-flex items-center gap-1 rounded border border-sky-300 bg-sky-50 px-1.5 py-0.5 font-sans text-[10px] font-medium text-sky-800"
-                                      title={`Steckt in einer laufenden Abrechnungsperiode (${ausstehend.join(', ')}) – der Eigenbehalt ist vorläufig`}
-                                    >
-                                      <Hourglass className="h-2.5 w-2.5" />
-                                      {ausstehend.join('/')} ausstehend
-                                    </span>
-                                  )}
+                                  <Marken r={r} />
                                 </span>
                               </TableCell>
                               <TableCell className="text-sm whitespace-nowrap">{formatDate(r.zahldatum)}</TableCell>
@@ -445,6 +500,7 @@ export default function GesundheitskostenPage() {
                       </tfoot>
                     </Table>
                   </div>
+                  )}
                 </div>
               ))}
             </CardContent>

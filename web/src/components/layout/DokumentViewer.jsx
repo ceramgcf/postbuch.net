@@ -1,13 +1,13 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { createPortal } from 'react-dom';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { PDFJS_DOCUMENT_OPTIONS } from '@/lib/pdfjs-worker';
 import { Spinner } from '@/components/ui/spinner';
 import { Progress } from '@/components/ui/progress';
-import { Download, RotateCcw, RotateCw, RefreshCw, X, Loader2, Printer, Menu, Maximize2 } from 'lucide-react';
+import { Download, RotateCcw, RotateCw, RefreshCw, X, Loader2, Printer, Menu, Maximize2, Share2 } from 'lucide-react';
 import { api } from '@/api/client';
 import { useAuth } from '@/hooks/useAuth';
+import { kannDateienTeilen, usePdfTeilen } from '@/components/ui/pdf-teilen';
 
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
@@ -43,24 +43,30 @@ if (!pdfjs.GlobalWorkerOptions.workerSrc) {
   ).toString();
 }
 
-// Arc geometry constants
-const BR_ARC = 85;   // arc button radius → 170 px diameter
-const BR_MAIN = 85;  // main button radius → 170 px diameter
-const MAIN_BOTTOM = 20; // main button bottom offset from screen edge
+// Halbkreis-Menü: Radius der Knöpfe und Abstand zum unteren Rand (CSS-px).
+const BR_ARC = 29;
+const BR_MAIN = 29;
+const UNTEN = 16;
 
 /**
- * Fullscreen-Portrait-PDF-Viewer für Mobile.
+ * Touch-PDF-Viewer des Mobil-Layouts. Füllt die Fläche unter der Kopfleiste
+ * (CSS-Variable --mobil-kopf).
  * - Seitenweise Navigation via Wischen links/rechts
  * - Pinch-Zoom via 2 Finger
  * - Einzelner Action-Button unten Mitte, öffnet 180°-Arc mit 5 Buttons
+ * - Lädt /api/files/:postid/pdf, bei Fehler einmal aus dem Archiv nach
  *
- * Zwei Modi:
- *   1. Postbuch-Dokument: { postid, hasPdf } – nutzt /api/files/:postid/pdf + Archive-Fallback
- *   2. Externes PDF:     { pdfUrl, fileName? } – nutzt direkt die URL, kein Archive-Fallback
+ * Ohne Teilen-Unterstützung im Browser zeigt der Halbkreis „Drucken“ statt „Teilen“.
  */
-export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileName }) {
-  const useExternalUrl = !!externalPdfUrl;
-  const resetKey = useExternalUrl ? externalPdfUrl : postid;
+export function DokumentViewer({ postid, hasPdf }) {
+  const brArc = BR_ARC;
+  const brMain = BR_MAIN;
+  const iconGr = 26;
+  // Symbole und Beschriftung im Halbkreis etwas kleiner, damit sie nicht gequetscht wirken.
+  const arcIconGr = Math.round(iconGr * 0.9);
+  const arcSchrift = 9 * 0.9;
+  const unten = UNTEN;
+  const resetKey = postid;
 
   const [numPages, setNumPages] = useState(null);
   const [pageNumber, setPageNumber] = useState(1);
@@ -78,6 +84,24 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
   const rotateErrorTimerRef = useRef(null);
 
   const containerRef = useRef(null);
+  const [flaeche, setFlaeche] = useState(() => ({
+    w: typeof window !== 'undefined' ? window.innerWidth : 390,
+    h: typeof window !== 'undefined' ? window.innerHeight : 844,
+  }));
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(([e]) => setFlaeche({
+      w: Math.round(e.contentRect.width) || window.innerWidth,
+      h: Math.round(e.contentRect.height) || window.innerHeight,
+    }));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const breite = flaeche.w;
+  // Im Querformat ganze Seite in die Höhe einpassen statt seitenbreit
+  // (sonst wäre der untere Teil nur per Zoom erreichbar).
+  const seitenMass = flaeche.w > flaeche.h ? { height: flaeche.h } : { width: flaeche.w };
   const contentRef = useRef(null);
   const pinchRef = useRef(null);
   const swipeRef = useRef(null);
@@ -87,12 +111,12 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
   const resetAnimTimerRef = useRef(null);
 
   const { canWrite } = useAuth();
-  const canRotate = !useExternalUrl && canWrite;
+  const canRotate = canWrite;
 
   const { data: fetchProgress } = useQuery({
     queryKey: ['files', 'fetch-progress', postid],
     queryFn: () => api.files.fetchProgress(postid),
-    enabled: !useExternalUrl && archiveFetchState === 'fetching',
+    enabled: archiveFetchState === 'fetching',
     refetchInterval: 800,
   });
   const progressPct = fetchProgress?.totalBytes
@@ -169,10 +193,8 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
   }, []);
 
   const pdfUrl = useMemo(
-    () => useExternalUrl
-      ? externalPdfUrl
-      : `${api.files.pdfUrl(postid)}${localKey ? `?v=${localKey}` : ''}`,
-    [useExternalUrl, externalPdfUrl, postid, localKey],
+    () => `${api.files.pdfUrl(postid)}${localKey ? `?v=${localKey}` : ''}`,
+    [postid, localKey],
   );
   const pdfOptions = PDFJS_DOCUMENT_OPTIONS;
 
@@ -181,7 +203,6 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
   }
 
   function onDocumentLoadError() {
-    if (useExternalUrl) { setArchiveFetchState('error'); return; }
     if (hasFetchedFromArchiveRef.current) { setArchiveFetchState('error'); return; }
     hasFetchedFromArchiveRef.current = true;
     setArchiveFetchState('fetching');
@@ -299,16 +320,24 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
     setMenuOpen(false);
     const a = document.createElement('a');
     a.href = pdfUrl;
-    a.download = fileName || '';
+    a.download = '';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  }, [pdfUrl, fileName]);
+  }, [pdfUrl]);
 
   const handlePrint = useCallback(() => {
     setMenuOpen(false);
     window.open(pdfUrl, '_blank');
   }, [pdfUrl]);
+
+  const zeigeTeilen = kannDateienTeilen();
+  const { zustand: teilenZustand, teilen: pdfTeilen } = usePdfTeilen(pdfUrl);
+  const handleShare = useCallback(async () => {
+    // Menü bleibt offen, solange geladen wird bzw. ein zweites Tippen nötig ist.
+    if (await pdfTeilen()) setMenuOpen(false);
+  }, [pdfTeilen]);
+  const teilenLabel = { laedt: 'Lädt …', nochmal: 'Nochmal', fehler: 'Fehler' }[teilenZustand] || 'Teilen';
 
   const isViewTransformed = zoom !== 1 || panX !== 0 || panY !== 0;
 
@@ -316,24 +345,27 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
   // Radius R = half screen width minus 2× arc button radius, so ±90° buttons sit BR_ARC
   // pixels from each screen edge.
   const arcButtons = useMemo(() => {
-    const vw = typeof window !== 'undefined' ? window.innerWidth : 390;
-    const R = vw / 2 - 2 * BR_ARC;
-    const mainCY = MAIN_BOTTOM + BR_MAIN; // main button center Y from screen bottom
+    const vw = breite;
+    const R = Math.min(vw / 2 - 2 * brArc, 150);
+    const mainCY = unten + brMain; // main button center Y from screen bottom
 
     return [
       { angle: -90, label: 'Links',   icon: RotateCcw, action: () => handleRotate(270), disabled: !canRotate },
       { angle: -45, label: 'Download',icon: Download,   action: handleDownload,          disabled: false },
       { angle:   0, label: '180°',    icon: RefreshCw,  action: () => handleRotate(180), disabled: !canRotate },
-      { angle:  45, label: 'Drucken', icon: Printer,    action: handlePrint,             disabled: false },
+      zeigeTeilen
+        ? { angle: 45, key: 'teilen', label: teilenLabel, icon: teilenZustand === 'laedt' ? Loader2 : Share2, action: handleShare, disabled: teilenZustand === 'laedt' }
+        : { angle: 45, label: 'Drucken', icon: Printer,    action: handlePrint,             disabled: false },
       { angle:  90, label: 'Rechts',  icon: RotateCw,   action: () => handleRotate(90),  disabled: !canRotate },
     ].map((d, i) => {
       const rad = d.angle * Math.PI / 180;
       const cx = vw / 2 + R * Math.sin(rad);
       const cy = mainCY + R * Math.cos(rad);
-      return { ...d, i, left: Math.round(cx - BR_ARC), bottom: Math.round(cy - BR_ARC) };
+      return { ...d, i, left: Math.round(cx - brArc), bottom: Math.round(cy - brArc) };
     });
-  }, [handleRotate, handleDownload, handlePrint, canRotate]);
+  }, [handleRotate, handleDownload, handlePrint, handleShare, zeigeTeilen, teilenLabel, teilenZustand, canRotate, breite, brArc, brMain, unten]);
 
+  // Dunkles Glas: Die weißen Symbole bleiben auch über weißem Papier lesbar.
   const glassBtnBase = {
     backdropFilter: 'blur(6px)',
     WebkitBackdropFilter: 'blur(6px)',
@@ -346,25 +378,27 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
     WebkitTapHighlightColor: 'transparent',
   };
 
-  if (!useExternalUrl && !hasPdf) {
-    return createPortal(
+  // Bewusst kein Portal: Ein Portal-Knoten blieb nach dem Wechsel zu „Daten“
+  // oder auf eine andere Seite im <body> stehen.
+  const rahmen = { position: 'fixed', top: 'var(--mobil-kopf, 0px)', left: 0, right: 0, bottom: 0, zIndex: 20, background: '#141218' };
+
+  if (!hasPdf) {
+    return (
       <div style={{
-        position: 'fixed', inset: 0, zIndex: 9999,
-        background: '#000', color: '#aaa',
+        ...rahmen, color: '#aaa',
         display: 'flex', justifyContent: 'center', alignItems: 'center',
       }}>
         <p style={{ fontSize: '0.875rem', textAlign: 'center', padding: '1rem' }}>
-          Kein PDF verfügbar – Gerät drehen zum Zurückkehren.
+          Zu diesem Eintrag gibt es kein PDF.
         </p>
-      </div>,
-      document.body,
+      </div>
     );
   }
 
-  return createPortal(
+  return (
     <div
       ref={containerRef}
-      style={{ position: 'fixed', inset: 0, zIndex: 9999, background: '#000', touchAction: 'none' }}
+      style={{ ...rahmen, touchAction: 'none' }}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
     >
@@ -418,7 +452,7 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
             >
               <Page
                 pageNumber={pageNumber}
-                width={window.innerWidth}
+                {...seitenMass}
                 loading={null}
               />
             </Document>
@@ -449,13 +483,13 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
       )}
 
       {/* ── Arc-Buttons (5 Stück, 180°-Halbkreis) ───────────────── */}
-      {arcButtons.map(({ label, icon: Icon, left, bottom, action, disabled, i }) => {
+      {arcButtons.map(({ key, label, icon: Icon, left, bottom, action, disabled, i }) => {
         // Bloom-Animation: Mitte zuerst beim Öffnen, Ränder zuerst beim Schließen
         const distFromCenter = Math.abs(i - 2);
         const delay = menuOpen ? distFromCenter * 45 : (2 - distFromCenter) * 30;
         return (
           <button
-            key={label}
+            key={key || label}
             onClick={(e) => { e.stopPropagation(); if (!disabled) action(); }}
             title={label}
             style={{
@@ -463,10 +497,10 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
               left,
               bottom,
               zIndex: 10002,
-              width: BR_ARC * 2,
-              height: BR_ARC * 2,
+              width: brArc * 2,
+              height: brArc * 2,
               ...glassBtnBase,
-              background: disabled ? 'rgba(255,255,255,0.07)' : 'rgba(255,255,255,0.18)',
+              background: disabled ? 'rgba(20,18,24,0.35)' : 'rgba(20,18,24,0.62)',
               opacity: menuOpen ? (disabled ? 0.35 : 1) : 0,
               transform: menuOpen ? 'scale(1)' : 'scale(0.25)',
               transition: 'opacity 0.2s ease, transform 0.25s cubic-bezier(0.34,1.56,0.64,1)',
@@ -475,9 +509,9 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
               gap: 2,
             }}
           >
-            <Icon size={75} />
+            <Icon size={arcIconGr} style={Icon === Loader2 ? { animation: 'spin 1s linear infinite' } : undefined} />
             <span style={{
-              fontSize: 13, fontWeight: 700, letterSpacing: 0.3,
+              fontSize: arcSchrift, fontWeight: 700, letterSpacing: 0.3,
               opacity: 0.9, textAlign: 'center', lineHeight: 1,
             }}>
               {label}
@@ -499,20 +533,20 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
         title={isViewTransformed ? 'Ansicht zurücksetzen' : menuOpen ? 'Abbrechen' : 'Aktionen'}
         style={{
           position: 'absolute',
-          bottom: MAIN_BOTTOM,
+          bottom: `calc(${unten}px + env(safe-area-inset-bottom, 0px))`,
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 10003,
-          width: BR_MAIN * 2,
-          height: BR_MAIN * 2,
+          width: brMain * 2,
+          height: brMain * 2,
           ...glassBtnBase,
           background: menuOpen
-            ? 'rgba(239,68,68,0.35)'
+            ? 'rgba(220,38,38,0.78)'
             : isViewTransformed
-              ? 'rgba(59,130,246,0.35)'
+              ? 'rgba(37,99,235,0.78)'
               : isRotating
-                ? 'rgba(255,255,255,0.12)'
-                : 'rgba(255,255,255,0.22)',
+                ? 'rgba(20,18,24,0.45)'
+                : 'rgba(20,18,24,0.62)',
           border: menuOpen
             ? '1px solid rgba(239,68,68,0.6)'
             : isViewTransformed
@@ -522,13 +556,13 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
         }}
       >
         {isRotating ? (
-          <Loader2 size={75} style={{ animation: 'spin 1s linear infinite' }} />
+          <Loader2 size={iconGr} style={{ animation: 'spin 1s linear infinite' }} />
         ) : isViewTransformed ? (
-          <Maximize2 size={75} />
+          <Maximize2 size={iconGr} />
         ) : menuOpen ? (
-          <X size={75} />
+          <X size={iconGr} />
         ) : (
-          <Menu size={75} />
+          <Menu size={iconGr} />
         )}
       </button>
 
@@ -536,7 +570,7 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
       {rotateError && (
         <div style={{
           position: 'absolute',
-          bottom: MAIN_BOTTOM + BR_MAIN * 2 + 14,
+          bottom: unten + brMain * 2 + 14,
           left: 0, right: 0,
           display: 'flex', justifyContent: 'center',
           zIndex: 10003,
@@ -559,7 +593,6 @@ export function MobilePdfOverlay({ postid, hasPdf, pdfUrl: externalPdfUrl, fileN
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
       `}</style>
-    </div>,
-    document.body,
+    </div>
   );
 }

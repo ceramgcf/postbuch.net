@@ -7,13 +7,15 @@ den Server umbaut oder wissen will, wo die eigenen Daten tatsächlich liegen.
 ## Die Dienste
 
 postbuch.net ist ein Docker-Compose-Verbund aus wenigen Containern. Drei davon
-laufen immer; Scanner, Cleaner und Caddy werden über Compose-Profile zugeschaltet.
+laufen immer; der eingebaute Embedding-Dienst, Scanner, Cleaner und Caddy werden über
+Compose-Profile zugeschaltet.
 
 | Dienst | Basis | Rolle | Port auf dem Host |
 |---|---|---|---|
 | `postgres` | PostgreSQL 18 + pgvector | Alle Daten außer den PDFs selbst | `127.0.0.1:5433` – nur lokal |
 | `app` | Node.js 24, Express 5 | API, Dokumenten-Pipeline, Hintergrundjobs | keiner |
 | `web` | nginx + gebautes React-Bundle | Weboberfläche, Reverse-Proxy vor `app` | `3420` (konfigurierbar) |
+| `embedding` | Python | Eingebauter Embedding-Dienst (Snowflake Arctic Embed M v2.0) | keiner (Profil `embedding`) |
 | `scanner` | Python | eSCL-Webhook zum Netzwerkscanner | `${SCANNER_PORT}` (Profil `scanner`) |
 | `cleaner` | Python | OCR und Bildbereinigung der Scans | keiner (Profil `scanner`) |
 | `caddy` | Caddy | HTTPS-Terminierung mit automatischem Zertifikat | `80`, `443` (Profil `caddy`) |

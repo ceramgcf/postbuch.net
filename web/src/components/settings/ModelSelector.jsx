@@ -60,7 +60,8 @@ export default function ModelSelector({
   const providerId = wert?.providerId ?? aufgeloest?.providerId ?? '';
   const model      = wert?.model      ?? aufgeloest?.model      ?? '';
 
-  const aktiveProvider = (providers || []).filter((p) => p.aktiv !== false);
+  // Ein reiner Embedding-Dienst taugt für keine Sprachmodell-Aufgabe.
+  const aktiveProvider = (providers || []).filter((p) => p.aktiv !== false && !p.nurEmbedding);
   const prov = aktiveProvider.find((p) => p.id === providerId);
 
   // Kennt irgendein Provider dieses Modell? Nur dann darf gewarnt werden.

@@ -22,7 +22,8 @@ Handwerkerfunktionen sind außerhalb Deutschlands dagegen ohne Nutzen.
   Installer Docker bei Bedarf selbst ein.
 - **Architektur:** `arm64` und `amd64`.
 - **Cloud-Speicherplatz:** Die PDFs liegen in der Cloud-Dateiablage, nicht auf dem
-  Server. Lokal belegt werden im Wesentlichen die Docker-Images (rund 2 GB), die
+  Server. Lokal belegt werden im Wesentlichen die Docker-Images (rund 2 GB, mit
+  den Scanner-Diensten gut 3 GB), die
   PostgreSQL-Datenbank (wächst mit Metadaten und Embeddings, typischerweise
   einige hundert MB) sowie kurzlebige Zwischendateien während der Verarbeitung.
 - **Der Server sollte durchlaufen.** Überwachte Cloud-Ordner, Backup-Lauf,
@@ -80,10 +81,11 @@ Die Dokumentverarbeitung nutzt **zwei** Fähigkeiten:
 | Sprachmodell (LLM) | Dokumente lesen, Metadaten extrahieren, Chat |
 | Embeddings         | semantische Suche, Duplikatprüfung           |
 
-Beides aus einer Hand bietet z. B. OpenAI. **Anthropic bietet keine Embeddings**
-– ein Anthropic-Key allein reicht nicht. Ebenfalls möglich: AWS Bedrock, jeder
-OpenAI-kompatible Endpunkt und lokal gehostete Modelle über Ollama oder LM
-Studio.
+Für die Embeddings bringt postbuch.net einen
+[eigenen Dienst](ki-provider.md#der-eingebaute-embedding-dienst) mit, der auf
+dem Server selbst rechnet. Mitbringen musst du nur einen Anbieter für das
+Sprachmodell, z. B. OpenAI, Anthropic, AWS Bedrock, einen OpenAI-kompatiblen
+Endpunkt oder ein lokal gehostetes Modell über Ollama oder LM Studio.
 
 Details, Modellempfehlungen und der cloudfreie Betrieb stehen in
 [KI-Anbieter](ki-provider.md).
@@ -104,6 +106,9 @@ Details, Modellempfehlungen und der cloudfreie Betrieb stehen in
   Worker und Push setzen einen sicheren Browser-Kontext voraus; außerdem bleibt
   eine installierte PWA an ihre Adresse gebunden. Nach einem Adresswechsel muss
   sie neu installiert werden.
+- **Von unterwegs** greifst du über ein VPN ins Heimnetz zu, etwa per
+  FRITZ!Box oder Tailscale; eine Portfreigabe für postbuch.net ist nicht
+  nötig. Siehe [Zugriff von unterwegs](zugriff-von-unterwegs.md).
 - **Beim OneDrive-Browser-Redirect** muss der Browser die exakt in Azure
   registrierte Callback-URL während der Kontoverknüpfung oder einer späteren
   Neuverknüpfung erreichen. Dafür genügen entweder eine HTTPS-Adresse oder
@@ -137,7 +142,7 @@ zusätzliche Anforderungen:
 | Etikettendruck          | Web Bluetooth – Chrome, Edge oder Brave unter Android und Windows. Kein Safari, kein Firefox, kein iOS. |
 | Push-Benachrichtigungen | Web Push; unter iOS erst, wenn die App als PWA auf den Homescreen gelegt wurde.                         |
 
-Alles andere – inklusive PDF-Anzeige, Querformat-Sperre und PWA-Installation –
+Alles andere – inklusive PDF-Anzeige, Mobilansicht und PWA-Installation –
 funktioniert plattformübergreifend. Praktisch erprobt sind **Android und
 Windows**; die Nutzung auf **iPhone und iPad ist mangels Testgerät ungeprüft**
 und gilt als experimentell. Der Installationsweg für jede Plattform steht in

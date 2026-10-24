@@ -94,6 +94,12 @@ export function PdfPanel({ postid, onClose, refreshKey = 0 }) {
 
   const panelRef = useRef(null);
   const contentRef = useRef(null);
+  const toolbarRef = useRef(null);
+  const navRef = useRef(null);
+  const aktionenRef = useRef(null);
+  // Breite der Seitennavigation, gemessen solange sie oben steht (Startwert geschätzt)
+  const navBreiteRef = useRef(160);
+  const [navUnten, setNavUnten] = useState(false);
   // Refs for wheel handler (avoids stale closures without re-attaching listener)
   const numPagesRef = useRef(null);
   const lastWheelRef = useRef(0);
@@ -133,6 +139,30 @@ export function PdfPanel({ postid, onClose, refreshKey = 0 }) {
       setContainerSize({ width, height });
     });
     obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  // Passt die Seitennavigation nicht mehr neben die Aktionen, wandert sie nach unten.
+  // Gemessen wird die natürliche Breite der Aktionen (Summe der Gruppen), unabhängig
+  // davon, ob sie selbst gerade umbrechen – so kippt die Entscheidung nicht hin und her.
+  useEffect(() => {
+    const leiste = toolbarRef.current;
+    if (!leiste) return;
+    const pruefe = () => {
+      if (navRef.current && leiste.contains(navRef.current)) navBreiteRef.current = navRef.current.offsetWidth;
+      const aktionen = aktionenRef.current;
+      if (!aktionen) return;
+      const kinder = [...aktionen.children];
+      // Gruppenabstand gap-3 gilt in beiden Anordnungen als Mindestabstand.
+      const aktionenBreite = kinder.reduce((summe, k) => summe + k.offsetWidth, 0) + Math.max(0, kinder.length - 1) * 12;
+      const stil = getComputedStyle(leiste);
+      const verfuegbar = leiste.clientWidth - parseFloat(stil.paddingLeft) - parseFloat(stil.paddingRight);
+      setNavUnten(navBreiteRef.current + 8 + aktionenBreite > verfuegbar);
+    };
+    pruefe();
+    const obs = new ResizeObserver(pruefe);
+    obs.observe(leiste);
+    if (aktionenRef.current) obs.observe(aktionenRef.current);
     return () => obs.disconnect();
   }, []);
 
@@ -269,6 +299,32 @@ export function PdfPanel({ postid, onClose, refreshKey = 0 }) {
       .catch(() => setArchiveFetchState('error'));
   }
 
+  // Seitennavigation: in der Titelleiste, solange sie neben die Aktionen passt; sonst
+  // als eigene Fußleiste unter dem Dokument statt eines Umbruchs in der Titelleiste.
+  const seitenNavigation = (
+    <div ref={navRef} className="flex shrink-0 items-center gap-1">
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => setPageNumber((p) => Math.max(1, p - 1))}
+        disabled={pageNumber <= 1}
+      >
+        <ChevronLeft className="h-4 w-4" />
+      </Button>
+      <span className="text-sm text-muted-foreground min-w-[60px] text-center">
+        {numPages ? `${pageNumber} / ${numPages}` : '–'}
+      </span>
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={() => setPageNumber((p) => Math.min(numPages || 1, p + 1))}
+        disabled={pageNumber >= (numPages || 1)}
+      >
+        <ChevronRight className="h-4 w-4" />
+      </Button>
+    </div>
+  );
+
   return (
     <div
       ref={panelRef}
@@ -280,99 +336,84 @@ export function PdfPanel({ postid, onClose, refreshKey = 0 }) {
       />
 
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-3 py-2.5 border-b border-border/60 bg-sidebar flex-shrink-0">
-        {/* Page navigation */}
-        <div className="flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setPageNumber((p) => Math.max(1, p - 1))}
-            disabled={pageNumber <= 1}
-          >
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <span className="text-sm text-muted-foreground min-w-[60px] text-center">
-            {numPages ? `${pageNumber} / ${numPages}` : '–'}
-          </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setPageNumber((p) => Math.min(numPages || 1, p + 1))}
-            disabled={pageNumber >= (numPages || 1)}
-          >
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-        </div>
+      <div ref={toolbarRef} className={`flex items-center gap-2 px-3 py-2.5 border-b border-border/60 bg-sidebar flex-shrink-0 ${navUnten ? 'justify-end' : 'justify-between'}`}>
+        {!navUnten && seitenNavigation}
 
-        {/* Zoom + actions */}
-        <div className="flex items-center gap-1">
-          {/* Rotation buttons */}
+        {/* Aktionen in Gruppen: Drehen · Zoom · Datei · Schließen. Steht die Seitennavigation
+            unten, verteilen sich die Gruppen über die ganze Leiste. */}
+        <div
+          ref={aktionenRef}
+          className={`flex min-w-0 flex-wrap items-center gap-3 ${navUnten ? 'flex-1 justify-between' : 'justify-end'}`}
+        >
           {canWrite && (
-          <>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => handleRotate(90)}
-            disabled={isRotating}
-            title="90° nach links drehen"
-          >
-            <RotateCcw className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => handleRotate(180)}
-            disabled={isRotating}
-            title="180° drehen"
-          >
-            <RefreshCw className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => handleRotate(270)}
-            disabled={isRotating}
-            title="90° nach rechts drehen"
-          >
-            <RotateCw className="h-4 w-4" />
-          </Button>
-          <div className="w-px h-4 bg-border/60 mx-0.5" />
-          </>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => handleRotate(90)}
+                disabled={isRotating}
+                title="90° nach links drehen"
+              >
+                <RotateCcw className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => handleRotate(180)}
+                disabled={isRotating}
+                title="180° drehen"
+              >
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => handleRotate(270)}
+                disabled={isRotating}
+                title="90° nach rechts drehen"
+              >
+                <RotateCw className="h-4 w-4" />
+              </Button>
+            </div>
           )}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setZoomOffset((d) => d - 0.15)}
-            title="Verkleinern"
-          >
-            <ZoomOut className="h-4 w-4" />
-          </Button>
-          <span className="text-xs text-muted-foreground w-12 text-center">
-            {Math.round(scale * 100)}%
-          </span>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setZoomOffset((d) => d + 0.15)}
-            title="Vergrößern"
-          >
-            <ZoomIn className="h-4 w-4" />
-          </Button>
-          <a href={pdfUrl} target="_blank" rel="noopener noreferrer">
-            <Button variant="ghost" size="icon" title="In neuem Tab öffnen">
-              <ExternalLink className="h-4 w-4" />
+          <div className="flex shrink-0 items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setZoomOffset((d) => d - 0.15)}
+              title="Verkleinern"
+            >
+              <ZoomOut className="h-4 w-4" />
             </Button>
-          </a>
-          <a href={pdfUrl} download={downloadFilename}>
-            <Button variant="ghost" size="icon" title="Herunterladen">
-              <Download className="h-4 w-4" />
+            <span className="text-xs text-muted-foreground w-12 text-center">
+              {Math.round(scale * 100)}%
+            </span>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setZoomOffset((d) => d + 0.15)}
+              title="Vergrößern"
+            >
+              <ZoomIn className="h-4 w-4" />
             </Button>
-          </a>
-          <Button variant="ghost" size="icon" onClick={handlePrint} disabled={isPrinting} title="Drucken">
-            {isPrinting ? <Spinner className="h-4 w-4" /> : <Printer className="h-4 w-4" />}
-          </Button>
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            <a href={pdfUrl} target="_blank" rel="noopener noreferrer">
+              <Button variant="ghost" size="icon" title="In neuem Tab öffnen">
+                <ExternalLink className="h-4 w-4" />
+              </Button>
+            </a>
+            <a href={pdfUrl} download={downloadFilename}>
+              <Button variant="ghost" size="icon" title="Herunterladen">
+                <Download className="h-4 w-4" />
+              </Button>
+            </a>
+            <Button variant="ghost" size="icon" onClick={handlePrint} disabled={isPrinting} title="Drucken">
+              {isPrinting ? <Spinner className="h-4 w-4" /> : <Printer className="h-4 w-4" />}
+            </Button>
+          </div>
           {onClose && (
-            <Button variant="ghost" size="icon" onClick={onClose} title="Schließen">
+            <Button variant="ghost" size="icon" onClick={onClose} title="Schließen" className="shrink-0">
               <X className="h-4 w-4" />
             </Button>
           )}
@@ -448,6 +489,12 @@ export function PdfPanel({ postid, onClose, refreshKey = 0 }) {
           />
         </Document>
       </div>
+
+      {navUnten && (
+        <div className="flex flex-shrink-0 justify-center border-t border-border/60 bg-sidebar px-3 py-1.5">
+          {seitenNavigation}
+        </div>
+      )}
     </div>
   );
 }

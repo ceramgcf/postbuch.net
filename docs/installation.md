@@ -151,10 +151,18 @@ Alle `CHANGEME`-Platzhalter müssen vor dem ersten Start ersetzt sein.
 
 ### Optionale Profile
 
+Welche optionalen Dienste laufen, steht in `COMPOSE_PROFILES` der `.env`,
+kommagetrennt. Die Vorlage enthält `embedding`, den
+[eingebauten Embedding-Dienst](ki-provider.md#der-eingebaute-embedding-dienst),
+den eine neue Instanz als Embedding-Modell verwendet. Weitere Profile:
+
 ```bash
 docker compose --profile scanner up -d   # Scanner + Cleaner
 docker compose --profile caddy   up -d   # Reverse-Proxy mit automatischem HTTPS
 ```
+
+Dauerhaft wirken sie, wenn sie in `COMPOSE_PROFILES` stehen, etwa
+`COMPOSE_PROFILES=embedding,scanner`.
 
 Welche Schnittstellen die veröffentlichten Ports belegen, steuern zwei Werte in
 der `.env`: `WEB_BIND` für die Oberfläche (Port 3420) und `SCANNER_BIND` für den
@@ -199,7 +207,7 @@ Er hat zehn Schritte:
 5. ![Ordner-Symbol](icons/folder-open.svg) **Ordner** – Wurzelordner festlegen (bei OneDrive im App-Ordner
    liegt die Ablage direkt im App-Ordner, ein Name ist nicht nötig), Ordnerstruktur anlegen,
    Dateiablage-Selbsttest (empfohlen, keine Pflicht)
-6. ![KI-Symbol](icons/bot.svg) **KI** – Anbieter verbinden, alle Modellklassen und das Embedding wählen
+6. ![KI-Symbol](icons/bot.svg) **KI** – Anbieter verbinden, alle Modellklassen wählen, eingebautes Embedding bestätigen
 7. ![Scanner-Symbol](icons/scan-line.svg) **Scanner** – Netzwerkscanner suchen und einbinden (optional)
 8. ![Benachrichtigungen-Symbol](icons/bell-ring.svg) **Benachrichtigungen** – Push auf diesem Gerät einrichten
 9. ![Backup-Symbol](icons/shield-check.svg) **Backup** – Sicherung aktivieren oder NOBACKUP bewusst bestätigen
@@ -261,15 +269,18 @@ Der Schritt ist in vier Stufen gegliedert, die nacheinander freigeschaltet
 werden:
 
 1. ![Verbinden-Symbol](icons/link-2.svg) **KI-Provider verbinden** – immer offen.
-2. **Modellempfehlungen** – sobald ein Provider antwortet. Ganz oben steht
-   „Modellempfehlungen alle übernehmen".
+2. **Modellempfehlungen** – sobald ein Sprachmodell-Provider antwortet. Ganz
+   oben steht „Modellempfehlungen alle übernehmen".
 3. **Modelle je Aufgabe** – sobald ein Sprachmodell-Provider antwortet.
-4. **Embedding-Modell** – sobald ein Provider antwortet, der Embeddings kann.
+4. **Embedding** – immer offen. postbuch.net verwendet seinen
+   [eingebauten Embedding-Dienst](ki-provider.md#der-eingebaute-embedding-dienst);
+   eine neue Instanz hat ihn bereits gewählt.
 
 Sprachmodell und Embedding werden getrennt geprüft und sind **beide Pflicht**.
-Ein Anbieter, der beides kann (OpenAI), erledigt sie in einem Aufwasch; sonst
-sind es zwei Anbieter. Jede Änderung an den Providern aktualisiert die übrigen
-Stufen sofort.
+Für das Embedding braucht es keinen eigenen Anbieter. Ein anderer
+Embedding-Dienst lässt sich erst später unter
+![Einstellungen-Symbol](icons/settings.svg) `Einstellungen → KI → Embeddings`
+wählen. Jede Änderung an den Providern aktualisiert die übrigen Stufen sofort.
 
 ### Scanner im Assistenten
 
@@ -304,9 +315,10 @@ aktivierst TLS trotzdem. Dieselbe Prüfung macht der Installer, wenn du dort
 die Domain eingibst. Einen bloßen Namen wie `meinpostbuch` ergänzen beide zu
 `meinpostbuch.duckdns.org`.
 
-Sobald im KI-Schritt ein Embedding-Provider eingerichtet ist, bereitet
-postbuch.net die eingebaute Hilfe automatisch für den Assistenten auf. Das
-geschieht als Hintergrundjob und blockiert den Einrichtungsassistenten nicht.
+Die eingebaute Hilfe bereitet postbuch.net automatisch für den Assistenten auf.
+Mit dem eingebauten Embedding-Dienst übernimmt es dafür die mitgelieferten
+Vektoren; bei einem anderen Dienst läuft das Einbetten als Hintergrundjob und
+blockiert den Einrichtungsassistenten nicht.
 
 ### Adresse einer laufenden Instanz ändern
 

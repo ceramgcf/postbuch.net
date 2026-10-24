@@ -99,7 +99,7 @@ async function leseJson(pfad) {
  *                    schreibbar:boolean, letzterLaufAm:string|null, version:number|null}>}
  */
 export async function leseAgentStatus() {
-  const leer = { vorhanden: false, modus: null, docker: null, schreibbar: false, letzterLaufAm: null, version: null, capabilities: [], lan: null, scannerProfilAktiv: null, freigaben: null, webBestaetigungBis: null };
+  const leer = { vorhanden: false, modus: null, docker: null, schreibbar: false, letzterLaufAm: null, version: null, capabilities: [], lan: null, scannerProfilAktiv: null, embeddingProfilAktiv: null, freigaben: null, webBestaetigungBis: null };
   const o = await leseJson(P.agent());
   if (!o) return leer;
 
@@ -126,7 +126,7 @@ export async function leseAgentStatus() {
     capabilities: version === 1
       ? ['update']
       : (Array.isArray(o.capabilities)
-        ? o.capabilities.filter((c) => ['update', 'zielversion', 'netzwerk', 'module', 'port', 'freigabe'].includes(c))
+        ? o.capabilities.filter((c) => ['update', 'zielversion', 'netzwerk', 'module', 'embedding', 'port', 'freigabe'].includes(c))
         : []),
     // Primäre LAN-Schnittstelle des Hosts (Interface der Default-Route). Nur
     // der Host-Agent kennt die echte Subnetzmaske; die App liest sie hier
@@ -135,6 +135,7 @@ export async function leseAgentStatus() {
     // von außerhalb des app-Containers kommt.
     lan: leseLan(o.lan),
     scannerProfilAktiv: typeof o.scannerProfilAktiv === 'boolean' ? o.scannerProfilAktiv : null,
+    embeddingProfilAktiv: typeof o.embeddingProfilAktiv === 'boolean' ? o.embeddingProfilAktiv : null,
     // Port-Freigaben aus der .env des Hosts (SCANNER_BIND/WEB_BIND): lan,
     // lokal oder anders (von Hand gesetzte Adresse).
     freigaben: leseFreigaben(o.freigaben),

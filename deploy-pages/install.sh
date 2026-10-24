@@ -683,6 +683,17 @@ profil_zustand_sichern() {
     return 0
 }
 
+# Der eingebaute Embedding-Dienst ist ein eigenes Profil: Er laeuft nur, wo er
+# gewaehlt ist. Neue Installationen schalten es in der .env ein, bestehende
+# ueber Einstellungen -> KI -> Embeddings (Host-Agent).
+embedding_profil_aktiv() {
+    local profile="${COMPOSE_PROFILES:-}"
+    if [[ -f .env ]]; then
+        profile=$(grep '^COMPOSE_PROFILES=' .env 2>/dev/null | tail -n1 | cut -d= -f2- || true)
+    fi
+    [[ ",${profile}," == *,embedding,* ]]
+}
+
 aktive_code_services() {
     AKTIVE_CODE_SERVICES=(app web)
     scanner_profil_aktiv && AKTIVE_CODE_SERVICES+=(scanner cleaner)
@@ -759,7 +770,55 @@ build_mit_lebenszeichen() { # $1 = Bezeichnung, $2 = Sekunden, Rest = Build-Befe
     return "$status"
 }
 
+# Der eingebaute Embedding-Dienst ist release-unabhaengig wie caddy: Das Image
+# haengt nur an embedding/ (Modell mit gepinnter Pruefsumme), nicht am App-Code.
+# Gebaut wird es nur bei aktivem Profil und nur, wenn es fehlt; jede Aenderung
+# in embedding/ zieht den Tag in docker-compose.yml und hier hoch.
+EMBEDDING_IMAGE=postbuch-embedding:local2
+
+embedding_image_bauen() {
+    embedding_profil_aktiv || return 0
+    if docker_runtime image inspect "$EMBEDDING_IMAGE" >/dev/null 2>&1; then
+        info "Embedding-Image vorhanden – Build uebersprungen."
+        return 0
+    fi
+    local versuch pause
+    for versuch in 1 2 3; do
+        info "Baue den eingebauten Embedding-Dienst (laedt das Modell, rund 300 MB)..."
+        if build_mit_lebenszeichen "Embedding" 30 env COMPOSE_BAKE=false \
+            $DOCKER_COMPOSE --profile embedding build embedding; then
+            return 0
+        fi
+        if [[ "$versuch" -lt 3 ]]; then
+            pause=$((versuch * 5))
+            warn "Embedding-Build fehlgeschlagen – neuer Versuch in ${pause} Sekunden."
+            sleep "$pause"
+        fi
+    done
+    return 1
+}
+
+# Im Safe-Mode darf der Embedding-Dienst waehrend der Builds kein Modell in den
+# Speicher holen: Auf einem Geraet mit 1 GB reicht der Platz sonst nicht fuer
+# Frontend-Build und Modell zugleich. Der Dienst wird deshalb fuer die Dauer
+# der Builds angehalten und danach wieder gestartet, auch wenn ein Build
+# scheitert und der bisherige Stack weiterlaeuft.
 compose_build() {
+    local pausiert=false status=0
+    if [[ "$SAFE_MODE" == "true" ]] \
+        && docker_runtime inspect postbuch-embedding --format '{{.State.Running}}' 2>/dev/null | grep -q '^true$'; then
+        info "Safe-Mode: Embedding-Dienst waehrend der Builds angehalten."
+        $DOCKER_COMPOSE stop embedding >/dev/null 2>&1 && pausiert=true
+    fi
+    compose_build_intern "$@" || status=$?
+    if $pausiert; then
+        $DOCKER_COMPOSE start embedding >/dev/null 2>&1 \
+            || warn "Embedding-Dienst konnte nicht wieder gestartet werden."
+    fi
+    return "$status"
+}
+
+compose_build_intern() {
     profil_zustand_sichern
     aktive_code_services
     local with_caddy=false
@@ -810,6 +869,8 @@ compose_build() {
             $caddy_gebaut || return 1
         fi
     fi
+
+    embedding_image_bauen || return 1
 
     # Code-Services bauen: app, web, scanner, cleaner. Ein Wiederholungsversuch
     # ist vor dem Containerwechsel gefahrlos und faengt transiente DNS-Fehler ab.
@@ -1080,7 +1141,15 @@ compose_recreate() {
     done
     info "Starte Container neu..."
     docker_mit_netzwerk_retry "Containerstart" \
-        $DOCKER_COMPOSE "${profile_args[@]}" up -d --force-recreate --no-deps "${recreate[@]}"
+        $DOCKER_COMPOSE "${profile_args[@]}" up -d --force-recreate --no-deps "${recreate[@]}" || return 1
+    # Der Embedding-Dienst wird nur angelegt oder gestartet, nie ohne Grund
+    # ersetzt: Sein Image aendert sich mit einem Release nicht. Ein neuer Tag
+    # in docker-compose.yml ersetzt ihn trotzdem, weil Compose die geaenderte
+    # Definition erkennt. Ohne Profil bleibt er aus, auch wenn ihn ein
+    # ausdruecklich genannter Dienstname sonst starten wuerde.
+    embedding_profil_aktiv || return 0
+    docker_mit_netzwerk_retry "Embedding-Dienst" \
+        $DOCKER_COMPOSE --profile embedding up -d --no-deps embedding
 }
 
 # ── Warten, bis die App nach einem Containerwechsel wirklich antwortet ────────
@@ -1126,6 +1195,10 @@ compose_up_build_all() {
     $with_caddy && profile_args=(--profile caddy)
     local services=(postgres "${AKTIVE_CODE_SERVICES[@]}")
     $with_caddy && services+=(caddy)
+    if embedding_profil_aktiv; then
+        services+=(embedding)
+        profile_args+=(--profile embedding)
+    fi
 
     if $with_caddy; then
         compose_build caddy || return 1
@@ -1175,6 +1248,20 @@ if [[ -n "\$DUCKDNS_TOKEN" ]] && ! docker image inspect postbuch-caddy:local3 >/
         fi
     done
 fi
+# Eingebauter Embedding-Dienst: nur mit Profil, release-unabhaengig, nur bauen,
+# wenn das Image fehlt.
+EMBEDDING_AKTIV=false
+[[ ",\$COMPOSE_PROFILES_WERT," == *,embedding,* ]] && EMBEDDING_AKTIV=true
+if \$EMBEDDING_AKTIV && ! docker image inspect $EMBEDDING_IMAGE >/dev/null 2>&1; then
+    echo "Baue den eingebauten Embedding-Dienst..."
+    COMPOSE_BAKE=false docker compose --profile embedding build embedding
+fi
+# Waehrend der Builds kein Modell im Speicher (wenig RAM).
+EMBEDDING_PAUSIERT=false
+if docker inspect postbuch-embedding --format '{{.State.Running}}' 2>/dev/null | grep -q '^true\$'; then
+    docker compose stop embedding >/dev/null && EMBEDDING_PAUSIERT=true
+fi
+trap '\$EMBEDDING_PAUSIERT && docker compose start embedding >/dev/null 2>&1 || true' EXIT
 echo "Baue \${CODE_SERVICES[*]} (Safe-Mode, seriell)..."
 for svc in "\${CODE_SERVICES[@]}"; do
     echo "  Baue \$svc..."
@@ -1197,6 +1284,8 @@ until docker compose exec -T postgres pg_isready -q 2>/dev/null; do
     sleep 2; waited=\$((waited + 2))
 done
 docker compose "\${PROFILE_ARGS[@]}" up -d --force-recreate --no-deps "\${RECREATE[@]}"
+\$EMBEDDING_AKTIV && docker compose --profile embedding up -d --no-deps embedding
+EMBEDDING_PAUSIERT=false
 echo ""
 echo "Fertig! postbuch.net laeuft wieder."
 RESTARTEOF
@@ -1232,6 +1321,14 @@ if [[ -n "$DUCKDNS_TOKEN" ]] && ! docker image inspect postbuch-caddy:local3 >/d
         fi
     done
 fi
+# Eingebauter Embedding-Dienst: nur mit Profil, release-unabhaengig, nur bauen,
+# wenn das Image fehlt.
+EMBEDDING_AKTIV=false
+[[ ",$COMPOSE_PROFILES_WERT," == *,embedding,* ]] && EMBEDDING_AKTIV=true
+if $EMBEDDING_AKTIV && ! docker image inspect @EMBEDDING_IMAGE@ >/dev/null 2>&1; then
+    echo "Baue den eingebauten Embedding-Dienst..."
+    docker compose --profile embedding build embedding
+fi
 echo "Baue ${CODE_SERVICES[*]}..."
 docker compose build "${CODE_SERVICES[@]}"
 RECREATE=("${CODE_SERVICES[@]}")
@@ -1247,9 +1344,11 @@ until docker compose exec -T postgres pg_isready -q 2>/dev/null; do
     sleep 2; waited=$((waited + 2))
 done
 docker compose "${PROFILE_ARGS[@]}" up -d --force-recreate --no-deps "${RECREATE[@]}"
+$EMBEDDING_AKTIV && docker compose --profile embedding up -d --no-deps embedding
 echo ""
 echo "Fertig! postbuch.net läuft wieder."
 RESTARTEOF
+        sed -i "s|@EMBEDDING_IMAGE@|$EMBEDDING_IMAGE|" "$RESTART_SCRIPT" || return 1
     fi
     chmod +x "$RESTART_SCRIPT"
     if [[ $(id -u) -eq 0 ]]; then
@@ -2247,7 +2346,8 @@ SESSION_SECRET=$SESSION_SECRET
 APP_PASSWORD='$APP_PASSWORD'
 APP_ADMIN_USERNAME=admin
 INSTANCE_NAME=$INSTANCE_NAME
-COMPOSE_PROFILES=
+# Neue Installationen nutzen den eingebauten Embedding-Dienst.
+COMPOSE_PROFILES=embedding
 
 # ── LLM: Dokumentenanalyse ────────────────────────────────────────
 # Leer = keine Cloud-KI. Weitere Provider (Ollama, LM Studio, OpenRouter,

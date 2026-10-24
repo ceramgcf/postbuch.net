@@ -22,7 +22,7 @@
  * richtet sie ein, solange kein Modell gewählt ist, wechselt aber nie ein
  * bereits gewähltes (das entscheidet der Server). Der Wechsel läuft über einen
  * eigenen Bestätigungsdialog, weil er den gesamten vorhandenen Vektorbestand
- * entwertet, bis er neu berechnet ist.
+ * neu berechnen lässt (Zeit, bei Cloud-Anbietern Geld).
  *
  * Alles, was der Nutzer über Herkunft, Auswahlregel und Verbindlichkeit der
  * Liste wissen muss, steht **einmal** im Absatz unter der Überschrift. Vorher
@@ -73,8 +73,12 @@ function preisText(k) {
  * sie still: Der Einrichtungsassistent baut die KI-Seite stufenweise auf, und
  * eine Empfehlung, die mangels Provider gar nicht übernommen werden kann, soll
  * sichtbar bleiben – mit Grund, statt einfach zu fehlen.
+ *
+ * `ohneEmbedding` blendet die Embedding-Zeile dagegen ganz aus: Der Assistent
+ * richtet immer den eingebauten Dienst ein, eine andere Wahl gibt es nur in
+ * den Einstellungen.
  */
-export default function EmpfehlungenCard({ llmGesperrt = false, embeddingGesperrt = false, onChanged }) {
+export default function EmpfehlungenCard({ llmGesperrt = false, embeddingGesperrt = false, ohneEmbedding = false, onChanged }) {
   const qc = useQueryClient();
   const [offen, setOffen] = useState({});          // classKey → Kandidaten aufgeklappt
   const [autoDialog, setAutoDialog] = useState(false);
@@ -163,7 +167,8 @@ export default function EmpfehlungenCard({ llmGesperrt = false, embeddingGesperr
   const online = !!data?.onlineVerfuegbar;
   // Nur ein BEREITS gewähltes Embedding-Modell ist vom Sammelknopf ausgenommen.
   // Ist keins gesetzt, richtet „Alle übernehmen" es mit ein.
-  const embeddingGesetzt = (data?.klassen || []).some((k) => k.art === 'embedding' && k.gesetzt);
+  const klassen = (data?.klassen || []).filter((k) => !ohneEmbedding || k.art !== 'embedding');
+  const embeddingGesetzt = !ohneEmbedding && klassen.some((k) => k.art === 'embedding' && k.gesetzt);
   const empfehlungenSichtbar = !!data && (!online || abo);
 
   return (
@@ -258,7 +263,7 @@ export default function EmpfehlungenCard({ llmGesperrt = false, embeddingGesperr
 
               {/* ── Klassenliste ── */}
               <div className="divide-y divide-border/50 border-t border-border">
-                {(data?.klassen || []).map((kl) => {
+                {klassen.map((kl) => {
                   const g = kl.gewaehlt;
                   const aufgeklappt = !!offen[kl.key];
                   // Nur Kandidaten VOR dem gewählten Treffer wurden tatsächlich
@@ -293,8 +298,8 @@ export default function EmpfehlungenCard({ llmGesperrt = false, embeddingGesperr
                           )}
                           {istEmbedding && !kl.bereitsAktiv && kl.gesetzt && g && (
                             <p className="text-[11px] text-amber-700 dark:text-amber-500 mt-0.5">
-                              Ein Wechsel entwertet alle vorhandenen Embeddings, bis sie neu berechnet
-                              sind. „Alle übernehmen" fasst diese Zeile deshalb nicht an.
+                              Ein Wechsel berechnet alle vorhandenen Embeddings neu. „Alle übernehmen“
+                              fasst diese Zeile deshalb nicht an.
                             </p>
                           )}
                         </div>
@@ -410,13 +415,10 @@ export default function EmpfehlungenCard({ llmGesperrt = false, embeddingGesperr
         </DialogDescription>
         <ul className="mt-3 space-y-1.5 text-sm list-disc pl-5">
           <li>
-            Alle bereits gespeicherten Embeddings gelten danach als <strong>veraltet</strong>: Ähnlichkeitssuche,
-            Duplikaterkennung und die Anwenderhilfe finden bis zur Neuberechnung deutlich weniger.
+            Alle vorhandenen Embeddings werden danach <strong>automatisch im Hintergrund neu berechnet</strong>.
+            Bis der Lauf fertig ist, finden Ähnlichkeitssuche und Duplikaterkennung weniger.
           </li>
-          <li>
-            Die Neuberechnung startest du unter <strong>Einstellungen → KI → Embeddings</strong>
-            („Embeddings einschließlich Hilfe neu berechnen"). Sie kostet je nach Bestand Zeit und Geld.
-          </li>
+          <li>Bei einem Cloud-Anbieter kostet die Neuberechnung je nach Bestand Geld.</li>
           <li>Die Dimension wird nicht übernommen, sondern mit einer Testanfrage an deinem Provider ermittelt.</li>
           <li>Vor der ersten Übernahme wird der Vorzustand gesichert – „Zurücksetzen" stellt ihn her.</li>
         </ul>

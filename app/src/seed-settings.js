@@ -5,6 +5,7 @@ import { access, unlink } from 'fs/promises';
 import { constants } from 'fs';
 import { werkseinstellungFuerProvider } from './lib/llm/empfehlungs-standard.js';
 import { MODEL_CLASSES } from './lib/llm/model-classes.js';
+import { EINGEBAUTES_EMBEDDING } from './lib/embedding-eingebaut.js';
 
 // Create a standalone client (don't use shared pool from db.js which has search_path issues)
 // Siehe db.js: Session-Zeitzone hart auf Europe/Berlin, unabhängig vom
@@ -269,8 +270,8 @@ try {
 // Empfehlungen blieben unsichtbar. Das günstige Modell arbeitet überall, bis
 // der Betreiber übernimmt oder von Hand wählt.
 //
-// Für das Embedding wird nichts geschrieben: dessen Modell bestimmt die
-// Signatur des gesamten Vektorbestands und wird einmal ausdrücklich gewählt.
+// Das Embedding regeln die beiden Blöcke darunter: dessen Modell bestimmt die
+// Signatur des gesamten Vektorbestands und folgt nicht dem LLM-Schlüssel.
 //
 // Wer im Installer „lokale KI" wählt, hat WEDER Anthropic- NOCH OpenAI-Key —
 // dann wird bewusst nichts geschrieben: die App meldet ehrlich „kein Provider
@@ -301,7 +302,7 @@ if (seedModell) {
 //
 // Deshalb einmalig: Ist kein Modell gewählt, liegen aber bereits Vektoren, wird
 // deren Signatur zur ausdrücklichen Einstellung. Eine Erstinstallation hat
-// keine Vektoren und bleibt damit bewusst ohne Embedding-Modell.
+// keine Vektoren; für sie gilt der folgende Block.
 try {
   const gewaehlt = await client.query("SELECT 1 FROM _settings WHERE key = 'llm_embedding'");
   if (gewaehlt.rows.length === 0) {
@@ -329,6 +330,25 @@ try {
 } catch (err) {
   // Kein Abbruch: eine Instanz ohne Dokumententabelle ist eine Erstinstallation.
   console.error('[seed] Embedding-Signatur nicht ermittelbar:', err.message);
+}
+
+// ── Eingebauter Embedding-Dienst als Wahl neuer Instanzen ───────────────────
+// Eine Instanz ohne Dokumente und ohne gewähltes Modell bekommt den
+// eingebauten Dienst als ausdrücklich gespeicherte Wahl. Bestandsinstanzen
+// erreicht dieser Block nicht: Ihr Stack hat den Dienst erst, wenn ein
+// aktueller Installer ihn angelegt hat. Sie wählen ihn wie jeden anderen
+// Dienst bewusst in Einstellungen → KI.
+try {
+  const r = await client.query(`
+    INSERT INTO _settings (key, value)
+    SELECT 'llm_embedding', $1::jsonb
+     WHERE NOT EXISTS (SELECT 1 FROM postbuch)
+    ON CONFLICT (key) DO NOTHING`,
+    [JSON.stringify(EINGEBAUTES_EMBEDDING)],
+  );
+  if (r.rowCount > 0) console.log('[seed] Embedding: eingebauter Dienst gewählt', EINGEBAUTES_EMBEDDING.model);
+} catch (err) {
+  console.error('[seed] Embedding-Wahl nicht gespeichert:', err.message);
 }
 
 // ── Ablage-Backend der Erstinstallation ─────────────────────────────────────

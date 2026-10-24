@@ -192,7 +192,7 @@ router.get('/ablagen', async (req, res) => {
 
     const ablageWhere = ablageConditions.length ? `WHERE ${ablageConditions.join(' AND ')}` : '';
     const ablageResult = await query(
-      `SELECT va.id, va.kategorie_id, va.name, va.archived, va.created_at,
+      `SELECT va.id, va.ablageid, va.kategorie_id, va.name, va.archived, va.created_at,
               vk.name AS kategorie_name, vk.icon AS kategorie_icon,
               COUNT(p.postid)::int AS doc_count,
               COUNT(p.postid) FILTER (WHERE p.original_urkunde = true)::int AS urkunden_count
@@ -229,6 +229,7 @@ router.get('/ablagen', async (req, res) => {
       );
       looseRows = looseResult.rows.map((r) => ({
         id: null,
+        ablageid: null,
         kategorie_id: r.kategorie_id,
         name: null,
         archived: false,
@@ -261,7 +262,7 @@ router.post('/ablagen', requireWrite, async (req, res) => {
       return res.status(400).json({ error: 'kategorie_id fehlt oder ungültig' });
     }
     if (kid === 1) {
-      return res.status(400).json({ error: 'Für die Kategorie "Unbekannt" können keine Ablagen angelegt werden' });
+      return res.status(400).json({ error: 'Für die Kategorie "Unbekannt" können keine Sammelmappen angelegt werden' });
     }
     if (typeof name !== 'string' || name.trim().length === 0) {
       return res.status(400).json({ error: 'name fehlt oder ist leer' });
@@ -276,14 +277,14 @@ router.post('/ablagen', requireWrite, async (req, res) => {
     const result = await query(
       `INSERT INTO postbuch.verbleib_ablage (kategorie_id, name)
        VALUES ($1, $2)
-       RETURNING id, kategorie_id, name, archived, created_at`,
+       RETURNING id, ablageid, kategorie_id, name, archived, created_at`,
       [kid, name.trim()]
     );
-    appLog('INFO', 'verbleib', `Ablage angelegt: "${name.trim()}" in Kategorie ${kid}`);
+    appLog('INFO', 'verbleib', `Sammelmappe angelegt: "${name.trim()}" in Kategorie ${kid}`);
     res.status(201).json(result.rows[0]);
   } catch (err) {
     if (err.code === '23505') {
-      return res.status(409).json({ error: 'Eine aktive Ablage mit diesem Namen existiert bereits in dieser Kategorie' });
+      return res.status(409).json({ error: 'Eine aktive Sammelmappe mit diesem Namen existiert bereits in dieser Kategorie' });
     }
     res.status(500).json({ error: err.message });
   }
@@ -314,7 +315,7 @@ router.put('/ablagen/:id', requireWrite, async (req, res) => {
         return res.status(400).json({ error: 'Ungültige kategorie_id' });
       }
       if (kid === 1) {
-        return res.status(400).json({ error: 'Kategorie "Unbekannt" ist für Ablagen nicht zulässig' });
+        return res.status(400).json({ error: 'Kategorie "Unbekannt" ist für Sammelmappen nicht zulässig' });
       }
       updates.push(`kategorie_id = $${idx++}`);
       params.push(kid);
@@ -326,11 +327,11 @@ router.put('/ablagen/:id', requireWrite, async (req, res) => {
     const result = await query(
       `UPDATE postbuch.verbleib_ablage SET ${updates.join(', ')}
        WHERE id = $${idx}
-       RETURNING id, kategorie_id, name, archived`,
+       RETURNING id, ablageid, kategorie_id, name, archived`,
       params
     );
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Ablage nicht gefunden' });
+      return res.status(404).json({ error: 'Sammelmappe nicht gefunden' });
     }
     // Wenn die Kategorie geändert wurde, verbleib_id aller zugeordneten Dokumente mitziehen
     if (kategorie_id !== undefined) {
@@ -340,11 +341,11 @@ router.put('/ablagen/:id', requireWrite, async (req, res) => {
         [kid, id]
       );
     }
-    appLog('INFO', 'verbleib', `Ablage ${id} aktualisiert`);
+    appLog('INFO', 'verbleib', `Sammelmappe ${id} aktualisiert`);
     res.json(result.rows[0]);
   } catch (err) {
     if (err.code === '23505') {
-      return res.status(409).json({ error: 'Eine aktive Ablage mit diesem Namen existiert bereits in dieser Kategorie' });
+      return res.status(409).json({ error: 'Eine aktive Sammelmappe mit diesem Namen existiert bereits in dieser Kategorie' });
     }
     res.status(500).json({ error: err.message });
   }
@@ -362,16 +363,16 @@ router.delete('/ablagen/:id', requireWrite, async (req, res) => {
       [id]
     );
     if (countRes.rows[0].cnt > 0) {
-      return res.status(409).json({ error: 'Ablage kann nicht gelöscht werden — noch Dokumente zugeordnet. Bitte zuerst auflösen.' });
+      return res.status(409).json({ error: 'Sammelmappe kann nicht gelöscht werden — noch Dokumente zugeordnet. Bitte zuerst auflösen.' });
     }
     const result = await query(
       `DELETE FROM postbuch.verbleib_ablage WHERE id = $1 RETURNING id, name`,
       [id]
     );
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Ablage nicht gefunden' });
+      return res.status(404).json({ error: 'Sammelmappe nicht gefunden' });
     }
-    appLog('INFO', 'verbleib', `Ablage ${id} ("${result.rows[0].name}") gelöscht`);
+    appLog('INFO', 'verbleib', `Sammelmappe ${id} ("${result.rows[0].name}") gelöscht`);
     res.json({ ok: true, id, name: result.rows[0].name });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -393,14 +394,14 @@ router.patch('/ablagen/:id/archive', requireWrite, async (req, res) => {
       [id]
     );
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Ablage nicht gefunden' });
+      return res.status(404).json({ error: 'Sammelmappe nicht gefunden' });
     }
     const row = result.rows[0];
-    appLog('INFO', 'verbleib', `Ablage ${id} ${row.archived ? 'archiviert' : 'reaktiviert'}`);
+    appLog('INFO', 'verbleib', `Sammelmappe ${id} ${row.archived ? 'archiviert' : 'reaktiviert'}`);
     res.json(row);
   } catch (err) {
     if (err.code === '23505') {
-      return res.status(409).json({ error: 'Eine aktive Ablage mit diesem Namen existiert bereits in dieser Kategorie' });
+      return res.status(409).json({ error: 'Eine aktive Sammelmappe mit diesem Namen existiert bereits in dieser Kategorie' });
     }
     res.status(500).json({ error: err.message });
   }
@@ -429,7 +430,7 @@ router.post('/ablagen/loese-kategorie-auf', requireWrite, async (req, res) => {
         [rid]
       );
       if (targetRes.rows.length === 0) {
-        return res.status(400).json({ error: 'Ziel-Ablage nicht gefunden oder archiviert' });
+        return res.status(400).json({ error: 'Ziel-Sammelmappe nicht gefunden oder archiviert' });
       }
       const target = targetRes.rows[0];
       await query(
@@ -472,7 +473,7 @@ router.post('/ablagen/:id/aufloesen', requireWrite, async (req, res) => {
       [id]
     );
     if (ablageRes.rows.length === 0) {
-      return res.status(404).json({ error: 'Ablage nicht gefunden' });
+      return res.status(404).json({ error: 'Sammelmappe nicht gefunden' });
     }
     const ablage = ablageRes.rows[0];
 
@@ -482,14 +483,14 @@ router.post('/ablagen/:id/aufloesen', requireWrite, async (req, res) => {
         return res.status(400).json({ error: 'redirectToId fehlt oder ungültig' });
       }
       if (rid === id) {
-        return res.status(400).json({ error: 'Ziel-Ablage darf nicht die aufzulösende Ablage selbst sein' });
+        return res.status(400).json({ error: 'Ziel-Sammelmappe darf nicht die aufzulösende Sammelmappe selbst sein' });
       }
       const targetRes = await query(
         `SELECT id, kategorie_id FROM postbuch.verbleib_ablage WHERE id = $1 AND archived = false`,
         [rid]
       );
       if (targetRes.rows.length === 0) {
-        return res.status(400).json({ error: 'Ziel-Ablage nicht gefunden oder archiviert' });
+        return res.status(400).json({ error: 'Ziel-Sammelmappe nicht gefunden oder archiviert' });
       }
       const target = targetRes.rows[0];
       // Dokumente umziehen: Ablage + Kategorie der Zielablage setzen
@@ -518,7 +519,7 @@ router.post('/ablagen/:id/aufloesen', requireWrite, async (req, res) => {
     // Ablage dauerhaft löschen (Docs wurden bereits migriert, FK-Constraint erfüllt)
     await query(`DELETE FROM postbuch.verbleib_ablage WHERE id = $1`, [id]);
 
-    appLog('INFO', 'verbleib', `Ablage ${id} ("${ablage.name}") aufgelöst und gelöscht, action=${action}`);
+    appLog('INFO', 'verbleib', `Sammelmappe ${id} ("${ablage.name}") aufgelöst und gelöscht, action=${action}`);
     res.json({ ok: true, id, name: ablage.name });
   } catch (err) {
     res.status(500).json({ error: err.message });

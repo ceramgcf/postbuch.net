@@ -19,6 +19,19 @@ angezeigt. Sie sind an Endnutzer gerichtet, nicht an Entwickler.
 
 ---
 
+## 2.13.0 – 2026-10-24
+
+- Neu: Komplett neuer App-Modus. Auf Smartphones und kleinen Tablets wechselt postbuch.net automatisch in eine eigene Mobilansicht, breitere Bildschirme behalten die Desktop-Oberfläche.
+- Neuer Scanmodus in der App: Dokumente per Kamera erfassen, ein- oder mehrseitig, mit Blatterkennung, Ecken-Editor, Entzerrung und Auto-Auslöser. Alles läuft in der App, hochgeladen wird nur die PDF.
+- Der Scanmodus erkennt Etiketten von postbuch.net und öffnet das Dokument oder die Sammelmappe nach kurzem, abbrechbarem Countdown.
+- PDFs lassen sich über das Teilen-Menü des Geräts an die installierte App senden. Umgekehrt kannst du aus postbuch.net teilen, etwa Belegsammlungen direkt in die PKV- oder Beihilfe-App.
+- Nach dem Hochladen, Teilen oder Scannen folgt die App auf Wunsch bis ins fertige Dokument. Die Vorgabe gilt je Gerät unter Einstellungen → Persönlich.
+- Papierablagen heißen jetzt Sammelmappen und tragen eine feste Mappennummer. Für den Ordnerrücken lassen sich Etiketten mit QR-Code drucken.
+- Neu: Integriertes lokales Embedding-Modell, leistungsstark und schlank. Standard bei Neuinstallation, bei bestehenden Instanzen als Option unter Einstellungen → KI → Embeddings zuschaltbar.
+- Die Anwenderhilfe wird mit fertigen Vektoren geliefert. Ein Modellwechsel berechnet den Bestand nach Bestätigung automatisch neu.
+- Der Chat-Assistent kennzeichnet ersetzte Rechnungen und berücksichtigt sie in seinen Antworten.
+- Sicherheit: Node.js 24.22.1 (kritische Brotli-Lücke geschlossen). Fremde schreibende Anfragen werden abgewiesen, Scan-Webhook und Scanner prüfen Eingaben strenger. Abhängigkeiten aktualisiert.
+
 ## 2.12.1 – 2026-10-18
 
 - Updates: Wer Versionen überspringt, sieht in der Update-Karte die Änderungen jeder einzelnen Version, die neueste zuerst. Lange Listen scrollen.

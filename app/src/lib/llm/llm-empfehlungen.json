@@ -423,6 +423,15 @@
     ],
     "embedding": [
       {
+        "providerId": "eingebaut",
+        "model": "snowflake-arctic-embed-m-v2.0",
+        "label": "Eingebauter Dienst: Snowflake Arctic Embed M v2.0",
+        "preisIn": 0.0,
+        "preisOut": 0.0,
+        "waehrung": "USD",
+        "notiz": "Läuft cloudfrei im eigenen Stack, mehrsprachig, auch auf kleinen Rechnern"
+      },
+      {
         "providerId": "openai",
         "providerTyp": "openai-compatible",
         "model": "text-embedding-3-large",

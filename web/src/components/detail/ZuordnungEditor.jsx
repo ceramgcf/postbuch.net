@@ -74,7 +74,7 @@ export function ZuordnungEditor({ ebPostid, ep }) {
   }
 
   return (
-    <div className="flex items-center gap-2 text-xs">
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
       {arzPostid ? (
         <>
           <Link
@@ -128,7 +128,7 @@ export function ZuordnungEditor({ ebPostid, ep }) {
         </>
       ) : (
         <>
-          <span className="inline-flex items-center gap-1 text-orange-700">
+          <span className="inline-flex items-center gap-1 whitespace-nowrap text-orange-700">
             <AlertTriangle className="h-3.5 w-3.5" />Keine Rechnung zugeordnet
           </span>
           {canWrite && (

@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import * as LucideIcons from 'lucide-react';
-import { Archive, ArchiveRestore, Plus, Pencil, Check, X, Trash2, FolderOpen, ShieldCheck } from 'lucide-react';
+import { Archive, ArchiveRestore, Plus, Pencil, Check, X, Trash2, FolderOpen, ShieldCheck, FileText, Printer } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -10,11 +11,24 @@ import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/componen
 import { PageLoader, EmptyState } from '@/components/ui/spinner';
 import { useVerbleibAblagen, useCreateVerbleibAblage, useUpdateVerbleibAblage, useArchiveVerbleibAblage, useAufloesen, useDeleteVerbleibAblage, useLoeseKategorieAuf } from '@/hooks/useVerbleibAblagen';
 import { useVerbleibKategorien } from '@/hooks/useVerbleib';
+import { useDarstellung } from '@/hooks/useDarstellung';
+import { KartenListe } from '@/components/listen/DataView';
+import { api } from '@/api/client';
+import { usePrinter } from '@/contexts/PrinterContext';
+import { renderAblageLabels } from '@/lib/labelRenderer';
+import { etikettIconSvg } from '@/lib/etikettIcon';
+import { EtikettAuswahlDialog } from '@/components/EtikettAuswahlDialog';
 
 const FALLBACK_ICON = LucideIcons.HelpCircle;
 function KatIcon({ name, className }) {
   const Icon = LucideIcons[name] ?? FALLBACK_ICON;
   return <Icon className={className} />;
+}
+
+// Mappennummer einer Sammelmappe (S000123), wie die PostID in Monospace
+function AblageNr({ nr }) {
+  if (!nr) return null;
+  return <span className="whitespace-nowrap font-mono">{nr}</span>;
 }
 
 const FILTER_OPTS = [
@@ -23,7 +37,17 @@ const FILTER_OPTS = [
   { value: 'all',   label: 'Alle' },
 ];
 
-function NewAblageRow({ kategorien, onSave, onCancel }) {
+function NewAblageRow(props) {
+  return (
+    <TableRow className="bg-primary/5">
+      <TableCell colSpan={5} className="py-2">
+        <NewAblageForm {...props} />
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function NewAblageForm({ kategorien, onSave, onCancel }) {
   const [kategorieId, setKategorieId] = useState('');
   const [name, setName] = useState('');
   const nameRef = useRef(null);
@@ -37,13 +61,11 @@ function NewAblageRow({ kategorien, onSave, onCancel }) {
   }
 
   return (
-    <TableRow className="bg-primary/5">
-      <TableCell colSpan={4} className="py-2">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <select
             value={kategorieId}
             onChange={(e) => setKategorieId(e.target.value)}
-            className="h-8 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+            className="h-8 min-w-0 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring max-sm:w-full"
           >
             <option value="">Obergruppe wählen…</option>
             {activeKats.map((k) => (
@@ -54,8 +76,8 @@ function NewAblageRow({ kategorien, onSave, onCancel }) {
             ref={nameRef}
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Name der Ablage"
-            className="h-8 text-sm w-60"
+            placeholder="Name der Sammelmappe"
+            className="h-8 text-sm w-60 max-sm:w-auto max-sm:flex-1 max-sm:min-w-0"
             onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') onCancel(); }}
           />
           <Button size="sm" variant="default" onClick={handleSave} disabled={!kategorieId || !name.trim()}>
@@ -65,8 +87,6 @@ function NewAblageRow({ kategorien, onSave, onCancel }) {
             <X className="h-3.5 w-3.5" />
           </Button>
         </div>
-      </TableCell>
-    </TableRow>
   );
 }
 
@@ -87,11 +107,11 @@ function EditableNameCell({ ablage, kategorien, onSave, onCancel }) {
   }
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <select
         value={kategorieId}
         onChange={(e) => setKategorieId(e.target.value)}
-        className="h-7 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+        className="h-7 min-w-0 max-sm:w-full rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
       >
         {activeKats.map((k) => (
           <option key={k.id} value={k.id}>{k.name}</option>
@@ -101,7 +121,7 @@ function EditableNameCell({ ablage, kategorien, onSave, onCancel }) {
         ref={inputRef}
         value={name}
         onChange={(e) => setName(e.target.value)}
-        className="h-7 text-sm w-48"
+        className="h-7 text-sm w-48 max-sm:w-auto max-sm:flex-1 max-sm:min-w-0"
         onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') onCancel(); }}
       />
       <button onClick={handleSave} className="p-1 text-primary hover:text-primary/70 transition-colors">
@@ -117,9 +137,9 @@ function EditableNameCell({ ablage, kategorien, onSave, onCancel }) {
 function DeleteConfirmModal({ ablage, onConfirm, onClose, isPending }) {
   return (
     <Dialog open onOpenChange={() => onClose()}>
-      <DialogTitle>Ablage löschen: „{ablage.name}"</DialogTitle>
+      <DialogTitle>Sammelmappe löschen: „{ablage.name}"</DialogTitle>
       <DialogDescription>
-        Diese Ablage ist leer und wird dauerhaft gelöscht. Dieser Vorgang kann nicht rückgängig gemacht werden.
+        Diese Sammelmappe ist leer und wird dauerhaft gelöscht. Dieser Vorgang kann nicht rückgängig gemacht werden.
       </DialogDescription>
       <DialogFooter className="mt-4">
         <Button variant="ghost" onClick={onClose}>Abbrechen</Button>
@@ -151,8 +171,8 @@ function AufloesModal({ target, ablagen, onConfirm, onClose }) {
   const options = isLoose ? [
     {
       value: 'redirect',
-      label: 'Zu einem Ordner zuweisen',
-      desc: 'Alle Dokumente werden einem konkreten Ordner zugeordnet.',
+      label: 'Einer Sammelmappe zuweisen',
+      desc: 'Alle Dokumente werden einer konkreten Sammelmappe zugeordnet.',
     },
     {
       value: 'unknown',
@@ -162,8 +182,8 @@ function AufloesModal({ target, ablagen, onConfirm, onClose }) {
   ] : [
     {
       value: 'kategorie',
-      label: 'Obergruppe beibehalten, Ablage-Zuordnung entfernen',
-      desc: `Dokumente bleiben in der Kategorie „${target.kategorie_name}", aber ohne konkreten Ordner.`,
+      label: 'Obergruppe beibehalten, Zuordnung zur Sammelmappe entfernen',
+      desc: `Dokumente bleiben in der Kategorie „${target.kategorie_name}", aber ohne konkrete Sammelmappe.`,
     },
     {
       value: 'unknown',
@@ -172,8 +192,8 @@ function AufloesModal({ target, ablagen, onConfirm, onClose }) {
     },
     {
       value: 'redirect',
-      label: 'Zu anderer Ablage umziehen',
-      desc: 'Alle Dokumente werden einer anderen, aktiven Ablage zugeordnet.',
+      label: 'In andere Sammelmappe umziehen',
+      desc: 'Alle Dokumente werden einer anderen, aktiven Sammelmappe zugeordnet.',
     },
   ];
 
@@ -182,12 +202,12 @@ function AufloesModal({ target, ablagen, onConfirm, onClose }) {
       <DialogTitle>
         {isLoose
           ? `Lose Dokumente in „${target.kategorie_name}" zuordnen`
-          : `Ablage auflösen: „${target.name}"`}
+          : `Sammelmappe auflösen: „${target.name}"`}
       </DialogTitle>
       <DialogDescription>
         {isLoose
-          ? `${target.doc_count} Dokument${target.doc_count !== 1 ? 'e haben' : ' hat'} die Kategorie „${target.kategorie_name}" ohne konkreten Ordner. Bitte neu zuordnen.`
-          : `${target.doc_count} Dokument${target.doc_count !== 1 ? 'e sind' : ' ist'} dieser Ablage zugeordnet. Was soll damit passieren? Die Ablage wird danach dauerhaft gelöscht.`}
+          ? `${target.doc_count} Dokument${target.doc_count !== 1 ? 'e haben' : ' hat'} die Kategorie „${target.kategorie_name}" ohne konkrete Sammelmappe. Bitte neu zuordnen.`
+          : `${target.doc_count} Dokument${target.doc_count !== 1 ? 'e sind' : ' ist'} dieser Sammelmappe zugeordnet. Was soll damit passieren? Die Sammelmappe wird danach dauerhaft gelöscht.`}
       </DialogDescription>
 
       <div className="mt-4 space-y-2">
@@ -210,7 +230,7 @@ function AufloesModal({ target, ablagen, onConfirm, onClose }) {
                   onChange={(e) => setRedirectId(e.target.value)}
                   className="mt-2 h-8 rounded-md border border-input bg-background px-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring w-full"
                 >
-                  <option value="">Ziel-Ablage wählen…</option>
+                  <option value="">Ziel-Sammelmappe wählen…</option>
                   {zielAblagen.map((a) => (
                     <option key={a.id} value={a.id}>{a.kategorie_name} – {a.name}</option>
                   ))}
@@ -233,6 +253,7 @@ function AufloesModal({ target, ablagen, onConfirm, onClose }) {
 
 export default function OriginaleListPage() {
   const navigate = useNavigate();
+  const { istMobil } = useDarstellung();
   const [filter, setFilter] = useState('false');
   const [newFormOpen, setNewFormOpen] = useState(false);
   const [editId, setEditId] = useState(null);
@@ -251,6 +272,47 @@ export default function OriginaleListPage() {
   const aufloesen = useAufloesen();
   const deleteAblageM = useDeleteVerbleibAblage();
   const loeseKategorieAuf = useLoeseKategorieAuf();
+  const { printOrDownload, isPrinting } = usePrinter();
+  const { data: appSettings } = useQuery({
+    queryKey: ['settings-public'],
+    queryFn: () => api.settingsPublic.getAll(),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const [druckAuswahl, setDruckAuswahl] = useState(null);
+
+  // Zwei Etiketten: technisches (Nummer + QR) und Titel mit großem
+  // Kategoriesymbol. Strichstärke 2 hält das Symbol in voller Etikettenhöhe
+  // kräftig, ohne dass Details zulaufen. Welche Teile gedruckt werden, fragt
+  // der Auswahldialog ab.
+  async function handlePrint(ablage) {
+    setError(null);
+    try {
+      const [technisch, titel] = await renderAblageLabels(ablage, {
+        iconSvg: etikettIconSvg(ablage.kategorie_icon, { strokeWidth: 2 }),
+        instanceName: appSettings?.instance_name?.value?.trim() ?? '',
+      });
+      setDruckAuswahl({
+        ablageid: ablage.ablageid,
+        etiketten: [
+          { canvas: technisch, name: 'Nummer mit QR-Code' },
+          { canvas: titel, name: 'Titel mit Kategoriesymbol' },
+        ],
+      });
+    } catch (err) {
+      setError(err.message ?? 'Etiketten konnten nicht erstellt werden');
+    }
+  }
+
+  async function druckeAuswahl(canvases) {
+    const { ablageid } = druckAuswahl;
+    setDruckAuswahl(null);
+    try {
+      await printOrDownload(canvases, ablageid);
+    } catch (err) {
+      setError(err.message ?? 'Etiketten konnten nicht gedruckt werden');
+    }
+  }
 
   function handleCreate(data) {
     setError(null);
@@ -281,7 +343,7 @@ export default function OriginaleListPage() {
         verbleib_kategorie_id: String(ablage.kategorie_id),
         verbleib_ohne_ablage: 'true',
         verbleibBackTo: '/akten/originale',
-        verbleibLabel: `${ablage.kategorie_name} (ohne Ordner)`,
+        verbleibLabel: `${ablage.kategorie_name} (ohne Sammelmappe)`,
       });
       navigate(`/postbuch?${params.toString()}`);
     } else {
@@ -334,9 +396,140 @@ export default function OriginaleListPage() {
     });
   }
 
+  const zeilenKey = (ablage) => (ablage.type === 'loose' ? `loose-${ablage.kategorie_id}` : ablage.id);
+
+  function nameZelle(ablage) {
+    const isLoose = ablage.type === 'loose';
+    if (!isLoose && editId === ablage.id) {
+      return (
+        <EditableNameCell
+          ablage={ablage}
+          kategorien={kategorien}
+          onSave={(data) => handleUpdate(ablage.id, data)}
+          onCancel={() => setEditId(null)}
+        />
+      );
+    }
+    return isLoose ? (
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="flex min-w-0 items-center gap-1 font-medium text-sm">
+          <KatIcon name={ablage.kategorie_icon} className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">{ablage.kategorie_name}</span>
+        </span>
+        <span className="text-xs text-muted-foreground italic ml-5">ohne konkrete Zuordnung</span>
+      </div>
+    ) : (
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="truncate font-medium text-sm">{ablage.name}</span>
+        <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+          <KatIcon name={ablage.kategorie_icon} className="h-3 w-3 shrink-0" />
+          <span className="truncate">{ablage.kategorie_name}</span>
+        </span>
+      </div>
+    );
+  }
+
+  function anzahlZelle(ablage) {
+    return (
+      <span className="inline-flex items-center gap-1 text-sm whitespace-nowrap" title="Dokumente">
+        {istMobil && <FileText className="h-3.5 w-3.5 text-muted-foreground" />}
+        {ablage.doc_count}
+        {ablage.urkunden_count > 0 && (
+          <span
+            className="inline-flex items-center gap-0.5 ml-2 text-amber-600"
+            title={`${ablage.urkunden_count} Urkunde${ablage.urkunden_count !== 1 ? 'n' : ''}`}
+          >
+            <ShieldCheck className="h-3.5 w-3.5" />
+            {ablage.urkunden_count}
+          </span>
+        )}
+      </span>
+    );
+  }
+
+  function statusZelle(ablage) {
+    if (ablage.type === 'loose') return null;
+    return ablage.archived
+      ? <Badge variant="secondary" className="text-xs">Archiviert</Badge>
+      : <Badge variant="outline" className="text-xs text-green-600 border-green-600/40">Aktiv</Badge>;
+  }
+
+  function aktionenZelle(ablage) {
+    const isLoose = ablage.type === 'loose';
+    const knopf = istMobil ? 'p-2 -m-0.5' : 'p-1.5';
+    const icon = istMobil ? 'h-4 w-4' : 'h-3.5 w-3.5';
+    return (
+      <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
+        {!isLoose && (
+          <button
+            title="Etiketten drucken"
+            onClick={() => handlePrint(ablage)}
+            disabled={isPrinting}
+            className={`${knopf} rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-50`}
+          >
+            <Printer className={icon} />
+          </button>
+        )}
+        {!isLoose && !ablage.archived && editId !== ablage.id && (
+          <button
+            title="Bearbeiten"
+            onClick={() => { setEditId(ablage.id); setNewFormOpen(false); }}
+            className={`${knopf} rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors`}
+          >
+            <Pencil className={icon} />
+          </button>
+        )}
+        {!isLoose && (
+          <button
+            title={ablage.archived ? 'Reaktivieren' : 'Archivieren'}
+            onClick={() => handleArchive(ablage.id)}
+            className={`${knopf} rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors`}
+          >
+            {ablage.archived
+              ? <ArchiveRestore className={icon} />
+              : <Archive className={icon} />
+            }
+          </button>
+        )}
+        {(isLoose || !ablage.archived) && (
+          <button
+            title={isLoose ? 'Dokumente neu zuordnen' : ablage.doc_count === 0 ? 'Löschen' : 'Auflösen & löschen'}
+            onClick={() => handleTrash(ablage)}
+            className={`${knopf} rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors`}
+          >
+            <Trash2 className={icon} />
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  // Mobil: Karten in drei Zeilen – oben Nummer · Obergruppe und die Anzahlen,
+  // dann der Name, unten Status und Aktionen. Bearbeiten öffnet das Formular
+  // in der Karte selbst (ohne Klick-Weiterleitung).
+  const mobilSpalten = [
+    { key: 'ablageid', mobil: 'meta', zelle: (a) => a.ablageid && <AblageNr nr={a.ablageid} /> },
+    { key: 'kategorie', mobil: 'meta', zelle: (a) => (
+      a.type === 'loose'
+        ? <span className="italic">ohne konkrete Zuordnung</span>
+        : <span className="flex min-w-0 items-center gap-1"><KatIcon name={a.kategorie_icon} className="h-3 w-3 shrink-0" /><span className="truncate">{a.kategorie_name}</span></span>
+    ) },
+    { key: 'name', mobil: 'titel', zelle: (a) => {
+      if (a.type === 'loose') {
+        return <span className="flex min-w-0 items-center gap-1.5"><KatIcon name={a.kategorie_icon} className="h-4 w-4 shrink-0" /><span className="truncate">{a.kategorie_name}</span></span>;
+      }
+      return editId === a.id
+        ? <div className="whitespace-normal font-normal" onClick={(e) => e.stopPropagation()}>{nameZelle(a)}</div>
+        : a.name;
+    } },
+    { key: 'anzahl', mobil: 'rechts', zelle: anzahlZelle },
+    { key: 'status', mobil: 'badges', zelle: statusZelle },
+    { key: 'aktionen', mobil: 'aktion', zelle: aktionenZelle },
+  ];
+
   return (
-    <div className="px-5 pt-4 pb-6">
-      <div className="flex items-center justify-between mb-4">
+    <div className="px-5 pt-4 pb-6 max-sm:px-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         {/* Filter-Toggle */}
         <div className="flex gap-1">
           {FILTER_OPTS.map(({ value, label }) => (
@@ -353,9 +546,9 @@ export default function OriginaleListPage() {
             </button>
           ))}
         </div>
-        <Button size="sm" onClick={() => { setNewFormOpen(true); setEditId(null); }}>
-          <Plus className="h-3.5 w-3.5 mr-1.5" />
-          Neue Ablage
+        <Button size="sm" onClick={() => { setNewFormOpen(true); setEditId(null); }} title="Neue Sammelmappe">
+          <Plus className="h-3.5 w-3.5 mr-1.5 max-sm:mr-0" />
+          <span className="max-sm:sr-only">Neue Sammelmappe</span>
         </Button>
       </div>
 
@@ -370,17 +563,38 @@ export default function OriginaleListPage() {
       ) : ablagen.length === 0 && !newFormOpen ? (
         <EmptyState
           icon={FolderOpen}
-          title="Keine Ablagen"
-          description={filter === 'false' ? 'Noch keine aktiven Ablagen angelegt.' : 'Keine Ablagen in dieser Ansicht.'}
+          title="Keine Sammelmappen"
+          description={filter === 'false' ? 'Noch keine aktiven Sammelmappen angelegt.' : 'Keine Sammelmappen in dieser Ansicht.'}
         />
+      ) : istMobil ? (
+        <div className="space-y-2">
+          {newFormOpen && (
+            <div className="rounded-2xl border border-primary/40 bg-primary/5 px-3.5 py-3">
+              <NewAblageForm
+                kategorien={kategorien}
+                onSave={handleCreate}
+                onCancel={() => setNewFormOpen(false)}
+              />
+            </div>
+          )}
+          <KartenListe
+            spalten={mobilSpalten}
+            daten={ablagen.map((a) => ({ ...a, _key: zeilenKey(a) }))}
+            zeilenKey="_key"
+            onZeile={(a) => { if (a.type === 'loose' || editId !== a.id) showDocuments(a); }}
+            zeilenKlasse={(a) => (a.archived ? 'opacity-60' : '')}
+            leerText="Keine Sammelmappen in dieser Ansicht."
+          />
+        </div>
       ) : (
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Ablage</TableHead>
+              <TableHead className="w-[96px]">ID</TableHead>
+              <TableHead>Sammelmappe</TableHead>
               <TableHead>Dokumente</TableHead>
               <TableHead className="w-[110px]">Status</TableHead>
-              <TableHead className="w-[160px]" />
+              <TableHead className="w-[190px]" />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -392,96 +606,19 @@ export default function OriginaleListPage() {
               />
             )}
             {ablagen.map((ablage) => {
-              const isLoose = ablage.type === 'loose';
-              const rowKey = isLoose ? `loose-${ablage.kategorie_id}` : ablage.id;
-              const canClick = isLoose || editId !== ablage.id;
+              const canClick = ablage.type === 'loose' || editId !== ablage.id;
               return (
                 <TableRow
-                  key={rowKey}
+                  key={zeilenKey(ablage)}
                   className={`${ablage.archived ? 'opacity-60' : ''} ${canClick ? 'cursor-pointer' : ''}`}
                   onClick={canClick ? () => showDocuments(ablage) : undefined}
                   title={canClick ? 'Dokumente anzeigen' : undefined}
                 >
-                  <TableCell>
-                    {!isLoose && editId === ablage.id ? (
-                      <EditableNameCell
-                        ablage={ablage}
-                        kategorien={kategorien}
-                        onSave={(data) => handleUpdate(ablage.id, data)}
-                        onCancel={() => setEditId(null)}
-                      />
-                    ) : isLoose ? (
-                      <div className="flex flex-col gap-0.5">
-                        <span className="flex items-center gap-1 font-medium text-sm">
-                          <KatIcon name={ablage.kategorie_icon} className="h-3.5 w-3.5" />
-                          {ablage.kategorie_name}
-                        </span>
-                        <span className="text-xs text-muted-foreground italic ml-5">ohne konkrete Zuordnung</span>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-0.5">
-                        <span className="font-medium text-sm">{ablage.name}</span>
-                        <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                          <KatIcon name={ablage.kategorie_icon} className="h-3 w-3" />
-                          {ablage.kategorie_name}
-                        </span>
-                      </div>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <span className="inline-flex items-center gap-1 text-sm">
-                      {ablage.doc_count}
-                      {ablage.urkunden_count > 0 && (
-                        <span
-                          className="inline-flex items-center gap-0.5 ml-2 text-amber-600"
-                          title={`${ablage.urkunden_count} Urkunde${ablage.urkunden_count !== 1 ? 'n' : ''}`}
-                        >
-                          <ShieldCheck className="h-3.5 w-3.5" />
-                          {ablage.urkunden_count}
-                        </span>
-                      )}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    {!isLoose && (ablage.archived
-                      ? <Badge variant="secondary" className="text-xs">Archiviert</Badge>
-                      : <Badge variant="outline" className="text-xs text-green-600 border-green-600/40">Aktiv</Badge>
-                    )}
-                  </TableCell>
-                  <TableCell onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center gap-1 justify-end">
-                      {!isLoose && !ablage.archived && editId !== ablage.id && (
-                        <button
-                          title="Bearbeiten"
-                          onClick={() => { setEditId(ablage.id); setNewFormOpen(false); }}
-                          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                      {!isLoose && (
-                        <button
-                          title={ablage.archived ? 'Reaktivieren' : 'Archivieren'}
-                          onClick={() => handleArchive(ablage.id)}
-                          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                        >
-                          {ablage.archived
-                            ? <ArchiveRestore className="h-3.5 w-3.5" />
-                            : <Archive className="h-3.5 w-3.5" />
-                          }
-                        </button>
-                      )}
-                      {(isLoose || !ablage.archived) && (
-                        <button
-                          title={isLoose ? 'Dokumente neu zuordnen' : ablage.doc_count === 0 ? 'Löschen' : 'Auflösen & löschen'}
-                          onClick={() => handleTrash(ablage)}
-                          className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground"><AblageNr nr={ablage.ablageid} /></TableCell>
+                  <TableCell>{nameZelle(ablage)}</TableCell>
+                  <TableCell>{anzahlZelle(ablage)}</TableCell>
+                  <TableCell>{statusZelle(ablage)}</TableCell>
+                  <TableCell>{aktionenZelle(ablage)}</TableCell>
                 </TableRow>
               );
             })}
@@ -503,6 +640,14 @@ export default function OriginaleListPage() {
           onConfirm={handleDeleteConfirm}
           onClose={() => setDeleteAblage(null)}
           isPending={deleteAblageM.isPending}
+        />
+      )}
+
+      {druckAuswahl && (
+        <EtikettAuswahlDialog
+          etiketten={druckAuswahl.etiketten}
+          onDrucken={druckeAuswahl}
+          onAbbrechen={() => setDruckAuswahl(null)}
         />
       )}
     </div>

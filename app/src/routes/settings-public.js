@@ -6,7 +6,7 @@
  *
  *   GET  /api/settings-public                  → Feld-Whitelist aus _settings
  *   GET  /api/settings-public/debug-mode
- *   POST /api/settings-public/debug-mode       (lesezugriff blockt die globale Write-Protection)
+ *   POST /api/settings-public/debug-mode       (nur Admins)
  *   GET  /api/settings-public/backup-status    → nur das enabled-Bit, für den Warnbanner
  *   GET  /api/settings-public/importwege       → aufgelöste Pfade für die Importwege-Seite
  *   GET  /api/settings-public/ai/health        → ohne Provider-Fehlertexte
@@ -29,6 +29,7 @@ import { ermittleWurzelPfad, WURZEL_DIREKT } from '../service/storage-setup.js';
 import * as onedrive from '../lib/storage/onedrive.js';
 import db from '../db.js';
 import { appLog } from '../app-log.js';
+import { requireAdmin } from '../middleware/auth.js';
 import { getCacheMode, setCacheMode } from '../lib/cache-mode.js';
 import { subscriptionFeatureUnlocked } from '../lib/claude-subscription.js';
 import { resolveTierModelConfig, capsForRef, providerForRef, kannDokumentSehen } from '../lib/llm.js';
@@ -51,6 +52,7 @@ const PUBLIC_SETTING_KEYS = new Set([
   // per Konstruktion nur Gerätefähigkeiten — die Scanner-Adresse bleibt ein
   // Admin-Feld und wird in lib/scanner-capabilities.js nie mit übernommen.
   'scanner_capabilities',
+  'etikett_qr_erkennung', // Kamerascan: welche Etiketten-QR-Codes erkannt werden
 ]);
 
 // ── GET /api/settings-public ─────────────────────────────────────────────────
@@ -111,10 +113,10 @@ router.get('/debug-mode', async (req, res) => {
 
 // ── POST /api/settings-public/debug-mode ─────────────────────────────────────
 // Body: { enabled: true|false }
-// Schreibberechtigt, nicht admin-only: der Umschalter sitzt auf der Logs-Seite,
-// die auch Nicht-Admins sehen können (nav_visibility). Kein Geheimnis betroffen.
+// Nur Admins: Der Schalter sitzt unter Einstellungen → Allgemein. Lesen dürfen
+// alle Rollen, weil die Oberfläche Diagnosehilfen danach ein- und ausblendet.
 
-router.post('/debug-mode', async (req, res) => {
+router.post('/debug-mode', requireAdmin, async (req, res) => {
   try {
     const { enabled } = req.body;
     if (typeof enabled !== 'boolean') {

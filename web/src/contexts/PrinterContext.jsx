@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useRef, useState } from 'react';
 import { connectPrinter, disconnectPrinter, printLabel as sendToPrinter } from '@/lib/niimbotPrinter';
+import { downloadLabelPng } from '@/lib/labelRenderer';
 
 const PrinterContext = createContext(null);
 
@@ -43,8 +44,22 @@ export function PrinterProvider({ children }) {
     }
   }, []);
 
+  // Etikett(en) drucken; ohne Verbindung erst verbinden (muss aus einem Klick
+  // heraus laufen – Web Bluetooth braucht die Nutzergeste). Scheitert beides,
+  // landet das Etikett als PNG im Download.
+  const printOrDownload = useCallback(async (canvasOderListe, dateiname) => {
+    try {
+      if (!clientRef.current?.isConnected()) await connect();
+      await print(canvasOderListe);
+      return true;
+    } catch {
+      downloadLabelPng(canvasOderListe, dateiname);
+      return false;
+    }
+  }, [connect, print]);
+
   return (
-    <PrinterContext.Provider value={{ isConnected, deviceName, isPrinting, connect, disconnect, print }}>
+    <PrinterContext.Provider value={{ isConnected, deviceName, isPrinting, connect, disconnect, print, printOrDownload }}>
       {children}
     </PrinterContext.Provider>
   );

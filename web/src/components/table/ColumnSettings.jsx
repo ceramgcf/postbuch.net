@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Columns3, RotateCcw } from 'lucide-react';
-import { useIsMobile } from '@/hooks/useIsMobile';
+import { useDarstellung } from '@/hooks/useDarstellung';
 import { Dialog, DialogTitle } from '@/components/ui/dialog';
 
 const PANEL_WIDTH = 264;
@@ -20,7 +20,7 @@ const PANEL_WIDTH = 264;
  * @param {()=>void} onReset
  */
 export function ColumnSettings({ columns, visibleCount, onToggle, onReset }) {
-  const isMobile = useIsMobile();
+  const { istTouch } = useDarstellung();
   const [open, setOpen] = useState(false);
   const triggerRef = useRef(null);
   const panelRef = useRef(null);
@@ -28,15 +28,15 @@ export function ColumnSettings({ columns, visibleCount, onToggle, onReset }) {
 
   // Popover-Position aus Trigger-Rect ableiten (rechtsbündig unter dem Button, im Viewport gehalten).
   useLayoutEffect(() => {
-    if (!open || isMobile || !triggerRef.current) return;
+    if (!open || istTouch || !triggerRef.current) return;
     const rect = triggerRef.current.getBoundingClientRect();
     const left = Math.max(8, Math.min(rect.right - PANEL_WIDTH, window.innerWidth - PANEL_WIDTH - 8));
     setPos({ top: rect.bottom + 6, left });
-  }, [open, isMobile]);
+  }, [open, istTouch]);
 
   // Klick außerhalb / ESC schließt das Popover.
   useEffect(() => {
-    if (!open || isMobile) return;
+    if (!open || istTouch) return;
     function onDocClick(e) {
       if (
         triggerRef.current?.contains(e.target) ||
@@ -53,7 +53,7 @@ export function ColumnSettings({ columns, visibleCount, onToggle, onReset }) {
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open, isMobile]);
+  }, [open, istTouch]);
 
   const list = (
     <ul className="space-y-0.5">
@@ -121,7 +121,7 @@ export function ColumnSettings({ columns, visibleCount, onToggle, onReset }) {
       {trigger}
 
       {/* Desktop: Popover via Portal */}
-      {open && !isMobile && pos && createPortal(
+      {open && !istTouch && pos && createPortal(
         <div
           ref={panelRef}
           style={{ position: 'fixed', top: pos.top, left: pos.left, width: PANEL_WIDTH, zIndex: 9999 }}
@@ -134,7 +134,7 @@ export function ColumnSettings({ columns, visibleCount, onToggle, onReset }) {
       )}
 
       {/* Mobile: Vollbild-Dialog */}
-      {isMobile && (
+      {istTouch && (
         <Dialog open={open} onOpenChange={setOpen} size="sm">
           <DialogTitle className="mb-2 flex items-center gap-2">
             <Columns3 className="h-4 w-4 text-primary" />

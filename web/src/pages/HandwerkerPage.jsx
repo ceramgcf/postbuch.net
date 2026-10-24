@@ -13,6 +13,53 @@ import { Button } from '@/components/ui/button';
 import { PageLoader, EmptyState } from '@/components/ui/spinner';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { Wrench, Archive, Ban } from 'lucide-react';
+import { KartenListe } from '@/components/listen/DataView';
+import { useDarstellung } from '@/hooks/useDarstellung';
+
+const markeKlasse = 'inline-flex items-center gap-1 rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 font-sans text-[10px] font-medium text-slate-600';
+
+// Kennzeichen einer Rechnung – in Tabelle und Karte gleich.
+function Marken({ r }) {
+  return (
+    <>
+      {r.historisch && (
+        <span className={markeKlasse} title="Archiviert – zählt trotzdem in die Jahressumme">
+          <Archive className="h-2.5 w-2.5" />
+          Archiviert
+        </span>
+      )}
+      {r.estg35a_irrelevant && (
+        <span className={markeKlasse} title="Für § 35a EStG ausgeschlossen">
+          <Ban className="h-2.5 w-2.5" />
+          § 35a ausgeschlossen
+        </span>
+      )}
+      {r.ersetzt_durch && (
+        <span
+          className="inline-flex items-center rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 font-sans text-[10px] font-medium text-amber-800"
+          title={`Ersetzt durch ${r.ersetzt_durch} – zählt in keiner Summe`}
+        >
+          Ersetzt
+        </span>
+      )}
+    </>
+  );
+}
+
+// Mobile Karte einer Handwerkerrechnung (Plätze siehe DataView).
+const RECHNUNG_KARTE = [
+  { key: 'postid', mobil: 'meta', zelle: (r) => <span className="font-mono">{r.postid}</span> },
+  { key: 'zahldatum', mobil: 'meta', zelle: (r) => r.zahldatum && `bezahlt ${formatDate(r.zahldatum)}` },
+  { key: 'betrag', mobil: 'rechts', zelle: (r) => r.gesamtbetrag != null && (
+    <span className={`font-mono${r.ersetzt_durch ? ' line-through text-muted-foreground' : ''}`}>{formatCurrency(r.gesamtbetrag)}</span>
+  ) },
+  { key: 'unternehmen', mobil: 'titel', zelle: (r) => r.name_unternehmen || '–' },
+  { key: 'leistung', mobil: 'text', zelle: (r) => r.leistung },
+  { key: 'marken', mobil: 'badges', zelle: (r) => (r.historisch || r.estg35a_irrelevant || r.ersetzt_durch) && <Marken r={r} /> },
+  { key: 'lohn', mobil: 'aktion', zelle: (r) => r.lohnkosten != null && parseFloat(r.lohnkosten) !== 0 && (
+    <span className={`text-xs font-mono text-amber-700${r.ersetzt_durch ? ' line-through opacity-60' : ''}`}>Lohn {formatCurrency(r.lohnkosten)}</span>
+  ) },
+];
 
 // Jahresschlüssel der API: 'YYYY' oder 'offen' für noch nicht bezahlte Rechnungen.
 const JAHR_OFFEN = 'offen';
@@ -27,6 +74,7 @@ const RELEVANZ = [
 ];
 
 export default function HandwerkerPage() {
+  const { istMobil } = useDarstellung();
   const [searchParams, setSearchParams] = useSearchParams();
   const relevanz = RELEVANZ.some((r) => r.wert === searchParams.get('relevanz'))
     ? searchParams.get('relevanz') : 'relevant';
@@ -110,7 +158,7 @@ export default function HandwerkerPage() {
           <div>
             <GlowHeading>Handwerkerrechnungen</GlowHeading>
             <p className="text-muted-foreground mt-1">
-              Rechnungs- und Lohnkostensummen nach Zahljahr – für die Steuer zählt das Jahr der Zahlung.
+              Rechnungs- und Lohnkostensummen nach Zahljahr.
             </p>
           </div>
           <ExcelExportButton
@@ -186,9 +234,9 @@ export default function HandwerkerPage() {
           return (
             <Card key={jahr}>
               <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <CardTitle className="text-lg font-bold">{jahr}</CardTitle>
-                  <div className="flex items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
                     <span className="text-sm text-muted-foreground">
                       {j.anzahl} Rechnung{j.anzahl !== 1 ? 'en' : ''}
                     </span>
@@ -217,6 +265,24 @@ export default function HandwerkerPage() {
                 </div>
               </CardHeader>
               <CardContent className="pt-0">
+                {istMobil ? (
+                  <>
+                    <KartenListe
+                      spalten={RECHNUNG_KARTE}
+                      daten={rechnungen}
+                      zeilenKey="postid"
+                      onZeile={(r) => navigate(`/postbuch/${r.postid}`, {
+                        state: { from: fromUrl, navList, navIndex: navList.findIndex(n => n.postid === r.postid) },
+                      })}
+                      zeilenKlasse={(r) => (r.historisch ? 'bg-muted/40' : '')}
+                    />
+                    <div className="mt-3 flex justify-end gap-4 border-t pt-2 text-sm font-semibold">
+                      <span className="text-muted-foreground">{j.jahr === JAHR_OFFEN ? 'Summe' : `Jahressumme ${jahr}`}</span>
+                      <span className="font-mono">{formatCurrency(summeGesamt)}</span>
+                      {summeLohn !== 0 && <span className="font-mono text-amber-700">Lohn {formatCurrency(summeLohn)}</span>}
+                    </div>
+                  </>
+                ) : (
                 <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -247,32 +313,7 @@ export default function HandwerkerPage() {
                         <TableCell className="font-mono font-bold text-primary">
                           <span className="flex items-center gap-1.5">
                             {r.postid}
-                            {r.historisch && (
-                              <span
-                                className="inline-flex items-center gap-1 rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 font-sans text-[10px] font-medium text-slate-600"
-                                title="Archiviert – zählt trotzdem in die Jahressumme"
-                              >
-                                <Archive className="h-2.5 w-2.5" />
-                                Archiviert
-                              </span>
-                            )}
-                            {r.estg35a_irrelevant && (
-                              <span
-                                className="inline-flex items-center gap-1 rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 font-sans text-[10px] font-medium text-slate-600"
-                                title="Für § 35a EStG ausgeschlossen"
-                              >
-                                <Ban className="h-2.5 w-2.5" />
-                                § 35a ausgeschlossen
-                              </span>
-                            )}
-                            {r.ersetzt_durch && (
-                              <span
-                                className="inline-flex items-center rounded border border-amber-300 bg-amber-50 px-1.5 py-0.5 font-sans text-[10px] font-medium text-amber-800"
-                                title={`Ersetzt durch ${r.ersetzt_durch} – zählt in keiner Summe`}
-                              >
-                                Ersetzt
-                              </span>
-                            )}
+                            <Marken r={r} />
                           </span>
                         </TableCell>
                         <TableCell className="font-medium">{r.name_unternehmen || '–'}</TableCell>
@@ -312,6 +353,7 @@ export default function HandwerkerPage() {
                   </tfoot>
                 </Table>
                 </div>
+                )}
               </CardContent>
             </Card>
           );

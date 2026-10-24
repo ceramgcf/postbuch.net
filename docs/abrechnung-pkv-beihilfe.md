@@ -168,18 +168,32 @@ um einen gesetzten Seitenbereich noch einmal gegenzuprüfen.
 - ![Verwerfen-Symbol](icons/x.svg) **Verwerfen** löscht die Zwischen-PDFs und
   lässt die Perioden unangetastet.
 
-Eine nicht bestätigte Sitzung läuft nach **zwei Stunden** ab und wird
-automatisch aufgeräumt (ein Cron-Lauf prüft das alle 15 Minuten). Offene
-Sitzungen bietet die Oberfläche innerhalb des Zwei-Stunden-Fensters zur
-Wiederaufnahme an.
+Im Schritt **Einreichen** wählst du für jedes PDF einen von zwei Wegen:
+![Herunterladen-Symbol](icons/download.svg) **Herunterladen** und im Portal des
+Kostenträgers hochladen oder ![Teilen-Symbol](icons/share-2.svg) **Teilen** und
+direkt an die App des Kostenträgers übergeben (siehe Tipp unten).
+
+Solange noch kein PDF heruntergeladen oder geteilt wurde, läuft eine nicht
+bestätigte Sitzung nach **zwei Stunden** ab und wird automatisch aufgeräumt (ein
+Cron-Lauf prüft das alle 15 Minuten). Sobald ein PDF heruntergeladen oder geteilt
+wurde, kann die Abrechnung schon beim Kostenträger liegen: Ab dann bleibt die
+Sitzung offen, bis du sie **bestätigst** oder **abbrichst**. Offene Sitzungen
+bietet die Oberfläche zur Wiederaufnahme an, auch ganz oben auf dem
+[Dashboard](oberflaeche.md#dashboard). Solange eine Abrechnung offen ist, lässt
+sich keine neue starten: Der Assistent zeigt dann nur **Offene Abrechnung
+fortsetzen**, und auf der Periodenseite fehlt **Einreichen**.
 
 > [!TIP]
 >
 > Ein Paket lässt sich bequem **am PC zusammenstellen und prüfen**. Anschließend
 > kann die am PC geöffnete Abrechnungssession **nahtlos zum Smartphone**
-> wechseln, um das fertige Paket dort herunterzuladen. So kann es direkt **mit
-> der App des Kostenträgers geteilt** werden, ohne dass das PDF vorher vom PC
-> auf das Smartphone kopiert werden muss.
+> wechseln. Im Schritt **Einreichen** steht dort neben jedem Download
+> ![Teilen-Symbol](icons/share-2.svg) **Teilen** bereit: Es öffnet das Teilen-Menü des Smartphones, über das das PDF
+> direkt an die App des Kostenträgers geht – ohne Umweg über den Download-Ordner
+> und ohne das PDF vorher vom PC auf das Smartphone zu kopieren. Teilen erscheint
+> nur, wenn der Browser das Weitergeben von Dateien unterstützt. Meldet der Knopf
+> „Bereit – nochmal tippen“, hat das Laden des PDFs zu lange gedauert; ein
+> zweites Tippen öffnet das Teilen-Menü sofort.
 
 > [!CAUTION]
 >

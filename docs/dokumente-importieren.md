@@ -54,9 +54,108 @@ Mail-Anhang ist damit in zwei Klicks in postbuch.net.
 
 ## Weg 2: Scannen per Foto vom Smartphone
 
-Ohne Scanner im Haus: Die App deiner Cloudablage bringt einen Dokumentenscan
-mit. OneDrive und Nextcloud entzerren die abfotografierte Seite, schneiden sie
-zu und speichern sie als PDF; mehrere Seiten landen in einer Datei.
+Ohne Scanner im Haus genügt die Kamera des Handys oder Tablets. Dafür gibt es
+zwei Wege.
+
+### Mit der Kamera in postbuch.net
+
+In der Mobilansicht öffnet der Knopf
+![Kamera-Symbol](icons/camera.svg) **Scannen** in der Mitte der
+[Favoritenleiste](mobil-und-pwa.md#die-mobilansicht) die Rückkamera im
+Vollbild, von jeder Seite aus. Daneben gibt es auf der Seite
+![Import-Symbol](icons/upload.svg) `Importieren` die Karte
+**Mit Kamera scannen → Kamera öffnen**; sie steht auf Touch-Geräten ganz oben,
+am Rechner unter dem Datei-Upload. Beim ersten Mal fragt der Browser, ob postbuch.net die
+Kamera benutzen darf.
+
+1. **Blatt ins Bild halten.** postbuch.net sucht die Blattränder und legt einen
+   Rahmen um das Blatt. Erkannt wird ein Blatt ab etwa einem Achtel der
+   Bildfläche; kleine Belege wie Visitenkarten näher an die Kamera halten. Ein
+   dunkler oder gemaserter Untergrund hilft; auf einem hellen Tisch zeichnet
+   meist der Schlagschatten des Blatts die Kante.
+2. **Auslösen.** Unten rechts wählst du zwischen **Auto** und **Manuell**. Bei
+   **Auto** löst postbuch.net selbst aus, sobald das Gerät ruhig gehalten wird
+   und das **ganze** Blatt scharf ist, nicht nur die Bildmitte. Der Ring um den
+   Auslöser zeigt, wie weit es ist; ein Tipp ins Bild bricht eine anstehende
+   Auslösung ab. Bei **Manuell** tippst du selbst auf den Auslöser. Nach einer
+   Aufnahme wartet die Automatik, bis ein neues Blatt liegt, damit dieselbe
+   Seite nicht zweimal im Dokument landet.
+3. **Vorschau prüfen.** Nach jeder Aufnahme erscheint die Seite entzerrt,
+   zugeschnitten und mit verbessertem Kontrast. Das Foto zeigt dabei genau den
+   Ausschnitt der Live-Ansicht, auch wenn die Kamera selbst mehr aufnimmt.
+   Darunter stehen
+   ![Zuschneiden-Symbol](icons/crop.svg) **Ecken** (Rahmen von Hand
+   korrigieren), ![Drehen-Symbol](icons/rotate-cw.svg) **Drehen**,
+   ![Neu-aufnehmen-Symbol](icons/refresh-cw.svg) **Neu aufnehmen** und
+   ![Entfernen-Symbol](icons/trash-2.svg) **Entfernen**, darunter
+   ![Plus-Symbol](icons/plus.svg) **Seite hinzufügen** und
+   ![Haken-Symbol](icons/check.svg) **Hochladen**. Die Leiste mit den Miniaturen
+   führt zu jeder bisherigen Seite zurück; **Fertig** neben dem Auslöser springt
+   ohne weitere Aufnahme in die Vorschau.
+4. **Hochladen.** Alle Seiten werden zu **einer** PDF und gehen wie eine
+   hochgeladene Datei in die Pipeline. Hochgeladen wird erst die fertige PDF;
+   die Fotos selbst verlassen das Gerät nicht.
+
+Oben rechts wählst du **Farbe**, **Grau** oder **SW** (Schwarzweiß). Die Wahl
+gilt für alle Seiten des Scans und lässt sich in der Vorschau noch ändern; die
+Seiten werden dann neu berechnet. SW ergibt die kleinsten Dateien und eignet
+sich für reine Textseiten, Farbe für Briefköpfe, Stempel und Fotos. Bei allen
+drei Arten gleicht postbuch.net ungleichmäßiges Licht und Schatten auf dem Blatt
+aus und hebt den Kontrast an. Gibt das Gerät seine Lampe frei, schaltet das
+Taschenlampen-Symbol oben rechts sie ein. Modus und Auslöseart merkt sich postbuch.net für
+dieses Gerät.
+
+**Kamera wählen:** Das ![Zahnrad-Symbol](icons/settings.svg) Zahnrad neben
+**Auto** öffnet die Liste der Kameras des Geräts. **Automatisch** nimmt die
+Rückkamera mit der kleinsten Nummer, auf Android-Handys meist die
+Hauptkamera; ohne diese Regel griffe der Browser auch einmal zum Weitwinkel.
+Jede andere Kamera lässt sich direkt antippen; das Livebild wechselt sofort,
+sodass du gleich siehst, welches Objektiv das schärfere Bild liefert. Die
+gerade laufende Kamera ist mit **Aktiv** markiert. Solange die Liste offen
+ist, löst die Automatik nicht aus. Die Wahl gilt nur für diesen Browser.
+
+**Ecken anpassen:** Liegt der Rahmen daneben oder wurde kein Blatt erkannt,
+zeigt **Ecken** das Foto mit vier Eckpunkten. Beim Ziehen einer Ecke erscheint
+oben eine Lupe, die den Bereich unter dem Finger vergrößert. **Zurücksetzen**
+stellt den erkannten Rahmen wieder her, **Ganzes Bild** nimmt das ganze Foto,
+**Übernehmen** entzerrt die Seite neu.
+
+Jede Seite wird im PDF auf DIN-A4-Breite gesetzt und mit höchstens
+**200 dpi** gespeichert. Ein A4-Blatt hat damit 1654 × 2339 Bildpunkte, was für
+die KI-Analyse und den Ausdruck genügt und die Datei klein hält.
+
+**Etikett scannen:** Solange noch keine Seite aufgenommen ist, sucht die
+Live-Ansicht zugleich nach dem QR-Code eines
+[postbuch.net-Etiketts](etiketten-drucken.md); ein Blatt muss dafür nicht
+erkannt sein. Hältst du ein Etikett ins Bild, erscheint unten
+**Etikett P000123 erkannt** mit einem Countdown-Ring, und nach drei Sekunden
+öffnet sich das Dokument; das Etikett einer [Sammelmappe](etiketten-drucken.md#etiketten-für-sammelmappen)
+(`S000123`) öffnet die Dokumentliste dieser Sammelmappe. **Öffnen** springt sofort hin, der Ring oder ein Tipp
+ins Bild bricht ab und scannt weiter; dasselbe Etikett meldet sich dann bis zum
+nächsten Öffnen der Kamera nicht mehr. Erkannt werden ausschließlich Etiketten
+dieser Instanz: gedruckt unter der Adresse, unter der postbuch.net gerade
+läuft, oder unter einer weiteren Adresse, die der Admin
+[freigegeben](etiketten-drucken.md#etiketten-im-kamerascan) hat. Jeder andere
+QR-Code, etwa ein GiroCode auf einer Rechnung, gehört zum Papier und wird ganz
+normal mitgescannt. Beim Ersetzen der PDF eines
+Dokuments ist die Etikett-Erkennung aus.
+
+Erkennung, Entzerrung und Bildverbesserung rechnet das Gerät selbst. Dafür lädt
+postbuch.net beim ersten Öffnen einmalig eine Bildverarbeitung von rund 4 MB
+nach; danach kommt sie aus dem Browser-Cache. Die Kamera braucht eine
+verschlüsselte Verbindung (`https://`), über eine unverschlüsselte Adresse im
+Heimnetz erscheint die Karte nicht. Erprobt ist der Kamerascan mit Chrome unter
+Android; auf iPhone und iPad ist er ungetestet.
+
+Der Zurück-Knopf des Geräts bzw. das ![Schließen-Symbol](icons/x.svg) oben
+links beendet den Scan. Sind schon Seiten aufgenommen, fragt postbuch.net
+vorher, ob sie verworfen werden sollen.
+
+### Mit der Scan-Funktion der Cloud-App
+
+Die App deiner Cloudablage bringt ebenfalls einen Dokumentenscan mit. OneDrive
+und Nextcloud entzerren die abfotografierte Seite, schneiden sie zu und
+speichern sie als PDF; mehrere Seiten landen in einer Datei.
 
 Als Zielordner `<postbuch.net-Wurzelverzeichnis>/_inbox` wählen – damit läuft der
 Scan über denselben überwachten Ordner wie
@@ -77,6 +176,36 @@ Die Reihenfolge lässt sich vorher per ![Aufwärts-Symbol](icons/arrow-up.svg) /
 ![Abwärts-Symbol](icons/arrow-down.svg) Pfeiltasten ändern, der Dateiname ist
 frei wählbar. Das ist der Weg für einen Brief mit Anlagen oder ein mehrteilig
 gescanntes Schreiben.
+
+### PDFs über das Teilen-Menü übergeben
+
+Ist postbuch.net auf einem Android-Gerät
+[als App installiert](mobil-und-pwa.md#als-app-installieren-pwa), steht sie im
+**Teilen-Menü** des Geräts zur Auswahl. Eine dort geteilte PDF – etwa aus der
+Mail-App, dem Dateimanager oder dem Download-Ordner – geht **ohne weiteren
+Klick** in die Pipeline, genau wie eine per Dateiauswahl gewählte PDF im Modus
+**Batch**. postbuch.net
+[folgt dabei immer automatisch](#automatisch-folgen): Es öffnet
+![Logs-Symbol](icons/scroll-text.svg) **Logs → Jobs** und nach erfolgreicher
+Verarbeitung das neue Dokument. Mehrere geteilte PDFs werden einzeln
+verarbeitet. Einen Hinweis für die KI gibt es auf diesem Weg nicht. Andere
+Dateitypen bietet das Teilen-Menü für postbuch.net nicht an.
+
+Ist postbuch.net beim Teilen nicht erreichbar, erscheint eine eigene
+Fehlerseite: Der Server hat nicht geantwortet, die PDF wurde **nicht
+übernommen und verworfen**. Sobald die Verbindung wieder steht, die PDF
+erneut teilen.
+
+Ist die App beim Teilen nicht angemeldet, wartet die Datei bis zur Anmeldung
+und wird danach übernommen – höchstens einen Tag lang, danach verfällt sie.
+Wer nur Lesezugriff hat, bekommt eine Fehlermeldung. Erscheint der Hinweis,
+dass die Datei nicht angekommen ist, war die App auf dem Gerät noch nicht
+vollständig eingerichtet: postbuch.net einmal direkt öffnen und erneut teilen.
+
+> [!NOTE]
+>
+> Getestet ist der Weg nur unter Android. Auf iPhone und iPad bietet Safari
+> installierten Web-Apps kein Teilen-Ziel an.
 
 ## Weg 4: Scannen über „Importieren"
 
@@ -235,6 +364,43 @@ gleichzeitig. Anpassen lässt sich das unter
 Den Fortschritt siehst du live im Navigationpunkt `Logs → Jobs`. Die Seite darf
 man verlassen.
 
+### Automatisch folgen
+
+Nach einem Import kann postbuch.net selbst zu
+![Logs-Symbol](icons/scroll-text.svg) **Logs → Jobs** wechseln. Ein Kasten oben
+zeigt, was mit dem Dokument gerade passiert, darunter läuft der Job mit seinen
+Phasen. Ist die Verarbeitung erfolgreich abgeschlossen, öffnet sich nach drei
+Sekunden das neue Dokument. Ein Tipp auf den ablaufenden Ring oder eine
+beliebige Taste bricht das ab; **Dokument öffnen** führt dann von Hand hin.
+Erkennt die Pipeline ein mögliches Duplikat, wartet sie auf die Entscheidung
+unter **Offene Entscheidungen**; schlägt sie fehl, bleibt die Ansicht mit der
+Fehlermeldung stehen.
+
+Bei mehreren Dokumenten auf einmal – Batch mit mehreren Dateien, **ADF
+Stapel** – zählt der Kasten mit, wie viele fertig sind; ein Dokument
+öffnet sich dann nicht automatisch, ein Tipp auf einen Eintrag im Verlauf führt
+zum jeweiligen Dokument.
+
+Wann postbuch.net folgt:
+
+| Weg                                                                  | Folgt                                                                   |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| [Teilen-Menü](#pdfs-über-das-teilen-menü-übergeben)                  | immer                                                                   |
+| [Datei-Upload](#weg-3-datei-upload)                                  | nach dem Hochladen, wenn eingeschaltet                                  |
+| [Mit der Kamera in postbuch.net](#mit-der-kamera-in-postbuchnet)     | nach dem Hochladen, wenn „Scannen" eingeschaltet ist                    |
+| [Scannen über „Importieren"](#weg-4-scannen-über-importieren)        | sobald der Scan in der Pipeline angekommen ist, wenn eingeschaltet      |
+| Überwachter Ordner, Scan-Webhook, Scan per Knopf am Gerät            | nie – dabei schaut niemand auf die App                                  |
+
+Dateiimport und Scannen lassen sich unter
+![Einstellungen-Symbol](icons/settings.svg) **Einstellungen →
+Persönlich → Automatisch folgen beim Import** einzeln ein- und ausschalten.
+Beide sind anfangs eingeschaltet. Die Wahl gilt nur für den jeweiligen Browser,
+sodass Handy und Rechner unterschiedlich eingestellt sein können.
+
+Beim Scannen wartet die Seite `Importieren`, bis der Scanner den Scan an die
+Pipeline übergeben hat, und zeigt das an. Kommt er nach zehn Minuten noch nicht
+an, bleibt die Seite mit einem Hinweis stehen.
+
 Bei einem Cloud-Anbieter rufen die KI-Phasen den eingestellten Provider
 kostenpflichtig auf; bei einem lokal betriebenen, OpenAI-kompatiblen Anbieter
 entstehen keine externen API-Kosten pro Dokument. Ein Import umfasst
@@ -297,7 +463,8 @@ wenigen Minuten automatisch mit derselben Anweisung.
 PDF-Datei (neuer Scan derselben Sache, in besserer Qualität). Die Postnummer,
 alle Metadaten, Akten- und
 Verbleib-Zuordnungen bleiben unverändert, und es läuft **kein** KI-Lauf.
-Erreichbar über die Aktionsleiste des Dokuments. Fehlt die bisherige Datei in
+Erreichbar über die Aktionsleiste des Dokuments; die neue Datei kommt aus einem
+Scan, einem [Kamerascan](#mit-der-kamera-in-postbuchnet) oder einem Upload. Fehlt die bisherige Datei in
 der Dateiablage bereits nachweislich, heißt derselbe Knopf **Fehlende PDF
 reimportieren** (siehe
 [Wenn eine Datei endgültig fehlt](storage-backends.md#wenn-eine-datei-endgültig-fehlt)).

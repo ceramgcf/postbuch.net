@@ -3,8 +3,11 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { formatDate, formatCurrency } from '@/lib/utils';
 import { ZuordnungEditor } from './ZuordnungEditor';
 import { KuerzungEditor } from './KuerzungEditor';
+import { useDarstellung } from '@/hooks/useDarstellung';
+import { ListenZeile } from '@/components/listen/ListenZeile';
 
 export function ErstattungsbescheidDetail({ data, ausstehend }) {
+  const { istMobil } = useDarstellung();
   if (!data) {
     if (!ausstehend) return null;
     return (
@@ -61,8 +64,20 @@ export function ErstattungsbescheidDetail({ data, ausstehend }) {
           <CardHeader className="pb-3">
             <CardTitle className="text-base">Einzelpositionen</CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
-            {data.einzelpositionen.map((ep) => (
+          <CardContent className={istMobil ? 'divide-y divide-border/60' : 'space-y-4'}>
+            {data.einzelpositionen.map((ep) => istMobil ? (
+              // Mobil: ListenZeile, Zuordnung und Kürzungen darunter
+              <ListenZeile
+                key={ep.subid}
+                oben={ep.name_arzt || '–'}
+                obenRechts={<span className="text-sm font-mono">{formatCurrency(ep.rechnungsbetrag)}</span>}
+                unten={<span className="truncate">#{ep.subid}{ep.behandelte_person && ` · ${ep.behandelte_person}`}</span>}
+                untenRechts={<span className="font-mono text-green-600">erstattet {formatCurrency(ep.erstattungsbetrag)}</span>}
+              >
+                <ZuordnungEditor ebPostid={data.postid} ep={ep} />
+                <KuerzungEditor ebPostid={data.postid} ep={ep} kostentraeger={data.kostentraeger} />
+              </ListenZeile>
+            ) : (
               <div key={ep.subid} className="border rounded-lg p-3 space-y-2">
                 <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
                   <span className="font-medium">Position {ep.subid}</span>

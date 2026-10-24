@@ -9,9 +9,11 @@ import {
   MessageCircle, Plus, Trash2, Send, Bot, User,
   FileText, ChevronLeft, ChevronRight, Pencil, PencilOff, Check, X, Square,
   Undo2, AlertTriangle, FolderOpen, Brain, ChevronDown, ChevronUp,
-  BookOpen,
+  BookOpen, MessagesSquare,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
+import { useDarstellung } from '@/hooks/useDarstellung';
+import { SeitenAktionen } from '@/hooks/useSeite';
 
 // ── PostID-Links im Text rendern ──────────────────────────────────────────────
 
@@ -78,12 +80,37 @@ function renderUserRefs(text) {
   });
 }
 
-// Markdown-Tabellen-Block → echte HTML-Tabelle
+// Markdown-Tabellen-Block → echte HTML-Tabelle; mobil je Zeile ein Block mit
+// der ersten Spalte als Titel und den übrigen Spalten untereinander.
 function MarkdownTable({ rows }) {
+  const { istMobil } = useDarstellung();
   const parseCells = (line) => line.replace(/^\||\|$/g, '').split('|').map(c => c.trim());
   const header = parseCells(rows[0]);
   // rows[1] ist die |---|---|-Trennzeile, danach die Datenzeilen
   const body = rows.slice(2).map(parseCells);
+
+  if (istMobil) {
+    return (
+      <div className="my-2 divide-y divide-border/60 border-y border-border/60 text-sm">
+        {body.map((cells, ri) => {
+          // Reine Nummern („1.“) tragen allein nichts – dann mit Spaltennamen.
+          const titel = /^\d+\.?$/.test(cells[0] ?? '') ? `${header[0]} ${cells[0].replace(/\.$/, '')}` : cells[0];
+          return (
+            <div key={ri} className="py-2">
+              <p className="font-semibold">{renderWithPostidLinks(titel)}</p>
+              {cells.slice(1).map((c, ci) => c && (
+                <p key={ci} className="mt-1">
+                  <span className="text-xs text-muted-foreground">{renderWithPostidLinks(header[ci + 1] ?? '')}</span>
+                  <br />
+                  {renderWithPostidLinks(c)}
+                </p>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
 
   return (
     <div className="overflow-x-auto my-2">
@@ -173,7 +200,7 @@ function SourcesList({ sources }) {
   const navigate = useNavigate();
   if (!sources || sources.length === 0) return null;
   return (
-    <div className="mt-3 pt-2 border-t border-border/50">
+    <div className="mt-3 min-w-0 self-stretch pt-2 border-t border-border/50">
       <p className="text-[11px] font-medium text-muted-foreground mb-1">Quellen</p>
       <div className="space-y-0.5">
         {sources.map((s) => {
@@ -194,7 +221,7 @@ function SourcesList({ sources }) {
               >
                 <BookOpen className="h-3 w-3 flex-shrink-0" />
                 <span className="font-medium">Hilfe</span>
-                <span className="truncate">{kapitel}{relativerPfad ? ` · ${relativerPfad}` : ''}</span>
+                <span className="min-w-0 truncate">{kapitel}{relativerPfad ? ` · ${relativerPfad}` : ''}</span>
               </button>
             );
           }
@@ -211,9 +238,9 @@ function SourcesList({ sources }) {
               {isAkte
                 ? <FolderOpen className="h-3 w-3 flex-shrink-0" />
                 : <FileText className="h-3 w-3 flex-shrink-0" />}
-              <span className="font-mono">[{id}]</span>
-              {!isAkte && <span className="text-muted-foreground">{s.briefdatum || '?'}</span>}
-              <span className="truncate">{s.betreff || s.art || id}</span>
+              <span className="font-mono shrink-0">[{id}]</span>
+              {!isAkte && <span className="shrink-0 whitespace-nowrap text-muted-foreground">{s.briefdatum || '?'}</span>}
+              <span className="min-w-0 truncate">{s.betreff || s.art || id}</span>
             </button>
           );
         })}
@@ -574,6 +601,7 @@ export default function AssistantPage() {
   const location      = useLocation();
   const queryClient   = useQueryClient();
   const { canWrite }  = useAuth();
+  const { istMobil }  = useDarstellung();
   // Bearbeiten-Modus (Schreibaktionen des Assistenten) – pro Chat, zwischen Turns
   // umschaltbar. Standard aus: spart Tool-Overhead. Nur relevant für Schreib-Rollen.
   const [writeMode, setWriteMode] = useState(false);
@@ -583,7 +611,8 @@ export default function AssistantPage() {
   const [streaming, setStreaming] = useState(false);
   const [progress,  setProgress]  = useState(null);
   const [elapsed,   setElapsed]   = useState(0); // Sekunden seit Stream-Start (Transparenz bei langen Läufen)
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Mobil schwebt die Gesprächsliste über dem Chat und ist anfangs zu.
+  const [sidebarOpen, setSidebarOpen] = useState(!istMobil);
   const messagesEndRef   = useRef(null);
   const textareaRef      = useRef(null);
   const scrollRestoreRef = useRef(null); // Scrollposition beim Rücksprung aus Dokument
@@ -682,6 +711,7 @@ export default function AssistantPage() {
       queryClient.invalidateQueries({ queryKey: ['chat-conversations'] });
       setActiveId(conv.id);
       setMessages([]);
+      if (istMobil) setSidebarOpen(false);
     },
   });
 
@@ -860,6 +890,7 @@ export default function AssistantPage() {
     setMessages([]);
     setProgress(null);
     setWriteMode(false); // Bearbeiten-Modus ist pro Chat – beim Wechsel zurücksetzen
+    if (istMobil) setSidebarOpen(false);
   };
 
   // Bearbeiten-Modus-Umschalter (Stift) – nur für Schreib-Rollen. Aus = Assistent
@@ -886,10 +917,26 @@ export default function AssistantPage() {
   ) : null;
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="relative flex h-full overflow-hidden">
+      {istMobil && (
+        <SeitenAktionen>
+          <Button
+            variant="ghost" size="icon" onClick={() => setSidebarOpen(v => !v)}
+            aria-label="Gespräche" aria-expanded={sidebarOpen}
+            className={sidebarOpen ? 'bg-accent text-foreground' : ''}
+          >
+            <MessagesSquare className="h-5 w-5" />
+          </Button>
+        </SeitenAktionen>
+      )}
+      {istMobil && sidebarOpen && (
+        <div className="absolute inset-0 z-20 bg-black/30" onClick={() => setSidebarOpen(false)} aria-hidden />
+      )}
 
       {/* Sidebar – Konversationsliste */}
-      <div className={`flex-shrink-0 flex flex-col border-r border-border bg-background transition-all duration-200 ${sidebarOpen ? 'w-60' : 'w-0 overflow-hidden'}`}>
+      <div className={istMobil
+        ? `absolute inset-y-0 left-0 z-30 flex w-72 max-w-[85%] flex-col rounded-r-xl border-r border-border bg-background shadow-xl transition-transform duration-200 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full invisible'}`
+        : `flex-shrink-0 flex flex-col border-r border-border bg-background transition-all duration-200 ${sidebarOpen ? 'w-60' : 'w-0 overflow-hidden'}`}>
         <div className="flex items-center justify-between px-3 py-2.5 border-b border-border">
           <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Gespräche</span>
           <Button
@@ -922,21 +969,21 @@ export default function AssistantPage() {
       </div>
 
       {/* Toggle-Button Sidebar */}
-      <button
+      {!istMobil && <button
         onClick={() => setSidebarOpen(v => !v)}
         className="absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-background border border-border rounded-r-md p-1 text-muted-foreground hover:text-foreground transition-all"
         style={{ left: sidebarOpen ? 240 : 0 }}
         title={sidebarOpen ? 'Sidebar einklappen' : 'Sidebar aufklappen'}
       >
         {sidebarOpen ? <ChevronLeft className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-      </button>
+      </button>}
 
       {/* Hauptbereich */}
       <div className="flex-1 flex flex-col min-w-0">
 
         {/* Leer-State */}
         {!activeId && (
-          <div className="flex-1 flex flex-col items-center justify-center gap-4 text-center px-8">
+          <div className={`flex-1 flex flex-col items-center justify-center gap-4 text-center overflow-y-auto ${istMobil ? 'px-2 py-4' : 'px-8'}`}>
             <div className="h-14 w-14 rounded-2xl bg-muted flex items-center justify-center">
               <Bot className="h-7 w-7 text-muted-foreground" />
             </div>
@@ -970,7 +1017,7 @@ export default function AssistantPage() {
 
         {/* Nachrichtenverlauf */}
         {activeId && (
-          <div id="chat-scroll-container" className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
+          <div id="chat-scroll-container" className={`flex-1 overflow-y-auto py-4 space-y-5 ${istMobil ? 'px-1' : 'px-6'}`}>
             {messages.map((msg) => (
               msg._aborted && !msg.content
                 ? <AbortedIndicator key={msg.id} />
@@ -1002,7 +1049,7 @@ export default function AssistantPage() {
         )}
 
         {/* Eingabe */}
-        <div className="border-t border-border p-3">
+        <div className={`border-t border-border ${istMobil ? "px-0 pt-2" : "p-3"}`}>
           {!activeId && (
             <div className="flex gap-2">
               <ChatInput
@@ -1011,7 +1058,7 @@ export default function AssistantPage() {
                 onChange={setInput}
                 onSend={sendMessage}
                 disabled={streaming}
-                placeholder="Frage stellen und Enter drücken… (#P/#A referenziert Dokumente/Akten)"
+                placeholder={istMobil ? "Frage stellen (#P/#A referenziert)…" : "Frage stellen und Enter drücken… (#P/#A referenziert Dokumente/Akten)"}
               />
               {writeToggle}
               <Button
@@ -1035,7 +1082,7 @@ export default function AssistantPage() {
                 onChange={setInput}
                 onSend={sendMessage}
                 disabled={streaming}
-                placeholder="Nachricht (Enter sendet, Shift+Enter Zeilenumbruch, #P/#A referenziert)…"
+                placeholder={istMobil ? "Nachricht (#P/#A referenziert)…" : "Nachricht (Enter sendet, Shift+Enter Zeilenumbruch, #P/#A referenziert)…"}
               />
               {writeToggle}
               <Button

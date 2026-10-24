@@ -33,9 +33,10 @@ function unauthorized(res, msg = 'Ungültiges oder fehlendes Bearer-Token') {
 export async function requireBearer(req, res, next) {
   try {
     const header = req.headers.authorization || '';
-    const m = /^Bearer\s+(.+)$/i.exec(header.trim());
-    if (!m) return unauthorized(res);
-    const token = m[1].trim();
+    // Ohne Regex: `\s+(.+)` wäre bei langen Leerzeichenfolgen polynomiell.
+    const trimmed = header.trim();
+    if (!/^Bearer\s/i.test(trimmed)) return unauthorized(res);
+    const token = trimmed.slice(7).trim();
     if (!token) return unauthorized(res);
 
     const tokenHash = createHash('sha256').update(token).digest('hex');

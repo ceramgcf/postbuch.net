@@ -10,7 +10,9 @@ import { useAuth } from '@/hooks/useAuth';
 import { useUndoHistory } from '@/hooks/useUndoHistory';
 import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
-import { Trash2, RefreshCw, CheckCheck, Banknote, AlertTriangle, Archive, FileUp, MessageCircle } from 'lucide-react';
+import { Trash2, RefreshCw, CheckCheck, Banknote, AlertTriangle, Archive, FileUp, MessageCircle, MoreHorizontal } from 'lucide-react';
+import { useDarstellung } from '@/hooks/useDarstellung';
+import { cn } from '@/lib/utils';
 import { useNavigate } from 'react-router';
 
 // Auswahl der Modellstufe bei der Wiederverarbeitung. 'auto' = normales
@@ -26,6 +28,8 @@ const MODEL_TIER_OPTIONS = [
 
 export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, isHistorisch, hatPdf = true, onReprocessComplete, backTo }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [mehrOffen, setMehrOffen] = useState(false);
+  const { istMobil } = useDarstellung();
   const [reprocessOpen, setReprocessOpen] = useState(false);
   const [replaceOpen, setReplaceOpen] = useState(false);
   const [instructions, setInstructions] = useState('');
@@ -268,6 +272,20 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
     </Button>
   );
 
+  // Mobil: Freigabe (und ggf. Bezahlt) bleiben sichtbar, alles Weitere liegt
+  // im „Mehr“-Sheet – fünf Knopfzeilen über den Metadaten wären zu viel.
+  const mehrEintraege = [
+    { icon: MessageCircle, label: 'Im Chat besprechen', onClick: () => navigate('/assistent', { state: { prefill: `#${postid} ` } }) },
+    { icon: Archive, label: isHistorisch ? 'Historisch-Markierung entfernen' : 'Archivieren', onClick: handleToggleHistorisch },
+    {
+      icon: RefreshCw, label: 'Wiederverarbeiten', onClick: () => setReprocessOpen(true),
+      disabled: !!reprocessSchutz?.geschuetzt,
+      hinweis: reprocessSchutz?.geschuetzt ? `Gesperrt: ${reprocessSchutz.gruende.join('; ')}` : null,
+    },
+    { icon: FileUp, label: hatPdf ? 'PDF ersetzen' : 'Fehlende PDF reimportieren', onClick: () => setReplaceOpen(true) },
+    { icon: Trash2, label: 'Löschen', onClick: () => setDeleteOpen(true), gefahr: true },
+  ];
+
   // Read-only users see no write buttons at all
   if (!canWrite) {
     // Nur eigene Dokumente: kein Assistent, also auch kein Chat-Einstieg.
@@ -277,6 +295,35 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
 
   return (
     <>
+      {istMobil ? (
+        <div className="flex items-center gap-2">
+          <Button
+            variant={freigabeVariant}
+            size="sm"
+            onClick={handleGrantUserClearance}
+            disabled={isUserClearance || statusMutation.isPending}
+            className={cn('h-10 flex-1', freigabeClass)}
+          >
+            <CheckCheck className="h-4 w-4 mr-1" />
+            {isUserClearance ? 'Freigabe erteilt' : 'Freigabe erteilen'}
+          </Button>
+          {hasRechnung && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleMarkPaid}
+              disabled={paidMutation.isPending || isBezahlt}
+              className={cn('h-10 flex-1', isBezahlt && 'opacity-50')}
+            >
+              <Banknote className="h-4 w-4 mr-1" />
+              {isBezahlt ? 'Bezahlt' : 'Bezahlt markieren'}
+            </Button>
+          )}
+          <Button variant="outline" size="sm" className="h-10 w-10 shrink-0 p-0" onClick={() => setMehrOffen(true)} aria-label="Weitere Aktionen">
+            <MoreHorizontal className="h-5 w-5" />
+          </Button>
+        </div>
+      ) : (
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         {/* Gruppe 1 – Workflow-Status */}
         <div className="flex items-center gap-2 flex-wrap">
@@ -366,6 +413,30 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
           </Button>
         </div>
       </div>
+      )}
+
+      <Dialog open={mehrOffen} onOpenChange={setMehrOffen}>
+        <DialogTitle>Aktionen für {postid}</DialogTitle>
+        <div className="mt-3 -mx-1">
+          {mehrEintraege.map(({ icon: Icon, label, onClick, disabled, hinweis, gefahr }) => (
+            <button
+              key={label}
+              disabled={disabled}
+              onClick={() => { setMehrOffen(false); onClick(); }}
+              className={cn(
+                'flex w-full items-center gap-3 rounded-lg px-3 py-3 text-left text-[15px] active:bg-muted disabled:opacity-50',
+                gefahr && 'text-destructive',
+              )}
+            >
+              <Icon className="h-5 w-5 shrink-0" />
+              <span className="flex-1">
+                {label}
+                {hinweis && <span className="block text-xs text-muted-foreground">{hinweis}</span>}
+              </span>
+            </button>
+          ))}
+        </div>
+      </Dialog>
 
       {/* Delete Confirm Dialog */}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>

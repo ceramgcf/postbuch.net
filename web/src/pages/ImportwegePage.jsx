@@ -123,11 +123,13 @@ export default function ImportwegePage() {
 
         <Weg icon={Smartphone} art="Papier" titel="Mit dem Smartphone abfotografieren">
           <p>
-            Die App deiner Cloudablage kann Dokumente scannen: In OneDrive und Nextcloud gibt es dafür
-            einen Dokumentenscan, der die Seite entzerrt, zuschneidet und als PDF speichert – mehrere
-            Seiten kommen in eine Datei.
+            Am einfachsten direkt in postbuch.net: Auf der Seite Importieren öffnet „Mit Kamera scannen“
+            die Kamera des Handys. Das Gerät erkennt das Blatt, entzerrt es und verbessert den Kontrast;
+            mehrere Seiten werden zu einer PDF und gehen ohne Umweg in die Pipeline.
           </p>
           <p>
+            Alternativ kann die App deiner Cloudablage Dokumente scannen: In OneDrive und Nextcloud gibt
+            es dafür einen Dokumentenscan, der die Seite entzerrt, zuschneidet und als PDF speichert.
             Als Ziel {inbox ? <>den Ordner <Pfad>{inbox}</Pfad></> : <>den Ordner <Pfad>_inbox</Pfad></>} wählen.
             Damit läuft der Scan über denselben überwachten Ordner wie oben – ohne Scanner im Haus.
           </p>
@@ -143,6 +145,10 @@ export default function ImportwegePage() {
             <em>einem</em> Dokument zusammen (Reihenfolge änderbar) – für ein Schreiben, das in Teilen
             vorliegt. <strong className="text-foreground">Batch</strong> verarbeitet jede Datei einzeln,
             jede bekommt ihre eigene Postnummer.
+          </p>
+          <p>
+            Auf Android-Geräten mit installierter App geht es noch kürzer: PDF im Teilen-Menü an
+            postbuch.net schicken – sie landet ohne weiteren Klick in der Pipeline.
           </p>
         </Weg>
 

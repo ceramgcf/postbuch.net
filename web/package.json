@@ -10,9 +10,10 @@
   },
   "dependencies": {
     "@mmote/niimbluelib": "0.47.1",
-    "@tanstack/react-query": "^5.62.0",
+    "@tanstack/react-query": "^5.104.4",
+    "@techstark/opencv-js": "5.0.0-release.1",
     "clsx": "^2.1.1",
-    "lucide-react": "^1.17.0",
+    "lucide-react": "^1.59.0",
     "qrcode": "^1.5.4",
     "qrcode.react": "^4.2.0",
     "react": "^19.0.0",
@@ -28,7 +29,7 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.1.2",
-    "postcss": "^8.5.18",
+    "postcss": "^8.5.31",
     "tailwindcss": "^4.3.3",
     "vite": "^8.3.4"
   }

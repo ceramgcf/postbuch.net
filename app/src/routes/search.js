@@ -57,7 +57,7 @@ async function idLookupAkten(idq) {
 // Provider-Wechsel hätte die Suche still gebrochen.
 // Gibt { literal, signature } zurück oder null, wenn kein Provider konfiguriert ist.
 async function sucheEmbedding(text, username) {
-  const erg = await embedText(text, null, { username, kategorie: 'search' });
+  const erg = await embedText(text, null, { username, kategorie: 'search', rolle: 'anfrage' });
   return erg ? { literal: erg.literal, signature: erg.signature } : null;
 }
 

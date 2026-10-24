@@ -194,7 +194,7 @@ web_bestaetigung_bis() {
 }
 
 heartbeat() {
-    local schreibbar lan scanner_profil=false bis bestaetigung=null
+    local schreibbar lan scanner_profil=false embedding_profil=false bis bestaetigung=null
     schreibbar=$(schreibbar_pruefen)
     [[ "$schreibbar" == "true" ]] || return 0
     lan=$(lan_json)
@@ -202,18 +202,23 @@ heartbeat() {
       && grep -Eq '^COMPOSE_PROFILES=([^,]*,)*scanner(,|$)' "$INSTALL_DIR/.env" 2>/dev/null; then
         scanner_profil=true
     fi
+    if [[ -f "$INSTALL_DIR/.env" ]] \
+      && grep -Eq '^COMPOSE_PROFILES=([^,]*,)*embedding(,|$)' "$INSTALL_DIR/.env" 2>/dev/null; then
+        embedding_profil=true
+    fi
     bis=$(web_bestaetigung_bis)
     [[ -n "$bis" ]] && bestaetigung="\"$(date -u -d "@$bis" '+%Y-%m-%dT%H:%M:%SZ')\""
     atomar_schreiben "$AGENT_JSON" <<EOF
 {
   "version": $PROTOKOLL,
-  "agentVersion": "2.4",
-  "capabilities": ["update", "zielversion", "netzwerk", "module", "port", "freigabe", "postgres-umzug"],
+  "agentVersion": "2.5",
+  "capabilities": ["update", "zielversion", "netzwerk", "module", "embedding", "port", "freigabe", "postgres-umzug"],
   "modus": "$AGENT_MODE",
   "docker": "${DOCKER_ART:-null}",
   "letzterLaufAm": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
   "schreibbar": $schreibbar,
   "scannerProfilAktiv": $scanner_profil,
+  "embeddingProfilAktiv": $embedding_profil,
   "lan": $lan,
   "freigaben": { "scanner": "$(bind_lesen SCANNER_BIND)", "web": "$(bind_lesen WEB_BIND)" },
   "webBestaetigungBis": $bestaetigung

@@ -1,4 +1,6 @@
 import { useId, useState, useMemo } from 'react';
+import { ListenZeile, punkt } from '@/components/listen/ListenZeile';
+import { Clock } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDashboardStats } from '@/hooks/usePostbuch';
@@ -18,6 +20,38 @@ import PendingDecisionsCard from '@/components/dashboard/PendingDecisionsCard';
 import FailedDocumentsCard from '@/components/dashboard/FailedDocumentsCard';
 import PersonenFilter, { useDashboardPersonenFilter } from '@/components/dashboard/PersonenFilter';
 import { MODEL_CLASSES } from '@/components/settings/modelClasses';
+import { useDarstellung } from '@/hooks/useDarstellung';
+
+/** Begonnene, noch nicht bestätigte Abrechnung – führt in den Assistenten zurück. */
+function OffeneAbrechnungBanner() {
+  const { canWrite } = useAuth();
+  const { data } = useQuery({
+    queryKey: ['abrechnungsperiode', 'sessions'],
+    queryFn: () => api.abrechnungsperiode.sessions(),
+    staleTime: 60_000,
+    enabled: canWrite,
+  });
+  const offen = data?.sessions?.[0];
+  if (!canWrite || !offen) return null;
+  const gruppen = offen.groups ?? [];
+  const beschreibung = [...new Set(gruppen.map((g) => [g.kostentraeger, ...(g.persons ?? [])].filter(Boolean).join(' · ')))].join(', ');
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 dark:border-amber-800 dark:bg-amber-950/30">
+      <Clock className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-400" />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-amber-900 dark:text-amber-200">Offene Abrechnung</p>
+        {beschreibung && <p className="mt-0.5 truncate text-xs text-amber-800/80 dark:text-amber-300/80">{beschreibung}</p>}
+      </div>
+      <Link
+        to="/analyse/perioden" state={{ abrechnungFortsetzen: offen.id }}
+        className="shrink-0 rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700"
+      >
+        Fortsetzen
+      </Link>
+    </div>
+  );
+}
 
 function BackupBanner() {
   const { isAdmin } = useAuth();
@@ -706,6 +740,7 @@ export default function DashboardPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { isAdmin } = useAuth();
+  const { istMobil } = useDarstellung();
   const personenFilter = useDashboardPersonenFilter();
   const personenAuswahl = personenFilter.auswahl.length ? personenFilter.auswahl : null;
   const { data, isLoading, error } = useDashboardStats(personenAuswahl, personenFilter.bereit);
@@ -803,6 +838,8 @@ export default function DashboardPage() {
         <p className="text-muted-foreground mt-1">Übersicht über alle Dokumente und Aktivitäten.</p>
       </div>
 
+      <OffeneAbrechnungBanner />
+
       {/* Personenfilter: wirkt nur auf die Kennzahlen und Listen dieses Dashboards */}
       <PersonenFilter filter={personenFilter} />
 
@@ -892,7 +929,7 @@ export default function DashboardPage() {
               <Link to="/analyse/wiedervorlagen" className="text-xs text-primary hover:underline">Alle WV →</Link>
             </div>
           </CardHeader>
-          <CardContent className="relative">
+          <CardContent className="relative @container">
             <div className="space-y-0">
               {wvDashboard.map((wv) => {
                 const today = new Date();
@@ -905,6 +942,19 @@ export default function DashboardPage() {
                 const refId = wv.postid || wv.akteid;
                 const linkTo = wv.postid ? `/postbuch/${wv.postid}` : `/akten/${wv.akteid}`;
                 const betreff = wv.post_betreff || wv.akte_betreff || '–';
+                const datumKlasse = isOverdue ? 'text-red-600 font-bold' : isDueToday ? 'text-amber-600 font-bold' : 'text-muted-foreground';
+
+                if (istMobil) {
+                  return (
+                    <ListenZeile
+                      key={wv.wv_id} to={linkTo}
+                      className={`border-b border-border/50 last:border-0 ${isOverdue ? 'bg-red-50/50' : isDueToday ? 'bg-amber-50/50' : ''}`}
+                      oben={betreff}
+                      obenRechts={<span className={`font-mono text-xs tabular-nums ${datumKlasse}`}>{formatDate(wv.faellig_am)}</span>}
+                      unten={<><span className="shrink-0 font-mono">{refId}</span>{wv.aktion && <>{punkt}<span className="truncate text-amber-700">{wv.aktion}</span></>}</>}
+                    />
+                  );
+                }
 
                 return (
                   <Link
@@ -940,7 +990,7 @@ export default function DashboardPage() {
           />
         </div>
         <CardHeader className="pb-3 relative">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <CardTitle className="text-base font-semibold">Letzte Einträge</CardTitle>
             <div className="flex items-center bg-muted rounded-full p-0.5 text-xs shrink-0">
               <button onClick={() => handleSortChange('postid')} className={`px-2.5 py-0.5 rounded-full transition-all ${sortMode === 'postid' ? 'bg-background shadow text-foreground font-medium' : 'text-muted-foreground hover:text-foreground'}`}>nach PostID</button>
@@ -948,9 +998,19 @@ export default function DashboardPage() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="relative">
+        <CardContent className="relative @container">
           <div className="space-y-0">
-            {sortedEintraege.map((entry, idx) => (
+            {sortedEintraege.map((entry, idx) => istMobil ? (
+              <ListenZeile
+                key={entry.postid} to={`/postbuch/${entry.postid}`}
+                state={{ from: location.pathname, navList: sortedEintraege, navIndex: idx }}
+                className="border-b border-border/50 last:border-0"
+                oben={entry.betreff || '–'}
+                obenRechts={<span className="text-xs text-muted-foreground tabular-nums">{formatDate(entry.briefdatum)}</span>}
+                unten={<><span className="shrink-0 font-mono">{entry.postid}</span>{entry.kontakt && <>{punkt}<span className="truncate">{entry.kontakt}</span></>}</>}
+                untenRechts={<><LebensbereichBadge lebensbereich={entry.lebensbereich} compact /><ArtBadge art={entry.dokumentart || entry.art} /></>}
+              />
+            ) : (
               <Link key={entry.postid} to={`/postbuch/${entry.postid}`} state={{ from: location.pathname, navList: sortedEintraege, navIndex: idx }} className="flex items-center gap-3 px-2 py-1.5 rounded-lg hover:bg-primary/[0.04] transition-colors">
                 <span className="font-mono text-xs text-muted-foreground w-16 tabular-nums shrink-0">{entry.postid}</span>
                 <LebensbereichBadge lebensbereich={entry.lebensbereich} compact />
@@ -979,9 +1039,9 @@ export default function DashboardPage() {
               )}
             </div>
           </CardHeader>
-          <CardContent className="relative">
+          <CardContent className="relative @container">
             {!selectedLebensbereich ? (
-              <div className="grid grid-cols-2 gap-x-2.5 gap-y-0">
+              <div className="grid grid-cols-1 @md:grid-cols-2 gap-x-2.5 gap-y-0">
                 {Object.entries(stats.nachLebensbereich || {}).map(([lebensbereich, count]) => (
                   <button type="button" key={lebensbereich} onClick={() => setSelectedLebensbereich(lebensbereich)} className="flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-primary/[0.04] transition-colors">
                     <LebensbereichBadge lebensbereich={lebensbereich} />
@@ -990,7 +1050,7 @@ export default function DashboardPage() {
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-x-2.5 gap-y-0">
+              <div className="grid grid-cols-1 @md:grid-cols-2 gap-x-2.5 gap-y-0">
                 <button type="button" onClick={() => openPostbuch({ lebensbereich: selectedLebensbereich })} className="flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-primary/[0.04] transition-colors">
                   <span className="inline-flex h-6 items-center rounded-md border border-zinc-950 bg-zinc-950 px-2.5 text-xs font-semibold text-white">Alle Dokumenttypen</span>
                   <span className="text-sm font-mono font-semibold tabular-nums">{stats.nachLebensbereich?.[selectedLebensbereich] || 0}</span>
@@ -1027,9 +1087,9 @@ export default function DashboardPage() {
               )}
             </div>
           </CardHeader>
-          <CardContent className="relative">
+          <CardContent className="relative @container">
             {!selectedDokumentart ? (
-              <div className="grid grid-cols-2 gap-x-2.5 gap-y-0">
+              <div className="grid grid-cols-1 @md:grid-cols-2 gap-x-2.5 gap-y-0">
                 {Object.entries(stats.nachArt || {}).map(([art, count]) => (
                   <button type="button" key={art} onClick={() => setSelectedDokumentart(art)} className="flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-primary/[0.04] transition-colors">
                     <ArtBadge art={art} />
@@ -1038,7 +1098,7 @@ export default function DashboardPage() {
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-2 gap-x-2.5 gap-y-0">
+              <div className="grid grid-cols-1 @md:grid-cols-2 gap-x-2.5 gap-y-0">
                 <button type="button" onClick={() => openPostbuch({ dokumentart: selectedDokumentart })} className="flex items-center justify-between px-2 py-1.5 rounded-lg hover:bg-primary/[0.04] transition-colors">
                   <span className="inline-flex h-6 items-center rounded-md border border-zinc-950 bg-zinc-950 px-2.5 text-xs font-semibold text-white">Alle Lebensbereiche</span>
                   <span className="text-sm font-mono font-semibold tabular-nums">{stats.nachArt?.[selectedDokumentart] || 0}</span>
@@ -1074,7 +1134,7 @@ export default function DashboardPage() {
               <Link to="/analyse/salden" className="text-xs text-primary hover:underline">Alle Salden →</Link>
             </div>
           </CardHeader>
-          <CardContent className="relative">
+          <CardContent className="relative @container">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {salden.map((s) => {
                 const val = parseFloat(s.aktueller_saldo) || 0;
@@ -1115,9 +1175,17 @@ export default function DashboardPage() {
               <Link to="/akten" className="text-xs text-primary hover:underline">Alle Akten →</Link>
             </div>
           </CardHeader>
-          <CardContent className="relative">
-            <div className="grid grid-cols-2 gap-x-2.5 gap-y-0">
-              {stats.letzteAkten.map((akte) => (
+          <CardContent className="relative @container">
+            <div className="grid grid-cols-1 @md:grid-cols-2 gap-x-2.5 gap-y-0">
+              {stats.letzteAkten.map((akte) => istMobil ? (
+                <ListenZeile
+                  key={akte.akteid} to={`/akten/${akte.akteid}`}
+                  className="border-b border-border/50 last:border-0 @md:[&:nth-last-child(2):nth-child(odd)]:border-0"
+                  oben={akte.betreff}
+                  obenRechts={<span className="text-xs font-semibold tabular-nums">{akte.dok_count} Dok.</span>}
+                  unten={<><span className="shrink-0 font-mono">{akte.akteid}</span>{punkt}<span>{formatDate(akte.updated_at)}</span></>}
+                />
+              ) : (
                 <Link
                   key={akte.akteid}
                   to={`/akten/${akte.akteid}`}

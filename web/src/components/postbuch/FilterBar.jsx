@@ -456,7 +456,7 @@ export function FilterBar({ filters, onChange, onClose, showHistorisch }) {
               onChange={(e) => update('verbleib_ablage_id', e.target.value)}
               className={cn(filters.verbleib_ablage_id && 'border-primary/60 bg-primary/5 text-primary font-medium')}
             >
-              <option value="">Alle Ablagen dieser Kategorie</option>
+              <option value="">Alle Sammelmappen dieser Kategorie</option>
               {ablagen.map((a) => (
                 <option key={a.id} value={a.id}>{a.name}</option>
               ))}

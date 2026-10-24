@@ -58,7 +58,7 @@ import { buildReferenceContext } from './chat-references.js';
 import { searchHelp } from './help-corpus.js';
 import pool from '../db.js';
 import { ermittleZahlungslage } from './rechnung-zahlung.js';
-import { ladeErsetzung } from './rechnung-ersetzung.js';
+import { ladeErsetzung, ladeErsetzungen, ersetzungsHinweis } from './rechnung-ersetzung.js';
 
 // Endpunkte kommen aus der Provider-Registry (lib/llm/registry.js) — der
 // Chat-Agent behält bewusst seinen eigenen Request-Builder (19 Tools, 12 Runden,
@@ -449,7 +449,7 @@ async function toolSearchDocuments({ query, art, datum_von, datum_bis, limit = 1
   // kein Provider konfiguriert, greift der Volltext-Zweig.
   let embedding = null;
   try {
-    embedding = await embedText(query, settings, { kategorie: 'chat' });
+    embedding = await embedText(query, settings, { kategorie: 'chat', rolle: 'anfrage' });
   } catch { /* Fallback auf Volltext */ }
 
   // Filter-Bedingungen unabhängig vom Query-Typ vorbereiten — Haupt- und
@@ -522,6 +522,9 @@ async function toolSearchDocuments({ query, art, datum_von, datum_bis, limit = 1
   }
 
   const truncated = totalCount > rows.length;
+  // Ersetzte Rechnungen kennzeichnen, sonst zählt ein Treffer mit altem
+  // Betrag als gültig (oder doppelt neben der Korrekturrechnung).
+  const ersetzungen = await ladeErsetzungen(pool, rows.map(r => r.postid));
   return {
     count: rows.length,
     total_count: totalCount,
@@ -540,16 +543,19 @@ async function toolSearchDocuments({ query, art, datum_von, datum_bis, limit = 1
       familienmitglied: r.familienmitglied,
       richtung: r.richtung,
       similarity: r.similarity ? Math.round(Number(r.similarity) * 100) / 100 : null,
+      ...(ersetzungen.get(r.postid) ?? {}),
     })),
   };
 }
 
 async function toolGetDocumentText({ postid, frage }, settings, meta) {
+  const ersetzung_hinweis = await ersetzungsHinweis(pool, postid);
   // Cache-Fast-Path zuerst: bei Treffer entfällt der PDF-Download komplett.
   const cached = await serveCachedText(postid, frage).catch(() => null);
   if (cached) {
     return {
       postid,
+      ersetzung_hinweis,
       text: cached.text,
       method: cached.method,
       pageCount: cached.pageCount,
@@ -563,6 +569,7 @@ async function toolGetDocumentText({ postid, frage }, settings, meta) {
   const result = await extractDocumentText(postid, pdf, { textQuestion: frage, settings, meta });
   return {
     postid,
+    ersetzung_hinweis,
     text: result.text,
     method: result.method,
     pageCount: result.pageCount,
@@ -580,6 +587,7 @@ async function toolGetDocumentPdfVision({ postid, question }, settings, meta) {
   return {
     postid,
     question,
+    ersetzung_hinweis: await ersetzungsHinweis(pool, postid),
     answer: result.text,
     method: result.method,
     pageCount: result.pageCount,
@@ -711,7 +719,7 @@ async function toolSearchAkten({ query: q, limit = 15 }, settings) {
 
   let embedding = null;
   try {
-    embedding = await embedText(q, settings, { kategorie: 'chat' });
+    embedding = await embedText(q, settings, { kategorie: 'chat', rolle: 'anfrage' });
   } catch { /* Fallback auf Volltext */ }
 
   const tsExpr = `to_tsvector('german', COALESCE(a.betreff,'') || ' ' || COALESCE(a.beschreibung,'') || ' ' || COALESCE(array_to_string(a.schlagwoerter, ' '),''))`;
@@ -1222,11 +1230,12 @@ Vorgehensweise:
 2. Für Details zu einzelnen Treffern IMMER ZUERST get_document_metadata nachladen — liefert Notiz, bestrittenen/gekürzten Betrag, Fälligkeit, Aktenzugehörigkeit, Wiedervorlagen UND bei Arztrechnungen/Erstattungsbescheiden bereits ALLE Einzelpositionen (Ziffer, Leistung, Faktor, Betrag). Bei Fragen zu Rechnungspositionen, Doppelabrechnungen oder Beanstandungen ist das oft schon ausreichend, ohne dass ein Dokument überhaupt geöffnet werden muss.
 3. Für konkrete Werte aus dem Dokumenttext selbst, die get_document_metadata nicht liefert: nutze get_document_text für textbasierte Dokumente — gib dabei "frage" mit, wenn schon klar ist, worauf es ankommt.
 4. Für tabellenreiche Dokumente ohne strukturierte Einzelpositionen (Gehaltsabrechnung/Bezügemitteilung, Kontoauszug, Steuerbescheid) oder wenn Metadaten und Text unzureichend sind: nutze get_document_pdf_vision mit einer gezielten Frage.
-5. Handeln statt anbieten: Vermutest du, dass ein Dokument über Betreff/Zusammenfassung/Metadaten hinaus weitere fragerelevante Werte enthalten könnte — z.B. weil Zusammenfassung/Metadaten nur EIN Feld nennen (etwa "zu versteuerndes Einkommen" bei einem Steuerbescheid), obwohl das Dokument seiner Art nach typischerweise noch mehr enthält (z.B. auch den Bruttoarbeitslohn) — dann PRÜFE das Dokument in DERSELBEN Antwort per get_document_text/get_document_pdf_vision, statt die Lücke nur zu beschreiben oder anzubieten, sie bei Bedarf später zu prüfen. Nur wenn das Abrufslimit (Punkt 7) bereits erschöpft ist, im Abschlussbericht explizit benennen, was ungeprüft blieb.
+5. Handeln statt anbieten: Vermutest du, dass ein Dokument über Betreff/Zusammenfassung/Metadaten hinaus weitere fragerelevante Werte enthalten könnte — z.B. weil Zusammenfassung/Metadaten nur EIN Feld nennen (etwa "zu versteuerndes Einkommen" bei einem Steuerbescheid), obwohl das Dokument seiner Art nach typischerweise noch mehr enthält (z.B. auch den Bruttoarbeitslohn) — dann PRÜFE das Dokument in DERSELBEN Antwort per get_document_text/get_document_pdf_vision, statt die Lücke nur zu beschreiben oder anzubieten, sie bei Bedarf später zu prüfen. Nur wenn das Abrufslimit (Punkt 8) bereits erschöpft ist, im Abschlussbericht explizit benennen, was ungeprüft blieb.
 6. Prüfe bei jedem search_documents-Ergebnis das Feld "note": ist es gesetzt, gibt es weitere (auch ältere) Treffer als angezeigt. Bei Fragen nach Vollständigkeit oder Entwicklung über die Zeit ("alle X", "wie hat sich X entwickelt", "seit wann") erneut mit höherem limit oder datum_von/datum_bis suchen, statt dich auf die ersten Treffer zu verlassen.
 7. Rufe mehrere Tools PARALLEL auf, wenn du mehrere Dokumente laden willst.
 8. Max. ${MAX_TOOL_CALLS} Dokument-Abrufe (get_document_text + get_document_pdf_vision zusammen).
 9. Für Fristen/Termine: list_wiedervorlagen (offene Wiedervorlagen/Erinnerungen bis zu einem Stichtag) und list_faelligkeiten (offene, fällige Rechnungen) liefern diese Listen direkt aus der Datenbank — nutze sie bei Fragen nach „was steht an", „Wiedervorlagen", „Fristen", „was ist fällig", „offene Rechnungen" statt einer Dokumentensuche. Die Einträge tragen ihre Post-/AkteID (im Text als [Pxxxxxx]/[Axxxxxx] zitieren).
+10. Korrekturrechnungen: Trägt ein Dokument "ersetzt_durch" oder einen "ersetzung_hinweis", ist es durch eine Korrekturrechnung ersetzt und erledigt. Sein Inhalt ist überholt: Für Beträge, Summen, Zahlungen und offene Posten zählt nur die Korrekturrechnung, nie beide. Nenne die Ersetzung in der Antwort.
 
 ${aktenBlock}
 
@@ -1768,12 +1777,13 @@ Vorgehensweise:
 2. Für Details zu einzelnen Treffern IMMER ZUERST get_document_metadata nachladen — liefert Notiz, bestrittenen/gekürzten Betrag, Fälligkeit, Aktenzugehörigkeit, Wiedervorlagen UND bei Arztrechnungen/Erstattungsbescheiden bereits ALLE Einzelpositionen (Ziffer, Leistung, Faktor, Betrag). Bei Fragen zu Rechnungspositionen, Doppelabrechnungen oder Beanstandungen ist das oft schon ausreichend, ohne dass ein Dokument überhaupt geöffnet werden muss.
 3. Für konkrete Werte aus dem Dokumenttext selbst, die get_document_metadata nicht liefert: nutze get_document_text für textbasierte Dokumente — gib dabei "frage" mit, wenn schon klar ist, worauf es ankommt.
 4. Für tabellenreiche Dokumente ohne strukturierte Einzelpositionen (Gehaltsabrechnung, Kontoauszug, Steuerbescheid) oder wenn Metadaten und Text unzureichend sind: nutze get_document_pdf_vision mit einer gezielten Frage.
-5. Handeln statt anbieten: Vermutest du, dass ein Dokument über Betreff/Zusammenfassung/Metadaten hinaus weitere fragerelevante Werte enthalten könnte — z.B. weil Zusammenfassung/Metadaten nur EIN Feld nennen (etwa "zu versteuerndes Einkommen" bei einem Steuerbescheid), obwohl das Dokument seiner Art nach typischerweise noch mehr enthält (z.B. auch den Bruttoarbeitslohn) — dann PRÜFE das Dokument in DERSELBEN Antwort per get_document_text/get_document_pdf_vision, statt die Lücke nur zu beschreiben oder im Abschlussbericht anzubieten, sie bei Bedarf später zu prüfen. Nur wenn das Abrufslimit (Punkt 8) bereits erschöpft ist, im Abschlussbericht explizit benennen, was ungeprüft blieb.
+5. Handeln statt anbieten: Vermutest du, dass ein Dokument über Betreff/Zusammenfassung/Metadaten hinaus weitere fragerelevante Werte enthalten könnte — z.B. weil Zusammenfassung/Metadaten nur EIN Feld nennen (etwa "zu versteuerndes Einkommen" bei einem Steuerbescheid), obwohl das Dokument seiner Art nach typischerweise noch mehr enthält (z.B. auch den Bruttoarbeitslohn) — dann PRÜFE das Dokument in DERSELBEN Antwort per get_document_text/get_document_pdf_vision, statt die Lücke nur zu beschreiben oder im Abschlussbericht anzubieten, sie bei Bedarf später zu prüfen. Nur wenn das Abrufslimit (Punkt 7) bereits erschöpft ist, im Abschlussbericht explizit benennen, was ungeprüft blieb.
 6. Rufe mehrere Tools PARALLEL in einer Antwort auf, wenn du mehrere Dokumente laden willst — das spart Runden.
 7. Max. ${MAX_TOOL_CALLS} Dokument-Abrufe (get_document_text + get_document_pdf_vision zusammen), max. ${MAX_AGENT_ROUNDS} Runden.
 8. Prüfe bei jedem search_documents-Ergebnis das Feld "note": ist es gesetzt, gibt es weitere (auch ältere) Treffer als angezeigt. Bei Fragen nach Vollständigkeit oder Entwicklung über die Zeit ("alle X", "wie hat sich X entwickelt", "seit wann") erneut mit höherem limit oder datum_von/datum_bis suchen, statt dich auf die ersten Treffer zu verlassen.
 9. Für Fristen/Termine: list_wiedervorlagen (offene Wiedervorlagen/Erinnerungen bis zu einem Stichtag) und list_faelligkeiten (offene, fällige Rechnungen) liefern diese Listen direkt aus der Datenbank — nutze sie bei Fragen nach „was steht an", „Wiedervorlagen", „Fristen", „was ist fällig", „offene Rechnungen" statt einer Dokumentensuche. Die Einträge tragen ihre Post-/AkteID.
-10. Wenn du genug Informationen hast: Produziere einen strukturierten Forschungsbericht als Text.
+10. Korrekturrechnungen: Trägt ein Dokument "ersetzt_durch" oder einen "ersetzung_hinweis", ist es durch eine Korrekturrechnung ersetzt und erledigt. Sein Inhalt ist überholt: Für Beträge, Summen, Zahlungen und offene Posten zählt nur die Korrekturrechnung, nie beide. Nenne die Ersetzung in der Antwort.
+11. Wenn du genug Informationen hast: Produziere einen strukturierten Forschungsbericht als Text.
 
 Format deines Abschlussberichts:
 - Liste Archivfakten mit jeweiliger PostID in Klammern; Hilfefakten mit Kapitel und Abschnitt

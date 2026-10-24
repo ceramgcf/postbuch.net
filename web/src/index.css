@@ -100,8 +100,16 @@ body {
   from { stroke-dashoffset: 0; }
   to { stroke-dashoffset: 106.8; }
 }
+.animate-countdown-bar {
+  animation: countdown-bar 3s linear forwards;
+}
+@keyframes countdown-bar {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
 @media (prefers-reduced-motion: reduce) {
   .animate-countdown-drain { animation: none; }
+  .animate-countdown-bar { animation: none; }
 }
 
 /* Card hover lift */
@@ -167,4 +175,37 @@ body {
      einzigen, über alle Zeilen gestreckten Strich statt einen pro Zeile. */
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
+}
+
+/* Mobil-Layout im Querformat (Kopfleiste einzeilig, Karten zweispaltig).
+   Nur im Mobil-Layout verwenden – dort ist die Breite ohnehin < 1024 px. */
+@custom-variant quer (@media (orientation: landscape));
+
+/* Die App hat nur ein helles Design. dark:-Klassen greifen deshalb nur unter
+   einer .dark-Klasse und nicht über das Systemdesign des Geräts. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Abstände für Notch und Gestenleiste (wirken nur mit viewport-fit=cover). */
+@utility pt-safe { padding-top: env(safe-area-inset-top, 0px); }
+@utility pb-safe { padding-bottom: env(safe-area-inset-bottom, 0px); }
+@utility px-safe {
+  padding-left: max(env(safe-area-inset-left, 0px), 0.75rem);
+  padding-right: max(env(safe-area-inset-right, 0px), 0.75rem);
+}
+
+/* Mobil-Layout: Seitenränder setzt die AppShell (px-safe). Die Außenabstände
+   der Seiten-Wurzel (p-6 lg:p-8 usw.) sind für die Desktop-Fläche neben der
+   Sidebar gedacht und entfallen hier – bewusst ohne @layer, damit die Regel
+   die Utilities der Seiten überstimmt. */
+.mobil-inhalt > * {
+  padding: 0;
+}
+
+/* Bottom-Sheet (mobile Dialoge) gleitet von unten herein */
+@keyframes sheet-hoch {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@utility sheet-einblenden {
+  animation: sheet-hoch 0.24s cubic-bezier(0.22, 1, 0.36, 1);
 }

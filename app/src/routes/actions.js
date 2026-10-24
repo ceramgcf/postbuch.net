@@ -2,11 +2,8 @@ import { Router } from 'express';
 import pool, { query } from '../db.js';
 import { uiLog } from '../log.js';
 import { appLog } from '../app-log.js';
-import { regenerateEmbedding, activeSignature } from '../lib/embedding.js';
-import { computeAndSaveAkteEmbedding } from '../service/akten-service.js';
-import {
-  getHelpEmbeddingStatus, loadHelpSource, reconcileHelpCorpus,
-} from '../service/help-corpus.js';
+import { regenerateEmbedding } from '../lib/embedding.js';
+import { starteNeuberechnung } from '../service/embedding-neuberechnung.js';
 import { enqueueDocument } from '../jobs/pipeline-queue.js';
 import * as tracker from '../jobs/tracker.js';
 import { resolveDuplicate } from '../service/resolve-duplicate.js';
@@ -483,7 +480,7 @@ router.post('/reprocess-failed/:onedriveId', async (req, res) => {
       storageBackend: failedDoc.storage_backend,
     }, jobId, 0, {
       onError: (err) => {
-        console.error(`[actions] reprocess-failed ${onedriveId} fehlgeschlagen:`, err.message);
+        console.error('[actions] reprocess-failed %s fehlgeschlagen:', onedriveId, err.message);
         appLog('ERROR', 'actions', `reprocess-failed fehlgeschlagen: ${err.message}`);
       },
     });
@@ -536,79 +533,21 @@ router.post('/retry-missing-embeddings', async (req, res) => {
   }
 });
 
-// POST /api/actions/rebuild-embeddings — ALLE Embeddings mit dem aktuell
-// konfigurierten Modell neu berechnen.
+// POST /api/actions/rebuild-embeddings — Embeddings mit dem aktuell
+// konfigurierten Modell neu berechnen (`alle: true`: auch passende).
 //
-// Nötig nach einem Wechsel des Embedding-Providers: Zeilen mit abweichender
-// Signatur gelten für Suche und Duplikat-Check als „kein Embedding" (siehe
-// lib/embedding.js). Ohne diesen Lauf wäre die semantische Suche nach dem
-// Wechsel schlagartig leer.
-//
-// Antwort kommt sofort; der Lauf hängt an jobs/tracker.js (WebSocket-Live-Status).
+// Den Lauf nach einem Modellwechsel startet PUT /settings/ai/embedding selbst;
+// hier bleibt der Weg für Nachzügler (fehlgeschlagene Zeilen, Hilfe). Antwort
+// kommt sofort; der Lauf hängt an jobs/tracker.js (WebSocket-Live-Status).
 router.post('/rebuild-embeddings', requireAdmin, async (req, res) => {
   try {
-    const signatur = await activeSignature();
-    const nurVeraltet = req.body?.alle !== true;
-    const filter = nurVeraltet
-      ? `WHERE embedding_signature IS DISTINCT FROM $1`
-      : '';
-    const params = nurVeraltet ? [signatur] : [];
-
-    const { rows: docs } = await query(
-      `SELECT postid FROM postbuch.postbuch ${filter} ORDER BY postid`, params);
-    const { rows: akten } = await query(
-      `SELECT akteid FROM postbuch.akte ${nurVeraltet ? 'WHERE embedding_signature IS DISTINCT FROM $1' : ''} ORDER BY akteid`,
-      params);
-    const hilfe = await loadHelpSource();
-    const hilfeStatus = await getHelpEmbeddingStatus();
-    const hilfeGesamt = hilfeStatus.aktuell ? 0 : hilfe.chunks.length;
-
-    const gesamt = docs.length + akten.length + hilfeGesamt;
-    if (gesamt === 0) {
-      return res.json({ started: 0, signatur, message: 'Alle Embeddings sind bereits aktuell.' });
-    }
-
-    const jobId = tracker.create('embedding-rebuild', `Embeddings neu berechnen (${gesamt})`, gesamt);
-    res.json({ started: gesamt, jobId, signatur,
-      message: `${gesamt} Embedding(s) werden im Hintergrund neu berechnet (${signatur}).` });
-
-    (async () => {
-      let ok = 0, fehler = 0, i = 0;
-      for (const { postid } of docs) {
-        tracker.setStep(jobId, ++i, `Dokument ${postid}`);
-        try { await regenerateEmbedding(postid); ok++; }
-        catch (err) {
-          fehler++;
-          await query(
-            `UPDATE postbuch SET embedding_failed_at = NOW(), embedding_error = $1 WHERE postid = $2`,
-            [err.message.slice(0, 500), postid],
-          ).catch(() => {});
-          appLog('WARN', 'embedding', `Neuberechnung fehlgeschlagen für ${postid}: ${err.message}`,
-            { entity: 'postbuch', entityId: postid });
-        }
-      }
-      for (const { akteid } of akten) {
-        tracker.setStep(jobId, ++i, `Akte ${akteid}`);
-        // wirft nie an den Aufrufer (fire-and-forget-Semantik des Services)
-        await computeAndSaveAkteEmbedding(akteid);
-        ok++;
-      }
-      if (hilfeGesamt > 0) {
-        const hilfeResult = await reconcileHelpCorpus({
-          reason: 'embedding-rebuild',
-          onItem: (_hilfeIndex, _hilfeGesamt, chunk) => {
-            tracker.setStep(jobId, ++i, `Hilfe: ${chunk.kapitelTitel}`);
-          },
-        });
-        ok += hilfeResult.embedded || 0;
-      }
-      tracker.complete(jobId, { ok, fehler, signatur });
-      appLog('INFO', 'embedding', `Embedding-Neuberechnung abgeschlossen: ${ok} ok, ${fehler} Fehler (${signatur})`);
-      console.log(`[rebuild-embeddings] Abgeschlossen: ${ok} ok, ${fehler} Fehler`);
-    })().catch((err) => {
-      tracker.fail(jobId, err.message);
-      appLog('ERROR', 'embedding', `Embedding-Neuberechnung abgebrochen: ${err.message}`);
-    });
+    const erg = await starteNeuberechnung({ alle: req.body?.alle === true, mitHilfe: true, grund: 'manuell' });
+    const message = erg.laeuftBereits
+      ? 'Eine Neuberechnung läuft bereits; Nachzügler folgen direkt danach.'
+      : erg.started === 0
+        ? 'Alle Embeddings sind bereits aktuell.'
+        : `${erg.started} Embedding(s) werden im Hintergrund neu berechnet (${erg.signatur}).`;
+    res.json({ ...erg, message });
   } catch (err) {
     console.error('POST /api/actions/rebuild-embeddings error:', err);
     if (!res.headersSent) res.status(500).json({ error: err.message || 'Interner Serverfehler' });

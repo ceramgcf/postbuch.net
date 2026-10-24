@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback } from 'react';
+import { useZurueckZiel } from '@/hooks/useBackButtonGuard';
 import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -24,8 +25,62 @@ import {
   TrendingUp, TrendingDown, AlertTriangle, ExternalLink, Save, X, Lock,
 } from 'lucide-react';
 import { renderRichText } from '@/lib/richText';
+import { KartenListe } from '@/components/listen/DataView';
+import { useDarstellung } from '@/hooks/useDarstellung';
 
 // ── Inline-editable saldo title + description ──────────────────────────────────
+const stopp = (e) => e.stopPropagation();
+
+// Mobile Kartenansicht der Buchungen, gleiche Inhalte wie die Desktop-Tabelle.
+const BUCHUNG_KARTE = [
+  { key: 'datum', mobil: 'meta', zelle: (b) => formatDate(b.datum) },
+  {
+    key: 'quelle', mobil: 'meta',
+    zelle: (b) => (b.quelle_typ === 'manuell' ? 'Manuell' : b.quelle_name),
+  },
+  {
+    key: 'postid', mobil: 'meta',
+    zelle: (b, ctx) => b.postid && (
+      <span
+        className="font-mono text-primary"
+        onClick={(e) => { stopp(e); ctx.navigate(`/postbuch/${b.postid}`, { state: { from: ctx.fromPath } }); }}
+      >
+        {b.postid}
+      </span>
+    ),
+  },
+  {
+    key: 'betrag', mobil: 'rechts',
+    zelle: (b) => (
+      <span className={`font-mono ${b.saldo_art === 'positiv' ? 'text-emerald-600' : 'text-red-600'}`}>
+        {b.saldo_art === 'positiv' ? '+' : '−'}{formatCurrency(Math.abs(b.betrag))}
+      </span>
+    ),
+  },
+  {
+    key: 'zweck', mobil: 'text',
+    zelle: (b, ctx) => (
+      <span className={`flex items-start gap-1.5 ${b.error ? 'text-red-700' : 'text-foreground'}`}>
+        {b.error && <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-500" />}
+        <span onClick={stopp}>{renderRichText(b.zweck, ctx.navigate, ctx.fromPath)}</span>
+      </span>
+    ),
+  },
+  {
+    key: 'aktion', mobil: 'aktion',
+    zelle: (b, ctx) => ctx.canWrite && b.quelle_typ === 'manuell' && b.created_at && ctx.is24hEditable(b.created_at) && (
+      <div className="flex gap-1" onClick={stopp}>
+        <Button size="icon" variant="ghost" className="h-9 w-9" onClick={() => ctx.onEdit(b)} title="Bearbeiten (24h)">
+          <Pencil className="h-4 w-4" />
+        </Button>
+        <Button size="icon" variant="ghost" className="h-9 w-9 text-red-500" onClick={() => ctx.onDelete(b)} title="Löschen (24h)">
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </div>
+    ),
+  },
+];
+
 function SaldoHeader({ saldo, onUpdate }) {
   const [editName, setEditName] = useState(false);
   const [editBeschr, setEditBeschr] = useState(false);
@@ -51,8 +106,8 @@ function SaldoHeader({ saldo, onUpdate }) {
 
   return (
     <div>
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0 flex-1">
+      <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <div className="min-w-[min(100%,16rem)] flex-1">
           {editName ? (
             <div className="flex items-center gap-2">
               <Input value={name} onChange={(e) => setName(e.target.value)}
@@ -62,7 +117,7 @@ function SaldoHeader({ saldo, onUpdate }) {
               <Button size="icon" variant="ghost" onClick={() => { setEditName(false); setName(saldo.name); }}><X className="h-4 w-4" /></Button>
             </div>
           ) : (
-            <GlowHeading>
+            <GlowHeading titel={saldo.name}>
               {canWrite ? (
                 <span className="cursor-pointer" onClick={() => setEditName(true)} title="Klicken zum Bearbeiten">
                   {saldo.name}
@@ -93,9 +148,9 @@ function SaldoHeader({ saldo, onUpdate }) {
           )}
         </div>
 
-        <div className="flex flex-col items-end flex-shrink-0">
+        <div className="flex flex-col items-end flex-shrink-0 ml-auto">
           <span className="text-sm text-muted-foreground">Aktueller Saldo</span>
-          <span className={`text-3xl font-bold tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
+          <span className={`text-3xl max-sm:text-2xl font-bold tabular-nums ${isPositive ? 'text-emerald-600' : 'text-red-600'}`}>
             {formatCurrency(val)}
           </span>
         </div>
@@ -299,10 +354,12 @@ function QuelleDialog({ open, onOpenChange, initial, onSubmit, isPending }) {
 // ── Main detail page ──────────────────────────────────────────────────────────
 export default function SaldoDetailPage() {
   const { canWrite, isAdmin } = useAuth();
+  const { istMobil } = useDarstellung();
   const { id } = useParams();
   const saldoId = parseInt(id, 10);
   const navigate = useNavigate();
   const location = useLocation();
+  useZurueckZiel(true, () => navigate('/analyse/salden', { state: { zurueck: true } }));
   const [searchParams, setSearchParams] = useSearchParams();
 
   const { data, isLoading, error } = useSaldoDetail(id);
@@ -340,9 +397,9 @@ export default function SaldoDetailPage() {
     }, { replace: true });
   };
 
-  const handlePerPageChange = (value) => {
+  const handlePerPageChange = (value, { automatisch = false } = {}) => {
     setPerPage(value);
-    handlePageChange(1);
+    if (!automatisch) handlePageChange(1);
   };
 
   const handleUpdate = useCallback((fields) => {
@@ -411,7 +468,7 @@ export default function SaldoDetailPage() {
   return (
     <div className="p-6 lg:p-8 space-y-5">
       {/* Back button */}
-      <Button variant="ghost" size="sm" onClick={() => navigate('/analyse/salden')}
+      <Button variant="ghost" size="sm" onClick={() => navigate('/analyse/salden', { state: { zurueck: true } })}
         className="text-muted-foreground hover:text-foreground -ml-2">
         <ArrowLeft className="h-4 w-4 mr-1" />
         Zurück zu Salden
@@ -423,8 +480,8 @@ export default function SaldoDetailPage() {
       {/* SQL Sources section */}
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-base flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle className="text-base flex flex-wrap items-center gap-2">
               <Database className="h-4 w-4 text-primary" />
               Datenquellen ({quellen.length})
               <Badge variant="outline" className="border-amber-400 text-amber-700 font-normal">
@@ -458,7 +515,7 @@ export default function SaldoDetailPage() {
               {quellen.map((q) => (
                 <div key={q.quelle_id} className="flex items-start justify-between gap-3 p-3 rounded-lg border bg-muted/20">
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium text-sm">{q.name}</span>
                       <Badge
                         variant="outline"
@@ -503,7 +560,7 @@ export default function SaldoDetailPage() {
 
       {/* Bookings section */}
       <div>
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <h2 className="text-lg font-semibold">Alle Buchungen ({total})</h2>
           {canWrite && (
             <Button size="sm" onClick={() => { setEditingBuchung(null); setShowBuchungDialog(true); }}>
@@ -518,6 +575,15 @@ export default function SaldoDetailPage() {
         ) : (
           <>
             {showPagination && <Pagination {...paginationProps} />}
+            {istMobil ? (
+              <KartenListe
+                spalten={BUCHUNG_KARTE}
+                daten={pagedBuchungen.map((b, idx) => ({ ...b, _key: `${b.quelle_typ}-${b.buchung_id || idx}` }))}
+                zeilenKey="_key"
+                ctx={{ navigate, fromPath, canWrite, is24hEditable, onEdit: setEditingBuchung, onDelete: setDeleteConfirm }}
+                zeilenKlasse={(b) => (b.error ? 'border-red-300 bg-red-50' : '')}
+              />
+            ) : (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -589,6 +655,7 @@ export default function SaldoDetailPage() {
                 })}
               </TableBody>
             </Table>
+            )}
             {showPagination && <Pagination {...paginationProps} />}
           </>
         )}

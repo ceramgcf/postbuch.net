@@ -5,11 +5,24 @@
   "description": "Dokumentenverwaltung & postbuch.net",
   "start_url": "/",
   "scope": "/",
-  "display": "fullscreen",
+  "display": "standalone",
   "capture_links": "existing-client-navigate",
   "launch_handler": { "client_mode": ["navigate-existing", "auto"] },
-  "background_color": "#f9f8ff",
+  "background_color": "#7c3aed",
   "theme_color": "#7c3aed",
+  "share_target": {
+    "action": "/geteilt",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "files": [
+        {
+          "name": "pdf",
+          "accept": ["application/pdf", ".pdf"]
+        }
+      ]
+    }
+  },
   "icons": [
     {
       "src": "/Postbuch-Logo192.png",
@@ -24,7 +37,7 @@
       "purpose": "any"
     },
     {
-      "src": "/Postbuch-Logo512.png",
+      "src": "/postbuch-maskable-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"

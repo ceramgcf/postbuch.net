@@ -97,7 +97,7 @@ export async function resolveDuplicate({ jobId, decision, source = 'unknown' }, 
     appLog('INFO', 'duplicate', `Job ${jobId}: ${decision} (${source}) — Wiederaufnahme eingereiht`);
     return { ok: true };
   } catch (err) {
-    console.error(`[resolve-duplicate] Fehler bei Job ${jobId}:`, err.message);
+    console.error('[resolve-duplicate] Fehler bei Job %s:', jobId, err.message);
     appLog('ERROR', 'duplicate', `resolve-duplicate Job ${jobId}: ${err.message}`);
     return { ok: false, reason: err.message };
   }

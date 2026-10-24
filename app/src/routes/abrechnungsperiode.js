@@ -39,6 +39,7 @@ import {
   rejectAbrechnungsperiode,
   getPendingSessions,
   getSessionById,
+  markiereAbrechnungAusgeliefert,
   getArtefaktByTypSort,
   isLegacySession,
 } from '../service/abrechnung-session.js';
@@ -350,6 +351,19 @@ router.get('/sessions/:id/pdf/:groupIndex/chunk/:chunkIndex', async (req, res) =
   } catch (err) {
     appLog('ERROR', 'abrechnungsperiode', `Chunk-Download fehlgeschlagen: ${err.message}`);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/abrechnungsperiode/sessions/:id/ausgeliefert
+// Der Nutzer hat ein PDF heruntergeladen oder geteilt → Session läuft nicht mehr ab.
+router.post('/sessions/:id/ausgeliefert', async (req, res) => {
+  try {
+    const ok = await markiereAbrechnungAusgeliefert(req.params.id);
+    if (!ok) return res.status(404).json({ error: 'Session nicht gefunden oder nicht mehr offen' });
+    res.json({ success: true });
+  } catch (err) {
+    appLog('ERROR', 'abrechnungsperiode', `Ausgeliefert-Markierung fehlgeschlagen: ${err.message}`);
+    res.status(500).json({ error: 'Interner Serverfehler' });
   }
 });
 

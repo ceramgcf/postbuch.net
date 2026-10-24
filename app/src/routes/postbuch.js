@@ -35,6 +35,7 @@ import {
 } from '../service/rechnung-ersetzung.js';
 import { eigeneDokumenteBedingung, istEingeschraenkt } from '../middleware/lesebereich.js';
 import { parsePersonenAuswahl } from '../lib/personen-auswahl.js';
+import { kodiereCursor, dekodiereCursor, keysetBedingung } from '../lib/keyset-cursor.js';
 import {
   oeffneSichereDokumentloeschung,
   istLoeschschutzFehler,
@@ -63,7 +64,10 @@ function schedulePostbuchEmbedding(postid) {
   embeddingTimers.set(postid, timer);
 }
 
-// GET /api/postbuch — Liste mit Filter, Sortierung, Paginierung
+// GET /api/postbuch — Liste mit Filter, Sortierung, Paginierung.
+// Zwei Arten zu blättern: offset (Seitenumschaltung) oder cursor (Endlos-
+// Scrollen, stabil gegen neu hinzukommende Dokumente; siehe lib/keyset-cursor).
+// Mit cursor entfällt die Gesamtzahl (total: null) – sie steht in der ersten Seite.
 router.get('/', async (req, res) => {
   try {
     const {
@@ -72,7 +76,7 @@ router.get('/', async (req, res) => {
       person_as_adressat, person_as_patient,
       mit_notiz, in_akte, offene_wiedervorlage,
       sort = 'briefdatum', order = 'desc',
-      limit = '50', offset = '0',
+      limit = '50', offset = '0', cursor,
     } = req.query;
 
     // Semantic similarity: optional akteId to sort docs by cosine similarity to the Akte's embedding
@@ -91,6 +95,19 @@ router.get('/', async (req, res) => {
     const sortOrder = order === 'asc' ? 'ASC' : 'DESC';
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
     const offsetNum = Math.max(parseInt(offset, 10) || 0, 0);
+
+    // Keyset: nicht für die Ähnlichkeitssortierung (berechneter Wert ohne
+    // stabilen Vergleich); dort bleibt es bei offset.
+    let keyset = null;
+    if (cursor !== undefined) {
+      if (hasSimilarity) {
+        return res.status(400).json({ error: 'cursor ist bei Ähnlichkeitssortierung nicht möglich – bitte offset verwenden' });
+      }
+      keyset = dekodiereCursor(cursor);
+      if (!keyset || keyset.sort !== sortCol || keyset.order !== sortOrder.toLowerCase()) {
+        return res.status(400).json({ error: 'Ungültiger cursor für diese Sortierung' });
+      }
+    }
 
     // historisch filter: default exclude historical documents unless explicitly requested
     const { historisch } = req.query;
@@ -286,36 +303,52 @@ router.get('/', async (req, res) => {
           ? 'p.dokumentart'
           : `p.${sortCol}`;
 
-    const countResult = await query(`
-      SELECT COUNT(*) AS total
-      FROM postbuch p
-      LEFT JOIN arztrechnung a ON a.postid = p.postid
-      LEFT JOIN handwerkerrechnung h ON h.postid = p.postid
-      LEFT JOIN generische_rechnung g ON g.postid = p.postid
-      LEFT JOIN erstattungsbescheid e ON e.postid = p.postid
-      ${whereClause}
-    `, params);
+    // Gesamtzahl nur für die erste Seite (bzw. offset-Blättern) – jede weitere
+    // Endlos-Seite würde sonst die komplette Treffermenge erneut zählen.
+    let total = null;
+    if (!keyset) {
+      const countResult = await query(`
+        SELECT COUNT(*) AS total
+        FROM postbuch p
+        LEFT JOIN arztrechnung a ON a.postid = p.postid
+        LEFT JOIN handwerkerrechnung h ON h.postid = p.postid
+        LEFT JOIN generische_rechnung g ON g.postid = p.postid
+        LEFT JOIN erstattungsbescheid e ON e.postid = p.postid
+        ${whereClause}
+      `, params);
+      total = parseInt(countResult.rows[0].total, 10);
+    }
 
-    const total = parseInt(countResult.rows[0].total, 10);
+    let dataWhere = whereClause;
+    if (keyset) {
+      const bed = keysetBedingung({ ausdruck: sortExpression, ...keyset, idx: paramIdx });
+      dataWhere = whereClause ? `${whereClause} AND ${bed.sql}` : `WHERE ${bed.sql}`;
+      params.push(...bed.params);
+      paramIdx += bed.params.length;
+    }
+    const dataOffset = keyset ? 0 : offsetNum;
 
     // For similarity sort: add lateral join to get the reference embedding at query time.
     // The reference id is appended after LIMIT/OFFSET so it sits at $${paramIdx + 2}.
     let similaritySelect = '';
     let similarityJoin = '';
-    let dataParams = [...params, limitNum, offsetNum];
+    let dataParams = [...params, limitNum, dataOffset];
+    // Sortwert als Text für den nächsten Cursor (der angezeigte betrag ist um
+    // bestrittene Beträge gemindert, sortiert wird aber nach dem Rohwert).
+    const sortwertSelect = hasSimilarity ? '' : `, (${sortExpression})::text AS _sortwert`;
 
     if (hasAkteId) {
       similaritySelect = `, CASE WHEN p.embedding IS NOT NULL AND ae.embedding IS NOT NULL
                     THEN 1 - (p.embedding <=> ae.embedding)
                     ELSE NULL END AS similarity`;
       similarityJoin = `LEFT JOIN LATERAL (SELECT embedding FROM akte WHERE akteid = $${paramIdx + 2}) ae ON TRUE`;
-      dataParams = [...params, limitNum, offsetNum, akteId];
+      dataParams = [...params, limitNum, dataOffset, akteId];
     } else if (hasSimilarToPostId) {
       similaritySelect = `, CASE WHEN p.embedding IS NOT NULL AND src.embedding IS NOT NULL
                     THEN 1 - (p.embedding <=> src.embedding)
                     ELSE NULL END AS similarity`;
       similarityJoin = `LEFT JOIN LATERAL (SELECT embedding FROM postbuch WHERE postid = $${paramIdx + 2}) src ON TRUE`;
-      dataParams = [...params, limitNum, offsetNum, similarToPostId];
+      dataParams = [...params, limitNum, dataOffset, similarToPostId];
     }
 
     const result = await query(`
@@ -331,6 +364,7 @@ router.get('/', async (req, res) => {
              EXISTS (SELECT 1 FROM wiedervorlage w WHERE w.postid = p.postid) AS hat_wiedervorlage,
              p.verbleib_id, vk.icon AS verbleib_kategorie_icon, vk.name AS verbleib_kategorie_name
              ${similaritySelect}
+             ${sortwertSelect}
       FROM postbuch p
       LEFT JOIN arztrechnung a ON a.postid = p.postid
       LEFT JOIN handwerkerrechnung h ON h.postid = p.postid
@@ -339,16 +373,24 @@ router.get('/', async (req, res) => {
       LEFT JOIN postbuch.mensch pers ON pers.kurzname = p.familienmitglied
       LEFT JOIN verbleib_kategorie vk ON vk.id = p.verbleib_id
       ${similarityJoin}
-      ${whereClause}
+      ${dataWhere}
       ORDER BY ${sortExpression} ${sortOrder} NULLS LAST, p.postid DESC
       LIMIT $${paramIdx} OFFSET $${paramIdx + 1}
     `, dataParams);
 
+    const rows = result.rows;
+    const letzte = rows[rows.length - 1];
+    const nextCursor = !hasSimilarity && rows.length === limitNum && letzte
+      ? kodiereCursor({ sort: sortCol, order: sortOrder.toLowerCase(), wert: letzte._sortwert, postid: letzte.postid })
+      : null;
+    for (const r of rows) delete r._sortwert;
+
     res.json({
-      data: result.rows,
+      data: rows,
       total,
       limit: limitNum,
-      offset: offsetNum,
+      offset: dataOffset,
+      nextCursor,
     });
   } catch (err) {
     console.error('GET /api/postbuch error:', err);
@@ -520,7 +562,7 @@ router.get('/:postid', async (req, res) => {
                ELSE NULL
              END AS verbleib,
              CASE WHEN va.id IS NOT NULL
-               THEN json_build_object('id', va.id, 'name', va.name, 'archived', va.archived)
+               THEN json_build_object('id', va.id, 'ablageid', va.ablageid, 'name', va.name, 'archived', va.archived)
                ELSE NULL
              END AS verbleib_ablage
       FROM postbuch p

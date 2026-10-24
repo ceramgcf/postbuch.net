@@ -221,6 +221,17 @@ _session_lock = threading.Lock()
 # Hilfsfunktionen
 # ---------------------------------------------------------------------------
 
+def _dpi_aus_anfrage() -> str:
+    """Auflösung aus dem Query-Parameter `dpi`, nur als ganze Zahl in einem
+    plausiblen Bereich. Alles andere fällt auf den konfigurierten Standard
+    zurück, damit kein freier Text in die scanimage-/img2pdf-Argumente gelangt."""
+    for kandidat in (request.args.get("dpi"), _get_cfg("default_dpi"), "300"):
+        wert = str(kandidat or "").strip()
+        if wert.isdigit() and 50 <= int(wert) <= 2400:
+            return str(int(wert))
+    return "300"
+
+
 def _sane_mode(mode: str) -> str:
     m = mode.lower()
     if m == "color":
@@ -424,7 +435,7 @@ def _finalize_session(reason: str = "manual"):
 
 @app.route("/scan/adf/simplex")
 def scan_adf_simplex():
-    dpi  = request.args.get("dpi",  _get_cfg("default_dpi"))
+    dpi  = _dpi_aus_anfrage()
     mode = request.args.get("mode", _get_cfg("default_mode"))
 
     ok, msg = _check_adf()
@@ -445,7 +456,7 @@ def scan_adf_simplex():
 
 @app.route("/scan/adf/duplex")
 def scan_adf_duplex():
-    dpi  = request.args.get("dpi",  _get_cfg("default_dpi"))
+    dpi  = _dpi_aus_anfrage()
     mode = request.args.get("mode", _get_cfg("default_mode"))
 
     ok, msg = _check_adf()
@@ -470,7 +481,7 @@ def _scan_adf_batch(duplex: bool):
     Leerseiten-Erkennung des Cleaners übernimmt das automatische Entfernen
     einer leeren Duplex-Rückseite — dafür tragen die Duplex-Dateien bewusst
     das Präfix `adf_duplex_`, exakt wie die bestehenden Duplex-Scans."""
-    dpi  = request.args.get("dpi",  _get_cfg("default_dpi"))
+    dpi  = _dpi_aus_anfrage()
     mode = request.args.get("mode", _get_cfg("default_mode"))
 
     ok, msg = _check_adf()
@@ -523,7 +534,7 @@ def scan_adf_batch_duplex():
 
 @app.route("/scan/flatbed/single")
 def scan_flatbed_single():
-    dpi  = request.args.get("dpi",  _get_cfg("default_dpi"))
+    dpi  = _dpi_aus_anfrage()
     mode = request.args.get("mode", _get_cfg("default_mode"))
     size = request.args.get("size", "a4").lower()
 
@@ -547,7 +558,7 @@ def scan_flatbed_single():
 @app.route("/scan/test/single")
 def scan_test_single():
     """Einseitiger Kalibrierungsscan ohne Übergabe an Cleaner oder Pipeline."""
-    dpi = request.args.get("dpi", _get_cfg("default_dpi"))
+    dpi = _dpi_aus_anfrage()
     mode = request.args.get("mode", _get_cfg("default_mode"))
     size = request.args.get("size", "a4").lower()
     try:
@@ -584,7 +595,7 @@ def scan_test_single():
 def session_start():
     """Startet eine neue Session und scannt die erste Seite.
     Eine laufende Session wird dabei automatisch abgebrochen."""
-    dpi  = request.args.get("dpi",  _get_cfg("default_dpi"))
+    dpi  = _dpi_aus_anfrage()
     mode = request.args.get("mode", _get_cfg("default_mode"))
     size = request.args.get("size", "a4").lower()
     if size not in PAPER_SIZES:
@@ -665,8 +676,9 @@ def session_finish():
     try:
         _build_pdf(pages, outfile, dpi)
     except Exception as exc:
+        print(f"[SCAN FAIL] PDF-Erstellung (Flachbett-Session): {exc}")
         _cleanup(tmpdir)
-        return jsonify({"status": "error", "msg": str(exc)}), 500
+        return jsonify({"status": "error", "msg": "PDF konnte nicht erstellt werden"}), 500
 
     _cleanup(tmpdir)
     return jsonify({"status": "ok", "file": os.path.basename(outfile), "pages": len(pages)})
@@ -697,7 +709,7 @@ def session_scan():
     - Aktive Session  → weitere Seite hinzufügen.
     dpi/mode werden nur beim ersten Aufruf übernommen; danach gelten die Session-Parameter.
     Abschließen weiterhin mit /finish (manuell) oder automatisch nach Idle-Timeout."""
-    dpi  = request.args.get("dpi",  _get_cfg("default_dpi"))
+    dpi  = _dpi_aus_anfrage()
     mode = request.args.get("mode", _get_cfg("default_mode"))
     size = request.args.get("size", "a4").lower()
 

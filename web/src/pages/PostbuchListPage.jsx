@@ -1,7 +1,11 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { useZurueckZiel } from '@/hooks/useBackButtonGuard';
 import { useSearchParams, useOutletContext, useNavigate } from 'react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { usePostbuchList } from '@/hooks/usePostbuch';
+import { mobilScroller } from '@/lib/mobilScroller';
+import { usePostbuchList, usePostbuchEndlos, usePostbuchKopf } from '@/hooks/usePostbuch';
+import { useDarstellung } from '@/hooks/useDarstellung';
+import { SeitenAktionen } from '@/hooks/useSeite';
 import { useAddDocumentToAkte } from '@/hooks/useAkten';
 import { useUndoHistory } from '@/hooks/useUndoHistory';
 import { useExportJob } from '@/hooks/useExportJob';
@@ -11,6 +15,7 @@ import { useDebouncedValue } from '@/hooks/useDebouncedValue';
 import { useAuth } from '@/hooks/useAuth';
 import { GlowHeading } from '@/components/ui/GlowHeading';
 import { PostbuchTable, postbuchColumns } from '@/components/postbuch/PostbuchTable';
+import { KARTE_EINHEITLICH_HOEHE, KARTEN_ABSTAND } from '@/components/listen/DataView';
 import { ColumnSettings } from '@/components/table/ColumnSettings';
 import { useColumnConfig } from '@/hooks/useColumnConfig';
 import { FilterBar } from '@/components/postbuch/FilterBar';
@@ -22,13 +27,32 @@ import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/componen
 import { PageLoader, EmptyState } from '@/components/ui/spinner';
 import { ExportDialog } from '@/components/ExportDialog';
 import { cn } from '@/lib/utils';
-import { FileText, SlidersHorizontal, ArrowLeft, Archive, Download, X } from 'lucide-react';
+import { SlidersHorizontal, ArrowLeft, Archive, Download, X, ArrowUpDown, ArrowUp, Check, FilterX } from 'lucide-react';
+
+// Sortierungen der mobilen Liste (die Tabelle sortiert per Spaltenkopf).
+const MOBIL_SORTIERUNGEN = [
+  { sort: 'postid', order: 'desc', label: 'Zuletzt erfasst' },
+  { sort: 'postid', order: 'asc', label: 'Zuerst erfasst' },
+  { sort: 'briefdatum', order: 'desc', label: 'Briefdatum, neueste zuerst' },
+  { sort: 'briefdatum', order: 'asc', label: 'Briefdatum, älteste zuerst' },
+  { sort: 'kontakt', order: 'asc', label: 'Kontakt A–Z' },
+  { sort: 'betrag', order: 'desc', label: 'Betrag, höchster zuerst' },
+  { sort: 'betrag', order: 'asc', label: 'Betrag, niedrigster zuerst' },
+];
+const SORTIERUNG_AEHNLICH = { sort: 'similarity', order: 'desc', label: 'Ähnlichkeit' };
+const MOBIL_SEITE = 30;
+// Desktop-Kartenumschaltung: Mindestbreite des Betreffs; zwei Kartenspalten ab @2xl
+// (42rem) wie in KartenListe.
+const BETREFF_MIN_BREITE = 240;
+const KARTEN_ZWEISPALTIG_AB = 672;
 
 export default function PostbuchListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { showPdf } = useOutletContext();
+  const { showPdf, closePdf, angezeigtePdfId } = useOutletContext();
   const navigate = useNavigate();
+  const { istMobil } = useDarstellung();
   const [filterVisible, setFilterVisible] = useState(false);
+  const [sortSheetOffen, setSortSheetOffen] = useState(false);
   const [perPage, setPerPage] = usePerPage();
   const [showHistorisch, setShowHistorisch] = useState(false);
   const columnConfig = useColumnConfig('postbuch', postbuchColumns);
@@ -50,6 +74,11 @@ export default function PostbuchListPage() {
   // Verbleib-Filter-Modus: Rücksprung zur Originale-Verwaltung
   const verbleibBackTo = searchParams.get('verbleibBackTo') || null;
   const verbleibLabel = searchParams.get('verbleibLabel') || null;
+  // Zurück-Taste folgt dem Zurück-Knopf des aktiven Modus; das Archiv selbst hat keinen.
+  const zurueckZiel = aktenmodusAkteId ? (aktenmodusBackTo || `/akten/${aktenmodusAkteId}`)
+    : similarToPostId ? `/postbuch/${similarToPostId}`
+    : verbleibBackTo;
+  useZurueckZiel(!!zurueckZiel, () => navigate(zurueckZiel, { state: { zurueck: true } }));
 
   // ── Export state ──────────────────────────────────────────────────────────────
   const [showExportDialog, setShowExportDialog]   = useState(false);
@@ -101,7 +130,7 @@ export default function PostbuchListPage() {
     await runExport({
       format,
       resolvePostIds: async () => {
-        if (exportScope === 'page') return (data?.data ?? []).map(d => d.postid);
+        if (exportScope === 'page') return zeilen.map(d => d.postid);
         if (exportScope === 'selection') return [...selectedPostIds];
         return api.export.fetchAllPostIds(apiFilters);
       },
@@ -132,18 +161,36 @@ export default function PostbuchListPage() {
   const [containerHeight, setContainerHeight] = useState(
     () => (typeof window !== 'undefined' ? window.innerHeight - 220 : 400)
   );
+  const [containerWidth, setContainerWidth] = useState(0);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(([entry]) => setContainerHeight(entry.contentRect.height));
+    const ro = new ResizeObserver(([entry]) => {
+      setContainerHeight(entry.contentRect.height);
+      setContainerWidth(entry.contentRect.width);
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Reicht die Breite nicht für alle sichtbaren Spalten plus einen lesbaren Betreff
+  // (elastische Restspalte), zeigt die Liste Karten statt einer abgeschnittenen Tabelle.
+  const tabelleMinBreite = columnConfig.columns
+    .filter((c) => c.visible && !c.elastic)
+    .reduce((summe, c) => summe + (c.width ?? c.defaultWidth ?? 0), 0)
+    + (columnConfig.columns.some((c) => c.visible && c.elastic) ? BETREFF_MIN_BREITE : 0)
+    + (selectionMode ? 40 : 0);
+  const alsKarten = containerWidth > 0 && containerWidth < tabelleMinBreite;
+
   const TABLE_HEAD_H = 44; // h-11
   const ROW_H = 44;        // py-3 * 2 + text-sm line
   // Reserve ~7% of container height as buffer (rounded up) to avoid overflow
   const AUTO_BUFFER_PX = Math.ceil(containerHeight * 0.06);
-  const autoRows = Math.max(5, Math.floor((containerHeight - TABLE_HEAD_H - AUTO_BUFFER_PX) / ROW_H));
+  const autoRows = alsKarten
+    // Einheitliche Kartenhöhe: n Reihen brauchen n·Höhe + (n−1)·Abstand, ohne Puffer.
+    ? Math.max(2, Math.floor((containerHeight + KARTEN_ABSTAND) / (KARTE_EINHEITLICH_HOEHE + KARTEN_ABSTAND)))
+      * (containerWidth >= KARTEN_ZWEISPALTIG_AB ? 2 : 1)
+    : Math.max(5, Math.floor((containerHeight - TABLE_HEAD_H - AUTO_BUFFER_PX) / ROW_H));
   const effectivePerPage = perPage === 'auto' ? autoRows : Number(perPage);
 
   const personFromLegacyAdressat = searchParams.get('adressat') || undefined;
@@ -238,7 +285,53 @@ export default function PostbuchListPage() {
     }
   }, [debouncedCF]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const { data, isLoading, isFetching, error } = usePostbuchList(apiFilters);
+  // Desktop blättert seitenweise, mobil endlos – immer nur eine der beiden Abfragen läuft.
+  const seitenweise = usePostbuchList(apiFilters, { enabled: !istMobil });
+  const endlosFilter = useMemo(() => ({ ...apiFilters, limit: MOBIL_SEITE }), [apiFilters]);
+  const endlos = usePostbuchEndlos(endlosFilter, { enabled: istMobil });
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = endlos;
+  const aktiv = istMobil ? endlos : seitenweise;
+  const { isLoading, isFetching, error } = aktiv;
+  const zeilen = useMemo(
+    () => (istMobil
+      ? (endlos.data?.pages ?? []).flatMap((s) => s.data)
+      : (seitenweise.data?.data ?? [])
+    ).filter((row) => !justAddedPostIds.has(row.postid)),
+    [istMobil, endlos.data, seitenweise.data, justAddedPostIds],
+  );
+  const gesamt = (istMobil ? endlos.data?.pages[0]?.total : seitenweise.data?.total) ?? 0;
+  const geladen = istMobil ? !!endlos.data : !!seitenweise.data;
+
+  // Mobil: nachladen, sobald das Listenende in Sichtweite kommt.
+  const endeRef = useRef(null);
+  useEffect(() => {
+    const el = endeRef.current;
+    if (!istMobil || !el) return;
+    const io = new IntersectionObserver(([e]) => {
+      if (e.isIntersecting && hasNextPage && !isFetchingNextPage) fetchNextPage();
+    }, { root: mobilScroller(), rootMargin: '800px 0px' });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [istMobil, hasNextPage, isFetchingNextPage, fetchNextPage, zeilen.length]);
+
+  // Mobil: neue Filter/Sortierung beginnen oben. Der erste Lauf bleibt aus,
+  // sonst überschriebe er die Scroll-Wiederherstellung beim Zurückkehren.
+  const ersterFilterLauf = useRef(true);
+  useEffect(() => {
+    if (ersterFilterLauf.current) { ersterFilterLauf.current = false; return; }
+    if (istMobil) mobilScroller().scrollTo({ top: 0 });
+  }, [endlosFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Mobil: neue Dokumente oben nicht ungefragt einschieben (die Liste springt
+  // sonst unter dem Finger), sondern als Hinweis anbieten.
+  const kopfAktiv = istMobil && filters.sort === 'postid' && filters.order === 'desc' && !!endlos.data;
+  const { data: neuestePostid } = usePostbuchKopf(apiFilters, { enabled: kopfAktiv });
+  const erstePostid = endlos.data?.pages[0]?.data[0]?.postid;
+  const neueVorhanden = kopfAktiv && neuestePostid && erstePostid && neuestePostid !== erstePostid;
+  const neueLaden = () => {
+    mobilScroller().scrollTo({ top: 0, behavior: 'smooth' });
+    qc.resetQueries({ queryKey: ['postbuch', 'endlos'] });
+  };
 
   const activeFilterCount = [
     filters.art,
@@ -306,7 +399,7 @@ export default function PostbuchListPage() {
   }, []);
 
   // Pagination helpers
-  const total = data?.total ?? 0;
+  const total = gesamt;
   const totalPages = Math.max(1, Math.ceil(total / effectivePerPage));
   const currentPage = Math.floor(filters.offset / effectivePerPage) + 1;
 
@@ -315,15 +408,75 @@ export default function PostbuchListPage() {
     updateFilters({ ...filters, offset: newOffset });
   };
 
-  const handlePerPageChange = (value) => {
+  const handlePerPageChange = (value, { automatisch = false } = {}) => {
     setPerPage(value); // 'auto' or number
-    updateFilters({ ...filters, offset: 0 }); // reset to page 1
+    // Automatischer Rückfall auf Auto (zu schmale Leiste) behält die Position.
+    if (!automatisch) updateFilters({ ...filters, offset: 0 }); // reset to page 1
   };
 
+  // Auge schaltet um: erneuter Klick auf das angezeigte Dokument schließt das Panel.
   const handleShowPdf = useCallback(
-    (postid) => showPdf(postid, { closeable: true }),
-    [showPdf],
+    (postid) => (postid === angezeigtePdfId ? closePdf() : showPdf(postid, { closeable: true })),
+    [showPdf, closePdf, angezeigtePdfId],
   );
+
+  // Das im PDF-Panel angezeigte Dokument bleibt sichtbar, wenn sich das Layout ändert
+  // (Tabelle ↔ Karten, ein- ↔ zweispaltig) – etwa weil das Panel selbst Breite nimmt –,
+  // und ebenso nach dem Schließen des Panels, auch wenn zwischendurch weitergeblättert
+  // wurde. Dabei ändert sich die automatische Seitengröße; gemerkt wird deshalb die
+  // absolute Position des Dokuments in der Ergebnisliste (Offset der Antwort + Index).
+  const pdfPositionRef = useRef(null);
+  useEffect(() => {
+    const antwort = seitenweise.data;
+    if (istMobil || !angezeigtePdfId || !antwort || seitenweise.isPlaceholderData) return;
+    const i = (antwort.data ?? []).findIndex((row) => row.postid === angezeigtePdfId);
+    if (i >= 0) pdfPositionRef.current = { postid: angezeigtePdfId, index: (antwort.offset ?? 0) + i };
+  }, [istMobil, angezeigtePdfId, seitenweise.data, seitenweise.isPlaceholderData]);
+
+  const pdfScrollOffenRef = useRef(false);
+  // Auf die Seite wechseln, die das Dokument mit der aktuellen Seitengröße enthält,
+  // und es nach dem Laden in den sichtbaren Bereich holen.
+  const richteAufDokumentAus = (postid) => {
+    const pos = pdfPositionRef.current;
+    if (istMobil || !postid || pos?.postid !== postid) return;
+    pdfScrollOffenRef.current = true;
+    const zielOffset = Math.floor(pos.index / effectivePerPage) * effectivePerPage;
+    if (zielOffset !== filters.offset) updateFilters({ ...filters, offset: zielOffset });
+  };
+
+  // Nach dem Schließen bleibt das zuletzt angezeigte Dokument kurz Ziel, damit auch der
+  // Layoutwechsel durch das wegfallende Panel noch darauf ausgerichtet wird.
+  const [nachlaufPdfId, setNachlaufPdfId] = useState(null);
+  const vorigePdfIdRef = useRef(angezeigtePdfId);
+  useEffect(() => {
+    const vorige = vorigePdfIdRef.current;
+    vorigePdfIdRef.current = angezeigtePdfId;
+    if (angezeigtePdfId || !vorige) { setNachlaufPdfId(null); return undefined; }
+    setNachlaufPdfId(vorige);
+    richteAufDokumentAus(vorige);
+    const t = setTimeout(() => setNachlaufPdfId(null), 1500);
+    return () => clearTimeout(t);
+  }, [angezeigtePdfId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const zielPdfId = angezeigtePdfId ?? nachlaufPdfId;
+
+  const kartenSpalten = alsKarten ? (containerWidth >= KARTEN_ZWEISPALTIG_AB ? 2 : 1) : 0;
+  const layoutSchluessel = `${kartenSpalten}/${effectivePerPage}`;
+  const letztesLayoutRef = useRef(layoutSchluessel);
+  useEffect(() => {
+    if (letztesLayoutRef.current === layoutSchluessel) return;
+    letztesLayoutRef.current = layoutSchluessel;
+    richteAufDokumentAus(zielPdfId);
+  }, [layoutSchluessel]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Nach dem Seiten- bzw. Layoutwechsel die Zeile/Karte in den sichtbaren Bereich holen.
+  useEffect(() => {
+    // Erst mit den Daten der neuen Seite scrollen, nicht mit der vorigen als Platzhalter.
+    if (!pdfScrollOffenRef.current || seitenweise.isPlaceholderData) return;
+    const el = containerRef.current?.querySelector('.pdf-ziel');
+    if (!el) return;
+    pdfScrollOffenRef.current = false;
+    el.scrollIntoView({ block: 'nearest' });
+  }, [zeilen, layoutSchluessel, zielPdfId, seitenweise.isPlaceholderData]);
 
   const showPagination = total > effectivePerPage || totalPages > 1;
 
@@ -337,6 +490,294 @@ export default function PostbuchListPage() {
     onPageChange: handlePageChange,
     onPerPageChange: handlePerPageChange,
   };
+
+
+  const hinweise = (
+    <>
+      {aktenmodusAkteId && (
+        <div className="mt-2 flex items-center gap-2 text-sm flex-wrap">
+          <Badge className="bg-primary/10 text-primary border-primary/30">Aktenmodus</Badge>
+          <span className="text-muted-foreground">
+            Dokumente zur Akte <span className="font-semibold">„{aktenmodusBetreff}"</span> hinzufügen
+          </span>
+          <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => navigate(aktenmodusBackTo || `/akten/${aktenmodusAkteId}`)}>
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Zurück zur Akte
+          </Button>
+        </div>
+      )}
+      {similarToPostId && (
+        <div className="mt-2 flex items-center gap-2 text-sm flex-wrap">
+          <Badge className="bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20">Ähnliche Dokumente</Badge>
+          <span className="text-muted-foreground">
+            Ähnlich zu{' '}
+            <span className="font-mono font-semibold">{similarToPostId}</span>
+            {similarToBetreff && similarToBetreff !== similarToPostId && (
+              <span className="ml-1">– {similarToBetreff}</span>
+            )}
+          </span>
+          <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => navigate(`/postbuch/${similarToPostId}`)}>
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Zurück zum Dokument
+          </Button>
+        </div>
+      )}
+      {verbleibBackTo && (
+        <div className="mt-2 flex items-center gap-2 text-sm flex-wrap">
+          <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20">Sammelmappe</Badge>
+          <span className="text-muted-foreground">
+            Dokumente der Sammelmappe{verbleibLabel && <span className="font-semibold"> „{verbleibLabel}"</span>}
+          </span>
+          <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => navigate(verbleibBackTo)}>
+            <ArrowLeft className="h-3.5 w-3.5" />
+            Zurück zu Originale
+          </Button>
+        </div>
+      )}
+    </>
+  );
+
+  const dialoge = (
+    <>
+      {/* Aktenmodus: confirmation dialog */}
+      <Dialog open={!!confirmAddPostId} onOpenChange={() => setConfirmAddPostId(null)}>
+        <DialogTitle>Dokument zur Akte hinzufügen?</DialogTitle>
+        <DialogDescription>
+          Soll <span className="font-mono font-semibold">{confirmAddPostId}</span> zur Akte
+          <span className="font-semibold"> „{aktenmodusBetreff}"</span> hinzugefügt werden?
+        </DialogDescription>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setConfirmAddPostId(null)}>Abbrechen</Button>
+          <Button
+            onClick={async () => {
+              try {
+                const postIdToAdd = confirmAddPostId;
+                const akteId = aktenmodusAkteId;
+                setConfirmAddPostId(null);
+                // Sofort aus der Liste entfernen (optimistisch)
+                setJustAddedPostIds(prev => new Set([...prev, postIdToAdd]));
+                addDocMutation.mutateAsync({ akteid: akteId, postid: postIdToAdd })
+                  .then(() => {
+                    qc.invalidateQueries({ queryKey: ['postbuch'] });
+                    pushAction(
+                      `Dokument ${postIdToAdd} zur Akte hinzugefügt`,
+                      async () => { await api.akten.removeDocument(akteId, postIdToAdd); qc.invalidateQueries({ queryKey: ['akten'] }); },
+                      async () => { await api.akten.addDocument(akteId, postIdToAdd); qc.invalidateQueries({ queryKey: ['akten'] }); },
+                    );
+                  })
+                  .catch(err => {
+                    // Optimistic update rückgängig machen bei Fehler
+                    setJustAddedPostIds(prev => { const s = new Set(prev); s.delete(postIdToAdd); return s; });
+                    console.error('Add to akte error:', err);
+                  });
+              } catch (err) {
+                console.error('Add to akte error:', err);
+              }
+            }}
+            disabled={addDocMutation.isPending}
+          >
+            {addDocMutation.isPending ? 'Wird hinzugefügt…' : 'Hinzufügen'}
+          </Button>
+        </DialogFooter>
+      </Dialog>
+
+      {/* Export Dialog */}
+      <ExportDialog
+        open={showExportDialog}
+        onClose={handleCloseExportDialog}
+        phase={exportPhase}
+        pageCount={zeilen.length}
+        totalCount={gesamt}
+        selectionCount={selectedPostIds.size}
+        exportCount={
+          exportScope === 'selection' ? selectedPostIds.size
+          : exportScope === 'page'   ? zeilen.length
+          :                            gesamt
+        }
+        allowPageScope={!istMobil}
+        isAkte={false}
+        onScopeChosen={handleScopeChosen}
+        onExport={handleExport}
+        isExporting={isExporting}
+        exportProgress={exportProgress}
+      />
+    </>
+  );
+
+  if (istMobil) {
+    const sortierungen = similarToPostId || aktenmodusAkteId
+      ? [SORTIERUNG_AEHNLICH, ...MOBIL_SORTIERUNGEN]
+      : MOBIL_SORTIERUNGEN;
+    const aktSortierung = sortierungen.find((o) => o.sort === filters.sort && o.order === filters.order);
+    const spaltenfilterAktiv = Object.values(columnFilters).some(Boolean);
+    return (
+      <div className="space-y-3">
+        <SeitenAktionen>
+          <button
+            onClick={() => {
+              const next = !showHistorisch;
+              setShowHistorisch(next);
+              if (!next && filters.historisch === 'only') {
+                updateFilters({ ...filters, historisch: undefined, offset: 0 });
+              }
+            }}
+            aria-pressed={showHistorisch}
+            title={showHistorisch ? 'Historische Dokumente ausblenden' : 'Historische Dokumente einblenden'}
+            className={cn('grid h-10 w-10 place-items-center rounded-full transition-colors', showHistorisch ? 'bg-primary/10 text-primary' : 'text-muted-foreground')}
+          >
+            <Archive className="h-5 w-5" />
+          </button>
+          {!aktenmodusAkteId && !istEingeschraenkt && (
+            <button
+              onClick={handleExportButtonClick}
+              title="Dokumente exportieren"
+              className="grid h-10 w-10 place-items-center rounded-full text-muted-foreground"
+            >
+              <Download className="h-5 w-5" />
+            </button>
+          )}
+        </SeitenAktionen>
+
+        <GlowHeading>Dokumentenarchiv</GlowHeading>
+        {hinweise}
+
+        <SearchBar
+          aktenmodusAkteId={aktenmodusAkteId}
+          aktenmodusBetreff={aktenmodusBetreff}
+          aktenmodusBackTo={aktenmodusBackTo}
+        />
+
+        <div className="flex items-center gap-2">
+          <Button
+            variant={activeFilterCount ? 'secondary' : 'outline'}
+            size="sm"
+            onClick={() => setFilterVisible(true)}
+            className="h-9 gap-1.5 rounded-full"
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            Filter
+            {activeFilterCount > 0 && (
+              <span className="grid h-5 min-w-5 place-items-center rounded-full bg-primary px-1 text-[11px] font-bold text-primary-foreground">
+                {activeFilterCount}
+              </span>
+            )}
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setSortSheetOffen(true)} className="h-9 min-w-0 gap-1.5 rounded-full">
+            <ArrowUpDown className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{aktSortierung?.label ?? 'Sortierung'}</span>
+          </Button>
+          {spaltenfilterAktiv && (
+            <Button
+              variant="secondary" size="sm" className="h-9 gap-1.5 rounded-full"
+              onClick={() => handleColumnFilterChange('__clear_all__')}
+              title="Spaltenfilter aus der Tabellenansicht entfernen"
+            >
+              <FilterX className="h-3.5 w-3.5" />
+            </Button>
+          )}
+          {geladen && (
+            <span className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground tabular-nums">
+              {isFetching && !isLoading && !isFetchingNextPage && (
+                <span className="inline-block h-3 w-3 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+              )}
+              {gesamt} Dokumente
+            </span>
+          )}
+        </div>
+
+        {selectionMode && (
+          <div
+            className="sticky z-10 -mx-3 flex items-center gap-2 border-y border-primary/20 bg-background/95 px-3 py-2 text-sm backdrop-blur"
+            style={{ top: 0 }}
+          >
+            <span className="flex-1 text-muted-foreground">
+              {selectedPostIds.size > 0
+                ? <><span className="font-semibold text-foreground">{selectedPostIds.size}</span> ausgewählt</>
+                : 'Dokumente antippen…'}
+            </span>
+            <Button size="sm" onClick={handleProceedWithSelection} disabled={selectedPostIds.size === 0} className="gap-1.5">
+              <Download className="h-3.5 w-3.5" />
+              Exportieren
+            </Button>
+            <button onClick={handleCancelSelection} className="grid h-9 w-9 place-items-center text-muted-foreground" title="Auswahlmodus beenden">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+        )}
+
+        {neueVorhanden && (
+          <div className="sticky z-10 flex justify-center" style={{ top: '0.5rem' }}>
+            <button
+              onClick={neueLaden}
+              className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-sm font-medium text-primary-foreground shadow-lg shadow-primary/30"
+            >
+              <ArrowUp className="h-4 w-4" />
+              Neue Dokumente
+            </button>
+          </div>
+        )}
+
+        {isLoading ? (
+          <PageLoader />
+        ) : error ? (
+          <p className="p-6 text-destructive">Fehler: {error.message}</p>
+        ) : (
+          <>
+            <PostbuchTable
+              data={zeilen}
+              sort={filters.sort}
+              order={filters.order}
+              onShowPdf={handleShowPdf}
+              angezeigtePdfId={angezeigtePdfId}
+              aktenmodusAkteId={aktenmodusAkteId}
+              aktenmodusBetreff={aktenmodusBetreff}
+              aktenmodusBackTo={aktenmodusBackTo}
+              onAddToAkte={aktenmodusAkteId ? setConfirmAddPostId : undefined}
+              similarToPostId={similarToPostId}
+              selectionMode={selectionMode}
+              selectedIds={selectedPostIds}
+              onToggleSelect={handleToggleSelect}
+            />
+            <div ref={endeRef} className="flex h-16 items-center justify-center text-xs text-muted-foreground">
+              {isFetchingNextPage
+                ? <span className="inline-block h-5 w-5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+                : (!hasNextPage && zeilen.length > 0 ? `${zeilen.length === gesamt ? 'Alle' : zeilen.length} Dokumente geladen` : null)}
+            </div>
+          </>
+        )}
+
+        <Dialog open={filterVisible} onOpenChange={setFilterVisible}>
+          <FilterBar
+            filters={filters}
+            onChange={updateFilters}
+            onClose={() => setFilterVisible(false)}
+            showHistorisch={showHistorisch}
+          />
+        </Dialog>
+
+        <Dialog open={sortSheetOffen} onOpenChange={setSortSheetOffen}>
+          <DialogTitle>Sortierung</DialogTitle>
+          <div className="mt-3 -mx-1">
+            {sortierungen.map((o) => {
+              const aktiv = o === aktSortierung;
+              return (
+                <button
+                  key={o.sort + o.order}
+                  onClick={() => { setSortSheetOffen(false); handleSort(o.sort, o.order); }}
+                  className={cn('flex h-12 w-full items-center gap-3 rounded-lg px-3 text-left text-[15px]', aktiv ? 'bg-primary/10 font-medium text-primary' : 'active:bg-muted')}
+                >
+                  <span className="flex-1">{o.label}</span>
+                  {aktiv && <Check className="h-4 w-4" />}
+                </button>
+              );
+            })}
+          </div>
+        </Dialog>
+
+        {dialoge}
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-full">
@@ -357,48 +798,10 @@ export default function PostbuchListPage() {
         {/* Page title */}
         <div className="px-5 pt-4 pb-1">
           <GlowHeading>Dokumentenarchiv</GlowHeading>
-          {aktenmodusAkteId && (
-            <div className="mt-2 flex items-center gap-2 text-sm flex-wrap">
-              <Badge className="bg-primary/10 text-primary border-primary/30">Aktenmodus</Badge>
-              <span className="text-muted-foreground">
-                Dokumente zur Akte <span className="font-semibold">„{aktenmodusBetreff}"</span> hinzufügen
-              </span>
-              <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => navigate(aktenmodusBackTo || `/akten/${aktenmodusAkteId}`)}>
-                <ArrowLeft className="h-3.5 w-3.5" />
-                Zurück zur Akte
-              </Button>
-            </div>
-          )}          {similarToPostId && (
-            <div className="mt-2 flex items-center gap-2 text-sm flex-wrap">
-              <Badge className="bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20">Ähnliche Dokumente</Badge>
-              <span className="text-muted-foreground">
-                Ähnlich zu{' '}
-                <span className="font-mono font-semibold">{similarToPostId}</span>
-                {similarToBetreff && similarToBetreff !== similarToPostId && (
-                  <span className="ml-1">– {similarToBetreff}</span>
-                )}
-              </span>
-              <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => navigate(`/postbuch/${similarToPostId}`)}>
-                <ArrowLeft className="h-3.5 w-3.5" />
-                Zurück zum Dokument
-              </Button>
-            </div>
-          )}
-          {verbleibBackTo && (
-            <div className="mt-2 flex items-center gap-2 text-sm flex-wrap">
-              <Badge className="bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20">Ablage-Filter</Badge>
-              <span className="text-muted-foreground">
-                Dokumente der Ablage{verbleibLabel && <span className="font-semibold"> „{verbleibLabel}"</span>}
-              </span>
-              <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => navigate(verbleibBackTo)}>
-                <ArrowLeft className="h-3.5 w-3.5" />
-                Zurück zu Originale
-              </Button>
-            </div>
-          )}
+          {hinweise}
         </div>
         {/* Header */}
-        <div className="flex items-center gap-3 px-5 py-3.5 border-b border-border/60 bg-card">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-3.5 border-b border-border/60 bg-card">
           {!filterVisible && (
             <div className="relative">
               <Button
@@ -423,12 +826,12 @@ export default function PostbuchListPage() {
             aktenmodusBetreff={aktenmodusBetreff}
             aktenmodusBackTo={aktenmodusBackTo}
           />
-          {data && (
+          {geladen && (
             <span className="text-sm text-muted-foreground whitespace-nowrap ml-auto flex items-center gap-2">
               {isFetching && !isLoading && (
                 <span className="inline-block h-3 w-3 rounded-full border-2 border-primary border-t-transparent animate-spin" />
               )}
-              {data.total} Dokumente
+              {gesamt} Dokumente
             </span>
           )}
           <button
@@ -497,18 +900,20 @@ export default function PostbuchListPage() {
         )}
 
         {/* Table */}
-        <div ref={containerRef} className="flex-1 overflow-auto">
+        <div ref={containerRef} className={cn('flex-1 overflow-auto', alsKarten && 'px-4 py-3')}>
           {isLoading ? (
             <PageLoader />
           ) : error ? (
             <p className="p-6 text-destructive">Fehler: {error.message}</p>
           ) : (
             <PostbuchTable
-              data={(data?.data ?? []).filter(row => !justAddedPostIds.has(row.postid))}
+              data={zeilen}
               sort={filters.sort}
               order={filters.order}
               onSort={handleSort}
               onShowPdf={handleShowPdf}
+              angezeigtePdfId={angezeigtePdfId}
+              zielPdfId={zielPdfId}
               columnFilters={columnFilters}
               onColumnFilterChange={handleColumnFilterChange}
               aktenmodusAkteId={aktenmodusAkteId}
@@ -520,6 +925,7 @@ export default function PostbuchListPage() {
               selectedIds={selectedPostIds}
               onToggleSelect={handleToggleSelect}
               columnConfig={columnConfig}
+              alsKarten={alsKarten}
             />
           )}
         </div>
@@ -532,68 +938,7 @@ export default function PostbuchListPage() {
         )}
       </div>
 
-      {/* Aktenmodus: confirmation dialog */}
-      <Dialog open={!!confirmAddPostId} onOpenChange={() => setConfirmAddPostId(null)}>
-        <DialogTitle>Dokument zur Akte hinzufügen?</DialogTitle>
-        <DialogDescription>
-          Soll <span className="font-mono font-semibold">{confirmAddPostId}</span> zur Akte
-          <span className="font-semibold"> „{aktenmodusBetreff}"</span> hinzugefügt werden?
-        </DialogDescription>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setConfirmAddPostId(null)}>Abbrechen</Button>
-          <Button
-            onClick={async () => {
-              try {
-                const postIdToAdd = confirmAddPostId;
-                const akteId = aktenmodusAkteId;
-                setConfirmAddPostId(null);
-                // Sofort aus der Liste entfernen (optimistisch)
-                setJustAddedPostIds(prev => new Set([...prev, postIdToAdd]));
-                addDocMutation.mutateAsync({ akteid: akteId, postid: postIdToAdd })
-                  .then(() => {
-                    qc.invalidateQueries({ queryKey: ['postbuch', 'list'] });
-                    pushAction(
-                      `Dokument ${postIdToAdd} zur Akte hinzugefügt`,
-                      async () => { await api.akten.removeDocument(akteId, postIdToAdd); qc.invalidateQueries({ queryKey: ['akten'] }); },
-                      async () => { await api.akten.addDocument(akteId, postIdToAdd); qc.invalidateQueries({ queryKey: ['akten'] }); },
-                    );
-                  })
-                  .catch(err => {
-                    // Optimistic update rückgängig machen bei Fehler
-                    setJustAddedPostIds(prev => { const s = new Set(prev); s.delete(postIdToAdd); return s; });
-                    console.error('Add to akte error:', err);
-                  });
-              } catch (err) {
-                console.error('Add to akte error:', err);
-              }
-            }}
-            disabled={addDocMutation.isPending}
-          >
-            {addDocMutation.isPending ? 'Wird hinzugefügt…' : 'Hinzufügen'}
-          </Button>
-        </DialogFooter>
-      </Dialog>
-
-      {/* Export Dialog */}
-      <ExportDialog
-        open={showExportDialog}
-        onClose={handleCloseExportDialog}
-        phase={exportPhase}
-        pageCount={(data?.data ?? []).length}
-        totalCount={data?.total ?? 0}
-        selectionCount={selectedPostIds.size}
-        exportCount={
-          exportScope === 'selection' ? selectedPostIds.size
-          : exportScope === 'page'   ? (data?.data ?? []).length
-          :                            (data?.total ?? 0)
-        }
-        allowPageScope
-        isAkte={false}
-        onScopeChosen={handleScopeChosen}
-        onExport={handleExport}
-        isExporting={isExporting}
-        exportProgress={exportProgress}
-      />
+      {dialoge}
     </div>
   );
 }

@@ -9,6 +9,8 @@ import { Pencil, Trash2, Plus } from 'lucide-react';
 import { useAddArztPosition, useUpdateArztPosition, useDeleteArztPosition } from '@/hooks/usePostbuch';
 import { useUndoHistory } from '@/hooks/useUndoHistory';
 import { useAuth } from '@/hooks/useAuth';
+import { useDarstellung } from '@/hooks/useDarstellung';
+import { ListenZeile, ListenGruppe } from '@/components/listen/ListenZeile';
 import { SymLinkButton } from './SymLinkButton';
 import { positionToken } from '@/lib/erstattung';
 
@@ -96,6 +98,7 @@ function PositionDialog({ offen, titel, entwurf, setEntwurf, fehler, pending, on
  */
 export function ArztPositionenCard({ postid, positionen = [], abweichung, istTier, affectedSubids }) {
   const { canWrite } = useAuth();
+  const { istMobil } = useDarstellung();
   const { pushAction } = useUndoHistory();
   const addMut = useAddArztPosition();
   const updMut = useUpdateArztPosition();
@@ -170,6 +173,69 @@ export function ArztPositionenCard({ postid, positionen = [], abweichung, istTie
     }
   }
 
+  const aktionen = (pos, gekuerzt) => (
+    <div className="flex items-center justify-end gap-1.5">
+      {canWrite && (
+        <>
+          <button type="button" onClick={() => oeffne('bearbeiten', pos)}
+            title={`Position ${pos.subid} bearbeiten`}
+            className="text-muted-foreground/30 hover:text-muted-foreground transition-colors">
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+          <button type="button"
+            onClick={() => { setLoeschFehler(null); setLoeschen(pos); }}
+            disabled={gekuerzt}
+            title={gekuerzt ? 'Mit einer Kürzung verknüpft – nicht löschbar' : `Position ${pos.subid} löschen`}
+            className="text-destructive/30 hover:text-destructive transition-colors disabled:opacity-30 disabled:hover:text-destructive/30 disabled:cursor-not-allowed">
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </>
+      )}
+      <SymLinkButton token={positionToken(postid, pos.subid)} title="Positions-SymLink kopieren" />
+    </div>
+  );
+
+  // Mobil: je Position eine ListenZeile – Leistung und Betrag oben,
+  // Kennzahlen und Aktionen darunter, ggf. die Begründung.
+  const mobilListe = (
+    <ListenGruppe>
+      {positionen.map((pos) => {
+        const gekuerzt = affectedSubids.has(pos.subid);
+        const kennzahlen = [
+          `#${pos.subid}`,
+          formatDate(pos.behandlungs_datum),
+          pos.goa_goz_gebueh_pzn,
+          pos.faktor && `${pos.faktor}×`,
+        ].filter(Boolean).join(' · ');
+        return (
+          <ListenZeile
+            key={pos.subid} umbrechen
+            className={gekuerzt ? 'text-red-600' : ''}
+            oben={pos.leistung || '–'}
+            obenRechts={<span className="text-sm font-mono">{formatCurrency(pos.betrag)}</span>}
+            unten={<span className={cn('truncate font-mono', gekuerzt && 'text-red-400')}>{kennzahlen}</span>}
+            untenRechts={aktionen(pos, gekuerzt)}
+          >
+            {pos.begruendung && (
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium text-foreground/70">{istTier ? 'Begründung: ' : 'Begründung (Faktor > 2,3): '}</span>
+                {pos.begruendung}
+              </p>
+            )}
+          </ListenZeile>
+        );
+      })}
+      <ListenZeile oben="Summe" obenRechts={<span className="text-sm font-mono">{formatCurrency(summe)}</span>} />
+      {abweichungBetrag !== 0 && (
+        <ListenZeile
+          className="italic text-muted-foreground"
+          oben="Abweichung zum Rechnungsbetrag"
+          obenRechts={<span className="text-sm font-mono">{formatCurrency(abweichungBetrag)}</span>}
+        />
+      )}
+    </ListenGruppe>
+  );
+
   return (
     <Card>
       <CardHeader className="pb-3 flex-row items-center justify-between space-y-0">
@@ -184,7 +250,7 @@ export function ArztPositionenCard({ postid, positionen = [], abweichung, istTie
       <CardContent>
         {positionen.length === 0 ? (
           <p className="text-sm text-muted-foreground">Keine Einzelpositionen erfasst.</p>
-        ) : (
+        ) : istMobil ? mobilListe : (
           <Table>
             <TableHeader>
               <TableRow>
@@ -210,25 +276,7 @@ export function ArztPositionenCard({ postid, positionen = [], abweichung, istTie
                       <TableCell>{pos.faktor ? `${pos.faktor}×` : '–'}</TableCell>
                       <TableCell className="text-right font-mono">{formatCurrency(pos.betrag)}</TableCell>
                       <TableCell className="text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {canWrite && (
-                            <>
-                              <button type="button" onClick={() => oeffne('bearbeiten', pos)}
-                                title={`Position ${pos.subid} bearbeiten`}
-                                className="text-muted-foreground/30 hover:text-muted-foreground transition-colors">
-                                <Pencil className="h-3.5 w-3.5" />
-                              </button>
-                              <button type="button"
-                                onClick={() => { setLoeschFehler(null); setLoeschen(pos); }}
-                                disabled={gekuerzt}
-                                title={gekuerzt ? 'Mit einer Kürzung verknüpft – nicht löschbar' : `Position ${pos.subid} löschen`}
-                                className="text-destructive/30 hover:text-destructive transition-colors disabled:opacity-30 disabled:hover:text-destructive/30 disabled:cursor-not-allowed">
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </>
-                          )}
-                          <SymLinkButton token={positionToken(postid, pos.subid)} title="Positions-SymLink kopieren" />
-                        </div>
+                        {aktionen(pos, gekuerzt)}
                       </TableCell>
                     </TableRow>
                     {pos.begruendung && (

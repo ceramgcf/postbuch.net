@@ -112,7 +112,7 @@ router.post('/scan-complete',
   async (req, res) => {
     try {
       const pdfBuffer = req.body;
-      if (!pdfBuffer || pdfBuffer.length === 0) {
+      if (!Buffer.isBuffer(pdfBuffer) || pdfBuffer.length === 0) {
         return res.status(400).json({ error: 'Leerer PDF-Body' });
       }
 

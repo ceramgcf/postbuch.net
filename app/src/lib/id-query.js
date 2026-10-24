@@ -11,6 +11,9 @@
 export function parseIdQuery(q) {
   if (!q) return null;
   const trimmed = String(q).trim();
+  // Eine ID-Eingabe ist kurz; lange Eingaben erst gar nicht den Mustern mit
+  // aufeinanderfolgenden \s* vorlegen (polynomielles Backtracking).
+  if (trimmed.length > 20) return null;
 
   const m = trimmed.match(/^#?\s*([PpAa])\s*[-.]?\s*(\d{1,6})$/);
   if (m) {

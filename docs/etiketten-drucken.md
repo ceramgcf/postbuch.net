@@ -2,8 +2,10 @@
 
 Ein digitalisiertes Dokument ist gut auffindbar, das Papieroriginal im Ordner
 nicht. postbuch.net schließt diese Lücke mit kleinen Klebeetiketten: Du klebst
-eines auf das Blatt oder auf den Ordnerrücken und hast damit die **PostID** und
-einen **QR-Code** in der Hand, der direkt auf die Detailseite führt.
+eines auf das Blatt und hast damit die **PostID** und einen **QR-Code** in der
+Hand, der direkt auf die Detailseite führt. Für Ordner und andere
+[Sammelmappen](#etiketten-für-sammelmappen) gibt es ein eigenes Etikettenpaar
+mit Mappennummer und großem Titel für den Ordnerrücken.
 
 Das Etikett ist der physische Gegenpol zum
 [Verbleib](akten-und-organisation.md): Der Verbleib sagt dir, wo das Papier
@@ -81,7 +83,7 @@ gebraucht werden: auf der **Detailseite eines Dokuments**, im Menü des
 
 1. Dokument öffnen.
 2. Auf das Verbleib-Abzeichen klicken (das kleine Feld mit Symbol und
-   Ablageort).
+   Ort des Originals).
 3. ![Drucken-Symbol](icons/printer.svg) **Etikett drucken** wählen.
 
 Was dann passiert, hängt vom Zustand ab:
@@ -121,6 +123,60 @@ einer ganzen Anzahl Druckpunkte), damit er beim Druck sauber scannbar bleibt. Er
 enthält Host und Pfad, unter denen du postbuch.net aufrufst – ohne
 Protokollangabe; die meisten Scanner ergänzen sie automatisch. Scannbar ist er
 folglich nur, solange das Gerät diesen Host erreicht.
+
+Am schnellsten führt der eigene Kamerascan zurück ins Dokument: Etikett ins Bild
+der [Kamera in postbuch.net](dokumente-importieren.md#mit-der-kamera-in-postbuchnet)
+halten, nach drei Sekunden öffnet sich die Detailseite – bei einem
+Etikett einer Sammelmappe deren Dokumentliste.
+
+## Etiketten für Sammelmappen
+
+Jede [Sammelmappe](akten-und-organisation.md#aufbau) – ein Ordner, eine Mappe,
+ein Karton, eben ein Ort, an dem Papier liegt – hat eine feste
+**Mappennummer** im Format `S000123` (S wie Sammelmappe). Sie steht unter
+![Akten-Symbol](icons/folder-open.svg) `Akten → Originale` in der Spalte **ID**
+und wird beim Anlegen vergeben; eine gelöschte Nummer kommt nie wieder.
+
+Zu jeder Sammelmappe gehören zwei Etiketten:
+
+![Die beiden Etiketten einer Sammelmappe](screenshots/etikett-ablage.png)
+
+| Etikett     | Inhalt                                                                                                                                                                      |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| technisches | Logo, ein großes **S** vor den Ziffern der Mappennummer (zweizeilig wie bei Dokumenten), der Instanzname und ein **QR-Code** auf die Sammelmappe (`<deine-adresse>/mappe/S000123`) |
+| Titel       | links das **Symbol der Kategorie** in voller Etikettenhöhe, daneben der **Name der Sammelmappe** – so groß, wie er umbrochen auf das Etikett passt                               |
+
+Der QR-Code öffnet die Dokumentliste, gefiltert auf diese Sammelmappe – dieselbe
+Ansicht wie ein Klick auf die Sammelmappe unter `Akten → Originale`.
+
+![Drucken-Symbol](icons/printer.svg) **Etiketten drucken** in der Zeile einer
+Sammelmappe zeigt beide Etiketten als Vorschau, beide sind vorausgewählt. Ohne
+Eingriff druckt postbuch.net nach drei Sekunden beide hintereinander; ein
+Fortschrittsbalken im Knopf **Beide drucken** zeigt die verbleibende Zeit. Ein
+Tipp auf eine Vorschau wählt dieses Etikett ab oder wieder zu und hält den
+Ablauf an – gedruckt wird dann erst über den Knopf, etwa nur das Titel-Etikett.
+**Abbrechen** schließt die Auswahl, ohne zu drucken.
+
+Ohne Druckerverbindung landen die gewählten Etiketten untereinander in einer
+Bilddatei (`etikett-S000123.png`). Nach einer Umbenennung oder einem
+Kategoriewechsel genügt es, das Titel-Etikett neu zu drucken; die Nummer und
+damit der QR-Code bleiben gleich.
+
+### Etiketten im Kamerascan
+
+Der Kamerascan erkennt Etiketten von Dokumenten und Sammelmappen, aber nur solche, die unter derselben Adresse gedruckt
+wurden, unter der postbuch.net gerade aufgerufen ist. Wer postbuch.net unter
+mehreren Adressen nutzt, etwa über eine IP-Adresse im Heimnetz und eine Domain,
+trägt die übrigen unter ![Einstellungen-Symbol](icons/settings.svg)
+**Einstellungen → Drucker → Etiketten im Kamerascan** ein (nur für Admins):
+eine Adresse je Zeile, so wie sie im QR-Code vor `/postbuch/` bzw. `/mappe/` steht, also mit
+Port, falls einer dabei ist.
+
+Mit **Adresse nicht prüfen** zählt nur noch der hintere Teil
+`…/postbuch/P000123` bzw. `…/mappe/S000123`; dann öffnen auch Etiketten mit
+unbekannter Adresse oder von einer anderen Instanz das Dokument mit derselben
+PostID bzw. die Sammelmappe mit derselben Nummer. QR-Codes, die
+anders aufgebaut sind, bleiben in jedem Fall Teil des Papiers.
 
 ## Praxis
 

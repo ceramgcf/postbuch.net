@@ -11,7 +11,6 @@ import { FileText } from 'lucide-react';
 // Dialog zum Auswählen eines Dokuments (auf `arten` oder mit `nurRechnungen` auf
 // Dokumente mit Rechnungsblock eingeschränkt) – per Suche
 // (Nummer/Betreff/Kontakt) ODER per direktem Einfügen eines SymLink-Tokens.
-// Als Dialog ([role="dialog"]) bleibt er auch auf Mobile im Portrait sichtbar.
 export function DocumentPicker({ open, onOpenChange, arten, nurRechnungen = false, title, description, onSelect, isPending }) {
   const [q, setQ] = useState('');
   const [items, setItems] = useState([]);

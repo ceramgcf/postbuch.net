@@ -1,9 +1,11 @@
 import { useState, useCallback, useMemo, useEffect, useId } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { usePerioden, usePeriodenRechnungen, usePeriodenPins, useKuerzungen, useEntfernePkvPruefung, useUnpinDokument } from '@/hooks/usePostbuch';
 import { useUndoHistory } from '@/hooks/useUndoHistory';
 import { useAbrechnungLauncher } from '@/hooks/useAbrechnungLauncher';
 import { useAuth } from '@/hooks/useAuth';
+import { useDarstellung } from '@/hooks/useDarstellung';
+import { ListenZeile, ListenGruppe, punkt } from '@/components/listen/ListenZeile';
 import { api } from '@/api/client';
 import { GlowHeading } from '@/components/ui/GlowHeading';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -94,9 +96,41 @@ function AbleitungsHinweis({ periode, kette }) {
 }
 
 // ─── RechnungenList ───────────────────────────────────────────────────────────
+// Mobil: je Rechnung eine ListenZeile – Arzt und Betrag,
+// darunter Datum, Re-Nr. und Erstattungsstand.
+function RechnungZeile({ r, onClick }) {
+  const gesamt = parseFloat(r.gesamtbetrag) || 0;
+  const pct = gesamt > 0 ? Math.round((parseFloat(r.erstattungsbetrag_gesamt) || 0) / gesamt * 100) : null;
+  return (
+    <ListenZeile
+      onClick={onClick}
+      oben={r.name_arzt ?? '–'}
+      obenRechts={<span className="text-sm font-mono">{formatCurrency(r.gesamtbetrag)}</span>}
+      unten={<>
+        <span className="shrink-0">{formatDate(r.briefdatum ?? r.rechnungsdatum)}</span>
+        {r.re_nr && <>{punkt}<span className="truncate">Re-Nr. {r.re_nr}</span></>}
+        {r.historisch && (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded border border-slate-300 bg-slate-100 px-1 text-[10px] font-medium text-slate-600">
+            <Archive className="h-2.5 w-2.5" />Archiviert
+          </span>
+        )}
+      </>}
+      untenRechts={<>
+        {pct !== null && pct > 0
+          ? <span className={pct >= 100 ? 'text-green-700 font-medium' : 'text-green-600'}>{pct} %</span>
+          : r.erwartete_erstattung != null && <span className="text-blue-700">erw. <span className="font-mono">{formatCurrency(r.erwartete_erstattung)}</span></span>}
+        {r.bezahlt_am
+          ? <span className="text-green-700">bez. {formatDate(r.bezahlt_am)}</span>
+          : <span>unbezahlt</span>}
+      </>}
+    />
+  );
+}
+
 function RechnungenList({ person, kostentraeger, periode, backPath }) {
   const { data, isLoading, error } = usePeriodenRechnungen(person, kostentraeger, periode);
   const navigate = useNavigate();
+  const { istMobil } = useDarstellung();
 
   if (isLoading) return (
     <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
@@ -117,6 +151,17 @@ function RechnungenList({ person, kostentraeger, periode, backPath }) {
   }));
 
   const anyErwartet = rows.some((r) => r.erwartete_erstattung != null);
+  const oeffne = (r) => navigate(`/postbuch/${r.postid}`, {
+    state: { from: backPath, navList, navIndex: rows.findIndex((x) => x.postid === r.postid) },
+  });
+
+  if (istMobil) {
+    return (
+      <ListenGruppe className="mt-1">
+        {rows.map((r) => <RechnungZeile key={r.postid} r={r} onClick={() => oeffne(r)} />)}
+      </ListenGruppe>
+    );
+  }
 
   return (
     <div className="mt-2 rounded-md border overflow-hidden">
@@ -219,6 +264,15 @@ function PeriodeActions({ p, expanded, person, kostentraeger, collectingCount, h
   const { pushAction } = useUndoHistory();
   const { launchWithSelection } = useAbrechnungLauncher();
   const { canWrite } = useAuth();
+  // Solange eine Abrechnung offen ist, kein neues Einreichen anbieten – sie wird
+  // über den Assistenten oben fortgesetzt (gleicher Query-Key, kein Extra-Request).
+  const { data: sessionsData } = useQuery({
+    queryKey: ['abrechnungsperiode', 'sessions'],
+    queryFn: () => api.abrechnungsperiode.sessions(),
+    staleTime: 60_000,
+    enabled: canWrite,
+  });
+  const abrechnungOffen = (sessionsData?.sessions?.length ?? 0) > 0;
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ['analyse', 'perioden'] });
 
@@ -318,7 +372,7 @@ function PeriodeActions({ p, expanded, person, kostentraeger, collectingCount, h
   if (p.status === 'WITHHELD') {
     return (
       <div className="flex items-center gap-0.5">
-        {canWrite && (
+        {canWrite && !abrechnungOffen && (
           <PeriodeAktion
             expanded={expanded}
             icon={Send}
@@ -340,7 +394,7 @@ function PeriodeActions({ p, expanded, person, kostentraeger, collectingCount, h
   if (p.status === 'COLLECTING') {
     return (
       <div className="flex items-center gap-0.5">
-        <PeriodeAktion expanded={expanded} icon={Send} label="Einreichen" onClick={handleClose} iconClassName="text-primary" title="Periode einreichen (Abrechnungsassistent)" />
+        {!abrechnungOffen && <PeriodeAktion expanded={expanded} icon={Send} label="Einreichen" onClick={handleClose} iconClassName="text-primary" title="Periode einreichen (Abrechnungsassistent)" />}
         {editButton}
         <PeriodeAktion expanded={expanded} icon={SkipForward} label="Auslassen" onClick={handleOmitClick} title="Auf Abrechnung verzichten (AUSGELASSEN)" />
         {collectingCount >= 2 && (
@@ -574,7 +628,7 @@ function PeriodeRow({ p, person, kostentraeger, backPath, onOpen, onClose, isHig
 
   return (
     <div className="@container border rounded-lg overflow-hidden">
-      <div className="flex items-center gap-2 p-2.5 hover:bg-muted/30 transition-colors">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 p-2.5 hover:bg-muted/30 transition-colors">
         <button
           className="flex items-center gap-2 min-w-0 flex-1 text-left overflow-hidden"
           onClick={toggle}
@@ -645,7 +699,9 @@ function PeriodeRow({ p, person, kostentraeger, backPath, onOpen, onClose, isHig
         {/* Schmale Zeile (Nachbarspalte einer aufgeklappten Periode, mobil):
             zugeklappt nur Nummer, Status und Beträge – Aktionen und Anzahl
             gibt es nach dem Aufklappen. */}
-        <div className={`${open ? 'flex' : 'hidden @min-[380px]:flex'} items-center flex-shrink-0 mr-3`}>
+        {/* Aufgeklappt in schmaler Karte: Aktionen in eine eigene Zeile, sonst
+            drücken die beschrifteten Knöpfe Nummer und Status auf null Breite. */}
+        <div className={`${open ? 'flex @max-[480px]:order-last @max-[480px]:basis-full @max-[480px]:justify-end @max-[480px]:mr-0 @max-[480px]:pt-1' : 'hidden @min-[380px]:flex'} items-center flex-shrink-0 mr-3`}>
           <PeriodeActions
             p={p}
             expanded={open}
@@ -1323,6 +1379,7 @@ export default function PeriodenPage() {
   const [mergeOmittedRequest, setMergeOmittedRequest] = useState(null);
   const [editRequest, setEditRequest] = useState(null);
   const [tierTab, setTierTab] = useState(false);
+  const { istMobil } = useDarstellung();
 
   const handleOpen = useCallback((col) => {
     setColState((prev) => ({ ...prev, [col]: prev[col] + 1, active: col }));
@@ -1371,14 +1428,15 @@ export default function PeriodenPage() {
   const zeigeBeihilfe = !aktiveTierGruppe;
   // calc(X% - 8px) kompensiert den 16px gap, damit beide Spalten zusammen
   // exakt 100% breit sind (und somit bündig mit der Wizard-Card abschließen).
-  const pkvWidth = !zeigeBeihilfe ? '100%' : active === null ? 'calc(50% - 8px)' : active === 'PKV' ? 'calc(75% - 8px)' : 'calc(25% - 8px)';
-  const beihilfeWidth = active === null ? 'calc(50% - 8px)' : active === 'Beihilfe' ? 'calc(75% - 8px)' : 'calc(25% - 8px)';
+  // Mobil stehen PKV und Beihilfe untereinander, jeweils in voller Breite.
+  const pkvWidth = !zeigeBeihilfe || istMobil ? '100%' : active === null ? 'calc(50% - 8px)' : active === 'PKV' ? 'calc(75% - 8px)' : 'calc(25% - 8px)';
+  const beihilfeWidth = istMobil ? '100%' : active === null ? 'calc(50% - 8px)' : active === 'Beihilfe' ? 'calc(75% - 8px)' : 'calc(25% - 8px)';
 
   return (
     <div className="px-6 pt-4 pb-6 lg:px-8 lg:pb-8 space-y-4">
       <div>
         <GlowHeading>Abrechnungsperioden PKV &amp; Beihilfe</GlowHeading>
-        <p className="text-muted-foreground mt-1">Übersicht der Abrechnungsperioden nach Kostenträger. Menschen und Tiere werden nie gemeinsam abgerechnet.</p>
+        <p className="text-muted-foreground mt-1">Übersicht der Abrechnungsperioden nach Kostenträger.</p>
       </div>
 
       {brauchtTabs && (
@@ -1406,7 +1464,7 @@ export default function PeriodenPage() {
 
       <AbrechnungWizardCard istTier={aktiveTierGruppe} />
 
-      <div className="flex gap-4 items-start" style={{ width: '100%' }}>
+      <div className={istMobil ? 'flex flex-col gap-4' : 'flex gap-4 items-start'} style={{ width: '100%' }}>
         <div style={{ width: pkvWidth, transition: 'width 0.3s ease', flexShrink: 0, minWidth: 0, overflow: 'hidden' }}>
           <KostentraegerColumn
             label="PKV"
