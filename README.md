@@ -209,7 +209,10 @@ Damit du weißt, worauf du dich einlässt:
   dazu. Der Code ist maßgeblich mit
   KI-Coding-Werkzeugen entstanden und nicht vollständig von Menschen
   gegengeprüft. Es gibt keine Garantie und keinen Support im kommerziellen
-  Sinn; Fehlerberichte und Fragen über GitHub-Issues sind willkommen.
+  Sinn. Fehlerberichte sind als
+  [Issue](https://github.com/ceramgcf/postbuch.net/issues) willkommen, Fragen
+  und Ideen in den
+  [Discussions](https://github.com/ceramgcf/postbuch.net/discussions).
 
 Weitere Hinweise:
 

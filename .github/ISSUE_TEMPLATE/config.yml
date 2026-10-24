@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Frage stellen oder Idee besprechen
+    url: https://github.com/ceramgcf/postbuch.net/discussions
+    about: Fragen zu Installation, Einrichtung und Bedienung sowie lose Ideen gehören in die Discussions.

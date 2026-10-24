@@ -31,7 +31,9 @@ private Entwicklungsdaten oder betriebene postbuch.net-Instanzen.
 - ein Hinweis auf mögliche Auswirkungen für Updates oder bestehende Daten.
 
 Bitte vermische keine unabhängigen Umbauten mit einer Fehlerkorrektur. Größere
-Ideen sollten zuerst als Feature-Issue besprochen werden.
+Ideen sollten zuerst in den
+[Discussions](https://github.com/ceramgcf/postbuch.net/discussions) unter
+„Ideen“ oder als Feature-Issue besprochen werden.
 
 ## Datenschutz und Secrets
 
