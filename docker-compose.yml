@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11
+    image: pgvector/pgvector:pg18
     container_name: postbuch-postgres
     restart: unless-stopped
     environment:
