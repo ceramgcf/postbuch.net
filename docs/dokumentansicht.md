@@ -260,7 +260,12 @@ Zwei Dinge sind dabei wichtig:
   nennt die betroffenen Bescheide; zuerst muss dort die Zuordnung gelöst oder
   der Bescheid selbst gelöscht werden. Dieser Schutz sitzt zusätzlich als Regel
   in der Datenbank und lässt sich auch über Import- oder Wartungswege nicht
-  umgehen.
+  umgehen. Ebenso gesperrt sind ein Bescheid, an dessen Kürzungen noch eine
+  PKV-Prüfvormerkung hängt, ein Dokument mit Dokument-Pins in einer
+  Abrechnungsperiode und eine Rechnung, die mit einer Korrektur- bzw.
+  Ursprungsrechnung verknüpft ist. In allen Fällen bleibt der
+  Bestätigungsdialog offen und nennt den Grund samt dem nötigen ersten
+  Schritt; der Rückgängig-Verlauf bleibt dabei erhalten.
 
 ## Metadaten und Verknüpfungen einsehen/verwalten
 
@@ -295,10 +300,16 @@ Vier Gruppen, von links nach rechts:
    [Etiketten drucken](etiketten-drucken.md).
 2. **Einordnung.** **Lebensbereich × Dokumentart** als zwei Badges (siehe
    unten).
-3. **KI-Analyse.** Das **KI-Modell**, das das Dokument verarbeitet hat: ein
-   Klick klappt eine Tabelle auf, die je Phase (Vorverarbeitung,
-   Klassifizierung, bei Bescheiden zusätzlich EB-Parsing und Kürzungs-Matching)
-   das Modell, Input- und Output-Token und die Kosten zeigt, mit Gesamtzeile.
+3. **KI-Analyse.** Das **KI-Modell**, das das Dokument zuletzt gelesen hat –
+   bei einer Arztrechnung, die ein stärkeres Modell nachgelesen hat, also das
+   Modell der Nachlese, bei einem Bescheid das des letzten Schritts der
+   Kürzungszerlegung. Ein Klick klappt eine Tabelle auf, die jeden KI-Aufruf
+   der letzten Verarbeitung einzeln zeigt (etwa Voranalyse, Klassifizierung,
+   Einzelpositionen, Nachlese, Reparatur, bei Bescheiden zusätzlich
+   Bescheid-Auswertung und Kürzungszerlegung) mit Modell, Input- und
+   Output-Token und Kosten, darunter die Gesamtzeile. Ist für ein Modell kein
+   Preis hinterlegt, steht bei den Kosten „–“ und die Gesamtzeile beginnt mit
+   „mind.“.
    Daneben **QdE** in Prozent – die _Qualität der Extraktion_, also wie sicher
    sich die KI beim Auslesen war. Gab es Qualitätswarnungen, ist auch dieses
    Badge aufklappbar und zeigt sie im Klartext.
@@ -872,8 +883,34 @@ Zusammenstellen automatisch der Fallback **ganzes Dokument**.
 
 Hat die Rechnung Einzelpositionen, folgt darunter eine Tabelle mit Nummer,
 Behandlungsdatum, Ziffer (GOÄ/GOZ bzw. GOT/PZN), Leistung, Faktor und Betrag.
-Steht bei einer Position eine **Begründung** – bei Menschen üblicherweise für
-einen Faktor über 2,3 –, wird sie klein darunter eingeblendet.
+Ist der Bereich dafür zu schmal, etwa neben der PDF-Vorschau oder auf dem
+Smartphone, steht jede Position als eigene Zeile mit Leistung und Betrag oben
+und den übrigen Angaben darunter.
+Unter der Leistung stehen klein die **Weitere Angaben**. Steht bei einer
+Position eine **Begründung** – bei Menschen üblicherweise für einen Faktor über
+2,3 –, wird sie klein darunter eingeblendet.
+Verweist die Rechnung nur auf eine Begründung an anderer Stelle, etwa über eine
+Nummer und eine Legende am Ende, steht hier der volle Text der Legende.
+
+**Weitere Angaben** fasst zusammen, was die Rechnung sonst noch zu einer Position
+führt, zum Beispiel Zahn oder Region und Anzahl, in der Form
+„Region: 13; Anzahl: 2“. Die Bezeichnungen stammen aus den Spaltenüberschriften
+der Rechnung.
+
+Liegt der Rechnung ein **Beleg** bei, etwa eine Fremdlaborrechnung, ein
+Praxislaborbeleg oder ein Materialbeleg, führt die Rechnung dessen Summe als
+eine Position. Unter dieser Position klappt ein Klick auf den Belegnamen die
+**Belegzeilen** auf: Nummer, Leistung, Menge mal Einzelpreis und Betrag, die
+Mehrwertsteuer des Belegs als eigene Zeile. Übernommen werden die Belegzeilen
+nur, wenn sie zusammen genau den Betrag der Position ergeben. Sie schlüsseln die
+Position nur auf: Summe, Abweichung und Kürzungen rechnen weiter mit dem Betrag
+der Position, die Belegzeilen zählen nie zusätzlich. Von Hand bearbeiten lassen
+sie sich nicht; nach einer Wiederverarbeitung liest die KI sie neu.
+
+Fehlt der KI beim Lesen etwas, etwa weil die Positionen nicht den
+Rechnungsbetrag ergeben, liest ein zweites Modell nach (siehe
+[Arztrechnungen und Nachlese](ki-provider.md#arztrechnungen-und-nachlese)).
+Bleiben danach Zweifel, stehen die Befunde als Warnung am Dokument.
 
 Positionen, die in einem Erstattungsbescheid **gekürzt** wurden, erscheinen
 **rot**. Das ist der schnellste Weg zu sehen, woran eine Erstattung gescheitert
@@ -886,7 +923,7 @@ Hat die KI eine Position falsch oder gar nicht gelesen, lässt sich die Liste
 von Hand richtigstellen (nicht mit Lesezugriff):
 
 - **Bearbeiten** – das Stift-Symbol am Zeilenende öffnet einen Dialog mit
-  Datum, Ziffer, Leistung, Faktor, Betrag und Begründung.
+  Datum, Ziffer, Leistung, Weitere Angaben, Faktor, Betrag und Begründung.
 - **Hinzufügen** – **Position hinzufügen** oben rechts in der Karte legt eine
   neue Position an. Sie bekommt die nächste freie Nummer; vorhandene Nummern
   ändern sich nie, weil Kürzungen und SymLinks auf sie verweisen.
@@ -1137,6 +1174,24 @@ Rechnungsposition. Sie erscheint nur, wenn die Bescheidposition bereits mit
 einer Rechnung verknüpft ist – sonst steht dort „Erst eine Rechnung zuordnen,
 dann kann eine Einzelposition gewählt werden". Die Reihenfolge ist also:
 zuordnen, dann kürzen.
+
+Begründet der Kostenträger einen einzigen Kürzungsbetrag mit vielen Gründen,
+die verschiedene Positionen betreffen, zerlegt die KI ihn in mehrere Kürzungen:
+je betroffener Position eine, mit dem Teil der Begründung, der sie trägt. Die
+Teile sind ganze Sätze der Begründung, unverändert übernommen; eine Datumszeile
+vor einem Absatz steht auch vor jedem daraus übernommenen Satz. Kürzungen
+zahntechnischer oder ästhetischer Laborleistungen landen auf der Position des
+Belegs, dessen Belegzeilen diese Leistungen enthalten. Was sich keiner Position
+zuordnen lässt, bleibt eine Kürzung ohne Position mit nur den Sätzen, die keine
+andere Kürzung trägt. Die Teile ergeben zusammen genau den Betrag auf dem
+Bescheid. Gelingt die Zerlegung
+nicht nachprüfbar, bleibt die Kürzung unzerlegt mit der vollen Begründung
+stehen und lässt sich von Hand aufteilen.
+
+Die Zerlegung läuft nach dem Abgleich im Hintergrund und kann bei langen
+Rechnungen einige Minuten dauern. Solange zeigen Bescheid und betroffene
+Rechnung den Hinweis, dass Kürzungen noch den Rechnungspositionen zugeordnet
+werden; die Ansicht lädt sich selbst nach, sobald sie gespeichert sind.
 
 Der Gesamt-Kürzungsbetrag der Position wird bei jedem Anlegen, Ändern und
 Löschen serverseitig neu als Summe berechnet; von Hand gepflegt wird er nie. In

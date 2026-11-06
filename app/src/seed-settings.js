@@ -282,6 +282,10 @@ const seedProvider = process.env.ANTHROPIC_API_KEY ? 'anthropic'
 const seedModell = seedProvider ? werkseinstellungFuerProvider(seedProvider) : null;
 if (seedModell) {
   for (const { settingKey } of MODEL_CLASSES) {
+    // Die Nachlese bleibt ungesetzt und erbt zur Laufzeit das Analyse- bzw.
+    // Schwierig-Modell (loadDynamicSettings). Sonst bekäme eine bestehende
+    // Instanz beim Update hier das günstige Werksmodell als Nachleser.
+    if (settingKey === 'llm_model_nachlese') continue;
     const existing = await client.query('SELECT 1 FROM _settings WHERE key = $1', [settingKey]);
     if (existing.rows.length) continue;
     await client.query(

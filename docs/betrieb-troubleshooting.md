@@ -121,7 +121,10 @@ Egal ob per Knopf oder von Hand – es ist derselbe Ablauf:
    `~/postbuch/backups/backup_<zeitstempel>/`.
 3. Neuen Quellbaum auspacken. Die `.env` bleibt unverändert.
 4. Container neu bauen und starten. Die App wendet beim Start das Schema an
-   (siehe [Architektur](architektur.md)).
+   (siehe [Architektur](architektur.md)). Bringt das Release ein neues
+   PostgreSQL-Image derselben Hauptversion mit, wird auch der
+   Datenbankcontainer getauscht (siehe
+   [Datenbank-Image aktualisieren](#datenbank-image-aktualisieren)).
 5. Die ausgelieferte Hilfe wird mit dem aktiven Embedding-Modell abgeglichen.
    Neue oder geänderte Hilfeabschnitte werden beim externen KI-Anbieter neu
    eingebettet; identische Abschnitte übernimmt postbuch.net ohne neuen Aufruf.
@@ -145,6 +148,59 @@ Minuten.
 
 Ohne Agenten funktioniert alles andere unverändert – man aktualisiert eben
 über die Shell.
+
+### Datenbank-Image aktualisieren
+
+Das PostgreSQL-Image ist wie alle Basis-Images per Digest festgelegt. Ein
+Release kann diesen Digest anheben, etwa wegen Sicherheitskorrekturen im
+Image. Der Datenbankcontainer wird dann gegen das neue Image getauscht, aber
+nur, wenn drei Bedingungen erfüllt sind:
+
+- Für das Update liegt eine frische Sicherung mit Datenbank-Dump vor.
+- Image und Datenbestand haben dieselbe PostgreSQL-Hauptversion. Ein Wechsel
+  der Hauptversion ist immer ein [Umzug](#datenbank-umzug-auf-postgresql-18).
+- Das neue Image ist vollständig geladen.
+
+Fehlt eine davon, läuft der bisherige Datenbankcontainer unverändert weiter.
+Die Daten unter `data/postgres` bleiben beim Tausch, wo sie sind; die
+Datenbank ist nur wenige Sekunden nicht erreichbar.
+
+Ausgelöst wird der Tausch auf drei Wegen:
+
+- **Bei jedem Update** über `install.sh` vor dem Start der neuen Container.
+- **Mit Update-Agent** zusätzlich einmal je installierter Version wenige
+  Minuten nach dem Update. Das fängt den Fall ab, dass beim Update noch der
+  Installer der Vorversion gelaufen ist.
+- **Von Hand:**
+
+  ```bash
+  cd ~/postbuch && ./deploy-pages/install.sh --postgres-image
+  ```
+
+### Eigene Compose-Anpassungen
+
+Eine Datei `docker-compose.override.yml` im Installationsverzeichnis liest
+Docker Compose automatisch zusätzlich zu `docker-compose.yml`. Updates lassen
+sie stehen, so wie `.env` und `caddy/Caddyfile`. Damit lässt sich zum Beispiel
+ein neuerer Digest des PostgreSQL-Images eintragen, ohne auf das nächste
+Release zu warten:
+
+```yaml
+services:
+  postgres:
+    image: pgvector/pgvector:pg18@sha256:<digest>
+```
+
+Der Tausch läuft dann beim nächsten Update oder sofort mit `install.sh
+--postgres-image` nach denselben Regeln wie oben. Das Update meldet dabei,
+dass das Image vom Release abweicht.
+
+> [!WARNING]
+>
+> Die Override-Datei wirkt auf jeden Compose-Aufruf, auch auf die des Updates.
+> Was darin steht, ist nicht durch die Release-Signatur abgedeckt. Ein Tag ohne
+> Digest (etwa `pg18`) holt bei jedem Update den gerade aktuellen Stand, also
+> ungeprüfte Images. Die Verantwortung für den Inhalt liegt beim Betreiber.
 
 ### Datenbank-Umzug auf PostgreSQL 18
 
@@ -351,9 +407,13 @@ eine überschaubare Sache – der Weg steht in
 [Backup und Wiederherstellung](backup-wiederherstellung.md) unter „Der
 Ernstfall".
 
-Fehler, die nach einem Programmfehler aussehen, gehören gemeldet;
-Sicherheitslücken bitte **nicht** öffentlich, sondern auf dem in `SECURITY.md`
-beschriebenen Weg.
+Fehler, die nach einem Programmfehler aussehen, gehören als
+[Issue auf GitHub](https://github.com/ceramgcf/postbuch.net/issues) gemeldet,
+Fragen und Ideen in die
+[GitHub-Discussions](https://github.com/ceramgcf/postbuch.net/discussions).
+Sicherheitslücken bitte **nicht** öffentlich, sondern vertraulich über
+[„Report a vulnerability“](https://github.com/ceramgcf/postbuch.net/security/advisories/new)
+melden. Mehr dazu unter [Hilfe und Kontakt](faq.md#hilfe-und-kontakt).
 
 ---
 

@@ -26,7 +26,8 @@ import {
 import { countPdfPages, stripTextLayer, extractTextLayer, renderPdfToImages, RASTER_MAX_SEITEN } from './pdf.js';
 import { activeCacheTier, touchCacheMode } from './cache-mode.js';
 import { subscriptionFeatureUnlocked, callClaudeSubscription, isInsideAgentSubprocess } from './claude-subscription.js';
-import { getProvider, listProviders, BUILTIN_PROVIDER_IDS, kannPdfEmpfangen, permanentError, KEINE_CAPS, clampMaxTokens, MAX_TOKENS_NOTFALL } from './llm/registry.js';
+import { getProvider, listProviders, BUILTIN_PROVIDER_IDS, kannPdfEmpfangen, permanentError, KEINE_CAPS, clampMaxTokens, MAX_TOKENS_NOTFALL, MAX_TOKENS_OHNE_GRENZE, grenzeAusAblehnung } from './llm/registry.js';
+import { TIMEOUT_COMPLETION_MS, TIMEOUT_COMPLETION_LANG_MS } from './net-guard.js';
 import { callAnthropic, buildAnthropicUserContent } from './llm/providers/anthropic.js';
 import { callBedrock, getBedrockClient } from './llm/providers/bedrock.js';
 import { callOpenAI } from './llm/providers/openai.js';
@@ -131,6 +132,15 @@ export function calculateCost(model, a, b, c) {
     + Number(cacheReadTokens || 0)     * cacheReadPrice;
   const outputCost = Number(tokensOut || 0) * outputPrice;
   return (inputCost + outputCost) / 1_000_000;
+}
+
+/**
+ * Addiert Kosten zweier Aufrufe. Ist einer davon unbekannt (null, kein Preis
+ * hinterlegt), ist die Summe unbekannt – eine Teilsumme sähe aus wie die
+ * vollständigen Kosten.
+ */
+export function summeKosten(a, b) {
+  return a == null || b == null ? null : Number(a) + Number(b);
 }
 
 // Schreibt einen LLM-Call in postbuch.llm_call_log. Fehler werden nur geloggt
@@ -367,7 +377,9 @@ export function capsForRef(settings, ref) {
  *
  * @param {object|string} ref  - { providerId, model } oder Modell-ID (Legacy)
  * @param {string}  prompt     - User-seitiger Text-Prompt
- * @param {object}  opts       - { pdf, bilder, system, maxTokens, cacheSystem, jsonMode, zweck }
+ * @param {object}  opts       - { pdf, bilder, system, maxTokens, cacheSystem, jsonMode, jsonSchema, zweck }
+ *   `jsonSchema` erzwingt bei Anthropic (API und Abo) die Antwortstruktur
+ *   (prompts/antwort-schemas.js); andere Provider ignorieren es.
  *   `zweck: 'profilierung'` schaltet für Anthropic/OpenAI-kompatible Provider
  *   Thinking/reasoning_effort auf 'high' (Kostenträger-Profilierung, siehe
  *   lib/llm/thinking-policy.js). Ohne Angabe unverändertes Verhalten.
@@ -389,7 +401,10 @@ function istMaxTokensAblehnung(err) {
 }
 
 async function callModel(ref, prompt, opts, ctx, meta = null) {
-  const { pdf, pdfs, bilder, system, maxTokens: maxTokensWunsch = 8192, cacheSystem = false, jsonMode = false, zweck } = opts || {};
+  // Ohne maxTokens gibt es keine künstliche Ausgabegrenze: Es soll so viel
+  // herauskommen, wie das Dokument verlangt. Nur kurze Hilfsaufrufe (Titel,
+  // Akten-Vorschlag) geben noch bewusst eine kleine Grenze vor.
+  const { pdf, pdfs, bilder, system, maxTokens: maxTokensWunsch, cacheSystem = false, jsonMode = false, jsonSchema = null, zweck } = opts || {};
   const settings = ctx?.settings || {};
   const keys = ctx?.keys || buildKeys(settings);
   const m = meta || {};
@@ -404,7 +419,13 @@ async function callModel(ref, prompt, opts, ctx, meta = null) {
   // Ohne hinterlegte Grenze bleibt der Wunsch unverändert – dann greift bei
   // einer Ablehnung durch die API der Rückfallversuch weiter unten.
   const maxTokens = clampMaxTokens(maxTokensWunsch, provider);
-  const callOpts = { pdf, pdfs, bilder, system, maxTokens, cacheSystem, jsonMode, zweck };
+  // Eine unbegrenzte Antwort braucht ohne Streaming mehr Zeit als ein kurzer
+  // Aufruf; die Verbindung soll nicht vor dem Modell aufgeben.
+  const timeoutMs = Number.isFinite(maxTokensWunsch) ? TIMEOUT_COMPLETION_MS : TIMEOUT_COMPLETION_LANG_MS;
+  const callOpts = { pdf, pdfs, bilder, system, maxTokens, cacheSystem, jsonMode, jsonSchema, zweck, timeoutMs };
+  // Tatsächlich gesendeter Wert: Anthropic und Bedrock verlangen das Feld und
+  // bekommen ohne Grenze MAX_TOKENS_OHNE_GRENZE, alle anderen lassen es weg.
+  const gesendet = maxTokens ?? (['anthropic', 'bedrock'].includes(provider.typ) ? MAX_TOKENS_OHNE_GRENZE : undefined);
   // Jeder Versuch nimmt optional einen abweichenden max_tokens-Wert entgegen,
   // damit der Rückfallversuch denselben Provider erneut fahren kann.
   const optsMit = (mt) => (mt ? { ...callOpts, maxTokens: mt } : callOpts);
@@ -427,7 +448,7 @@ async function callModel(ref, prompt, opts, ctx, meta = null) {
     if (keys?.subscriptionEnabled && keys?.claudeOauthToken && !isInsideAgentSubprocess()) {
       attempts.push({
         provider: 'subscription', viaSubscription: true,
-        run: (mt) => callClaudeSubscription(model, prompt, { pdf, pdfs, system, maxTokens: mt || maxTokens }, buildAnthropicUserContent, keys.claudeOauthToken),
+        run: (mt) => callClaudeSubscription(model, prompt, { pdf, pdfs, system, maxTokens: mt || maxTokens, jsonSchema }, buildAnthropicUserContent, keys.claudeOauthToken),
       });
     }
     // Seitwärtsschritt / Primärpfad: dasselbe Modell über die Anthropic-API.
@@ -444,7 +465,7 @@ async function callModel(ref, prompt, opts, ctx, meta = null) {
   } else if (provider.typ === 'subscription') {
     attempts.push({
       provider: provider.id, viaSubscription: true,
-      run: (mt) => callClaudeSubscription(model, prompt, { pdf, pdfs, system, maxTokens: mt || maxTokens }, buildAnthropicUserContent, provider.apiKey),
+      run: (mt) => callClaudeSubscription(model, prompt, { pdf, pdfs, system, maxTokens: mt || maxTokens, jsonSchema }, buildAnthropicUserContent, provider.apiKey),
     });
   } else {
     attempts.push({
@@ -502,12 +523,15 @@ async function callModel(ref, prompt, opts, ctx, meta = null) {
         // (maxOutputTokens) und lehnt den Wert ab. Statt die Kette auf ein
         // schwächeres Modell absteigen zu lassen, denselben Provider EINMAL mit
         // dem kleinsten gängigen Wert wiederholen.
-        if (!istMaxTokensAblehnung(err) || maxTokens <= MAX_TOKENS_NOTFALL) throw err;
+        if (!istMaxTokensAblehnung(err) || !Number.isFinite(gesendet) || gesendet <= MAX_TOKENS_NOTFALL) throw err;
+        // Die Ablehnung nennt meist das Ausgabemaximum des Modells; dann genau
+        // damit wiederholen, sonst mit dem kleinsten gängigen Wert.
+        const zweiterWert = grenzeAusAblehnung(err.message, gesendet) ?? MAX_TOKENS_NOTFALL;
         logAttempt(att, null, err, t0);
-        console.warn(`[llm] ${model} via ${att.provider}: max_tokens ${maxTokens} abgelehnt → Wiederholung mit ${MAX_TOKENS_NOTFALL}`);
-        appLog('WARN', 'llm', `${model} via ${att.provider} lehnt max_tokens ${maxTokens} ab → einmalige Wiederholung mit ${MAX_TOKENS_NOTFALL}. Dauerhafte Abhilfe: beim Provider unter Einstellungen → KI-Anbieter ein „Limit für Antwort-Tokens" hinterlegen.`);
+        console.warn(`[llm] ${model} via ${att.provider}: max_tokens ${gesendet} abgelehnt → Wiederholung mit ${zweiterWert}`);
+        appLog('WARN', 'llm', `${model} via ${att.provider} lehnt max_tokens ${gesendet} ab → einmalige Wiederholung mit ${zweiterWert}. Dauerhafte Abhilfe: beim Provider unter Einstellungen → KI-Anbieter ein „Limit für Antwort-Tokens" hinterlegen.`);
         t0 = Date.now();
-        result = await att.run(MAX_TOKENS_NOTFALL);
+        result = await att.run(zweiterWert);
       }
       logAttempt(att, result, null, t0);
       // Welche Schiene tatsächlich bedient hat → für die Kostenberechnung der
@@ -757,7 +781,7 @@ export async function assessDifficulty(pdfBuffer, settings = null, meta = null, 
           doc.inputMode === 'text'
             ? withDocumentText(PRE_ANALYSIS_USER_MESSAGE, doc.text)
             : PRE_ANALYSIS_USER_MESSAGE,
-          { pdf: doc.pdf, bilder: doc.bilder, system: PRE_ANALYSIS_SYSTEM_PROMPT },
+          { pdf: doc.pdf, bilder: doc.bilder, system: PRE_ANALYSIS_SYSTEM_PROMPT, jsonMode: true },
           ctx,
           baseMeta,
         );
@@ -971,10 +995,15 @@ export async function analyzeDocument(
           const r = await callModel(
             ref,
             doc.inputMode === 'text' ? withDocumentText(basisPrompt, doc.text) : basisPrompt,
-            { pdf: doc.pdf, bilder: doc.bilder, maxTokens: 8192, system: useCache ? systemForCall : undefined, cacheSystem: useCache, zweck },
+            { pdf: doc.pdf, bilder: doc.bilder, system: useCache ? systemForCall : undefined, cacheSystem: useCache, zweck, jsonMode: true },
             ctx,
             analysisMeta,
           );
+          // Eine am Ausgabelimit abgeschnittene Antwort ist nie vollständig,
+          // auch wenn ihr JSON zufällig noch parst.
+          if (r.abgeschnitten) {
+            throw Object.assign(new Error('Antwort am Ausgabelimit abgeschnitten'), { schemaFehler: true });
+          }
           let d;
           try {
             d = parseJsonFromText(r.text);
@@ -1095,7 +1124,7 @@ export async function analyzeDocument(
  * Liest Provider-Konfiguration aus den Settings.
  *
  * @param {string|object} model - Modell-ID oder { providerId, model }
- * @param {object} [opts]       - { pdf, system, maxTokens, jsonMode }
+ * @param {object} [opts]       - { pdf, system, maxTokens, jsonMode, jsonSchema }
  */
 export async function callLLM(model, prompt, opts = {}, settings = null, meta = null) {
   const s    = settings || await loadDynamicSettings();
@@ -1103,4 +1132,63 @@ export async function callLLM(model, prompt, opts = {}, settings = null, meta = 
   const costMap = buildCostMap(s);
   const fullMeta = { ...(meta || {}), costMap, kategorie: meta?.kategorie || 'other' };
   return callModel(model, prompt, opts, { settings: s, keys }, fullMeta);
+}
+
+/**
+ * Liest ein Dokument mit einer eigenen Aufgabe vollständig ein — etwa die
+ * Positionen einer Arztrechnung nach der Klassifikation. Die Modelle werden
+ * der Reihe nach versucht; je Kettenglied wird das Dokument passend zu dessen
+ * Fähigkeiten aufbereitet (PDF, Bilder oder Textebene), genau wie bei
+ * analyzeDocument(). Eine Ausgabegrenze gibt es nicht.
+ *
+ * @param {object[]} refs     - Modellkette [{ providerId, model }, …]
+ * @param {Buffer}   pdfBuffer
+ * @param {string}   prompt
+ * @param {object}   [opts]   - { stripTextLayerGewuenscht, zweck, system, jsonMode, jsonSchema }
+ * @returns {Promise<{ text, abgeschnitten, inputMode, ref, tokensIn, tokensOut, costUsd, failedModels }>}
+ */
+export async function leseDokument(refs, pdfBuffer, prompt, opts = {}, settings = null, meta = null) {
+  const s    = settings || await loadDynamicSettings();
+  const keys = buildKeys(s);
+  const costMap = buildCostMap(s);
+  const fullMeta = { ...(meta || {}), costMap, kategorie: meta?.kategorie || 'analysis' };
+  const prepare = makeDocPreparer(pdfBuffer, opts.stripTextLayerGewuenscht === true);
+  const kette = chainOf(...refs);
+  if (!kette.length) throw new Error('[llm] leseDokument: kein Modell konfiguriert');
+  const failedModels = [];
+  let lastErr = null;
+  for (const ref of kette) {
+    try {
+      const doc = await prepare(providerForRef(s, ref), { strikt: true });
+      const r = await callModel(
+        ref,
+        doc.inputMode === 'text' ? withDocumentText(prompt, doc.text) : prompt,
+        { pdf: doc.pdf, bilder: doc.bilder, system: opts.system, zweck: opts.zweck, jsonMode: opts.jsonMode === true, jsonSchema: opts.jsonSchema ?? null },
+        { settings: s, keys },
+        fullMeta,
+      );
+      const tokensIn  = r.usage?.inputTokens  ?? null;
+      const tokensOut = r.usage?.outputTokens ?? null;
+      return {
+        text: r.text,
+        abgeschnitten: r.abgeschnitten === true,
+        inputMode: doc.inputMode,
+        ref,
+        tokensIn,
+        tokensOut,
+        costUsd: r.viaSubscription === true ? 0 : calculateCost(ref.model, {
+          tokensIn, tokensOut,
+          cacheCreationTokens: r.usage?.cacheCreationTokens ?? null,
+          cacheReadTokens: r.usage?.cacheReadTokens ?? null,
+        }, costMap),
+        failedModels,
+      };
+    } catch (err) {
+      lastErr = err;
+      failedModels.push(refLabel(ref));
+      console.warn(`[llm] leseDokument ${refLabel(ref)} fehlgeschlagen: ${err.message}`);
+      appLog('WARN', 'llm', `leseDokument ${refLabel(ref)} fehlgeschlagen: ${err.message}`);
+    }
+  }
+  throw lastErr || new Error('[llm] leseDokument: alle Modelle fehlgeschlagen');
 }

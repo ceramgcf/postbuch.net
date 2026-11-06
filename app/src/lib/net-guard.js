@@ -30,6 +30,10 @@ import { Agent, fetch as undiciFetch } from 'undici';
 
 export const TIMEOUT_PROBE_MS      = 10_000;   // Health / Verbindungstest / Modell-Listing
 export const TIMEOUT_COMPLETION_MS = 180_000;  // Eigentliche LLM-Aufrufe
+// LLM-Aufrufe ohne Ausgabegrenze (Dokumentverarbeitung): Eine vollständig
+// gelesene, lange Rechnung oder eine nachgedachte Kürzungszerlegung braucht
+// ohne Streaming deutlich länger als ein kurzer Aufruf.
+export const TIMEOUT_COMPLETION_LANG_MS = 900_000;
 // Datei-Transfer (Up-/Download, Listings). Das AbortSignal gilt für den ganzen
 // Request inklusive Body-Streaming — 10 s wären für ein PDF über eine langsame
 // Leitung sofort ein Abbruch.
@@ -190,8 +194,13 @@ function holeDispatcher(url, allowPrivate, addresses, reuse, allowUntrustedTls =
   // allowH2: false hält das Verhalten von undici 7 fest (nur HTTP/1.1). Ab
   // undici 8 handelt ein Agent per ALPN sonst auch HTTP/2 aus; das ist für
   // LLM-Streams und WebDAV-Backends ungetestet.
+  // headers-/bodyTimeout: undici bricht sonst nach 300 s ohne Antwortkopf ab
+  // („fetch failed“), lange vor TIMEOUT_COMPLETION_LANG_MS. Die eigentliche
+  // Grenze setzt das AbortSignal in guardedFetch.
   const baue = () => new Agent({
     allowH2: false,
+    headersTimeout: TIMEOUT_COMPLETION_LANG_MS,
+    bodyTimeout: TIMEOUT_COMPLETION_LANG_MS,
     connect: {
       ...(url.protocol === 'https:' && allowUntrustedTls ? { rejectUnauthorized: false } : {}),
       lookup: (_host, options, cb) => {

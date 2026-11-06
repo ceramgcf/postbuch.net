@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Archive, ArchiveRestore, Eye, KeyRound, PawPrint, Pencil, ShieldCheck, Trash2, UserPlus, Users,
+  Archive, ArchiveRestore, Eye, KeyRound, PawPrint, Pencil, ShieldCheck, ShieldOff, Smartphone, Trash2, UserPlus, Users,
 } from 'lucide-react';
 import MenschLoeschenDialog from '@/components/settings/MenschLoeschenDialog';
 import { api } from '@/api/client';
@@ -12,6 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Dialog, DialogDescription, DialogFooter, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
+import { Switch } from '@/components/ui/switch';
 
 const FARBEN = ['#0e7490', '#c026d3', '#0284c7', '#16a34a', '#ea580c', '#dc2626', '#7c3aed', '#65a30d'];
 const ROLLEN = { vollzugriff: 'Vollzugriff', lesezugriff: 'Lesezugriff' };
@@ -256,6 +257,13 @@ function MenschZeile({ mensch }) {
       qc.invalidateQueries({ queryKey: ['personen'] });
     },
   });
+  const faktorReset = useMutation({
+    mutationFn: () => {
+      if (!window.confirm(`Zwei-Faktor-Anmeldung für ${mensch.anmeldename} zurücksetzen? Bestehende Sitzungen und MCP-Token dieses Zugangs werden beendet.`)) return null;
+      return api.menschen.zweiterFaktorZuruecksetzen(mensch.id);
+    },
+    onSuccess: (result) => { if (result !== null) qc.invalidateQueries({ queryKey: ['menschen'] }); },
+  });
   const kontaktCount = Number(mensch.adr_count || 0);
   const patientCount = Number(mensch.patient_doc_count || 0);
   const personParam = encodeURIComponent(mensch.kurzname);
@@ -269,6 +277,7 @@ function MenschZeile({ mensch }) {
             {mensch.ist_tier && <Badge variant="secondary"><PawPrint className="mr-1 h-3.5 w-3.5" />Tier</Badge>}
             <span className="text-xs text-muted-foreground">{mensch.kurzname}</span>
             <ZugangBadge mensch={mensch} />
+            {mensch.zweiter_faktor && <Badge variant="outline" title="Zwei-Faktor-Anmeldung eingerichtet"><Smartphone className="mr-1 h-3.5 w-3.5" />2FA</Badge>}
             {mensch.archiviert && <Badge variant="secondary">Archiviert</Badge>}
             {mensch.pkv && <Badge variant="outline">PKV{mensch.pkv_satz != null ? ` ${mensch.pkv_satz} %` : ''}</Badge>}
             {mensch.pkv && !mensch.ist_tier && mensch.bre_ueberwachen && <Badge variant="outline" title="Beitragsrückerstattung wird überwacht">BRE</Badge>}
@@ -304,6 +313,11 @@ function MenschZeile({ mensch }) {
         </div>
         <div className="flex shrink-0 gap-1">
           <Button size="sm" variant="ghost" onClick={() => setEditieren(true)}><Pencil className="mr-1 h-3.5 w-3.5" />Bearbeiten</Button>
+          {mensch.zweiter_faktor && (
+            <Button size="sm" variant="ghost" onClick={() => faktorReset.mutate()} disabled={faktorReset.isPending} title="Zum Beispiel nach Verlust des Telefons">
+              <ShieldOff className="mr-1 h-3.5 w-3.5" />2FA zurücksetzen
+            </Button>
+          )}
           <Button size="sm" variant="ghost" onClick={() => archivieren.mutate()} disabled={archivieren.isPending}>{mensch.archiviert ? <ArchiveRestore className="mr-1 h-3.5 w-3.5" /> : <Archive className="mr-1 h-3.5 w-3.5" />}{mensch.archiviert ? 'Reaktivieren' : 'Archivieren'}</Button>
           {/* Nur für Archivierte, und optisch abgesetzt: kein Fehlklick neben „Reaktivieren". */}
           {mensch.archiviert && (
@@ -321,8 +335,39 @@ function MenschZeile({ mensch }) {
         </div>
       </div>
       {archivieren.isError && <p className="mt-1 text-xs text-destructive">{archivieren.error.message}</p>}
+      {faktorReset.isError && <p className="mt-1 text-xs text-destructive">{faktorReset.error.message}</p>}
       {editieren && <MenschDialog mensch={mensch} open={editieren} onOpenChange={setEditieren} />}
       {loeschen && <MenschLoeschenDialog mensch={mensch} open={loeschen} onOpenChange={setLoeschen} />}
+    </div>
+  );
+}
+
+// Admin schreibt die Zwei-Faktor-Anmeldung für alle Zugänge vor. Der Server
+// lehnt das Einschalten ab, solange der Admin selbst keinen Faktor hat.
+function ZweiFaktorPflicht() {
+  const qc = useQueryClient();
+  const { data: status } = useQuery({ queryKey: ['zweiter-faktor'], queryFn: () => api.zweiterFaktor.status() });
+  const setzen = useMutation({
+    mutationFn: (an) => api.zweiterFaktor.pflicht(an),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['zweiter-faktor'] }),
+  });
+  if (!status) return null;
+  return (
+    <div className="mb-4 rounded-md border p-3">
+      <div className="flex items-center justify-between gap-3">
+        <p className="flex items-center gap-2 text-sm font-medium"><Smartphone className="h-4 w-4" />Zwei-Faktor-Anmeldung für alle vorschreiben</p>
+        <Switch
+          checked={!!status.pflicht}
+          onCheckedChange={(an) => setzen.mutate(an)}
+          disabled={setzen.isPending}
+          label="Zwei-Faktor-Anmeldung für alle Zugänge vorschreiben"
+        />
+      </div>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Wer noch keinen Faktor hat, richtet ihn bei der nächsten Anmeldung ein. Bereits angemeldete Sitzungen bleiben bestehen.
+        {!status.aktiv && ' Voraussetzung: Der Admin hat unter Einstellungen → Persönlich selbst einen Faktor eingerichtet.'}
+      </p>
+      {setzen.isError && <p className="mt-1 text-xs text-destructive">{setzen.error.message}</p>}
     </div>
   );
 }
@@ -338,6 +383,7 @@ export default function MenschenCard({ eingebettet = false }) {
         <div><p className="flex items-center gap-2 text-sm font-medium"><ShieldCheck className="h-4 w-4" />Systemzugang admin</p><p className="mt-1 text-xs text-muted-foreground">Kein Personen-Datensatz. Das Adminpasswort wird auf dem Server über den Installer geändert.</p></div>
         <Badge variant="outline">Systemzugang</Badge>
       </div>
+      <ZweiFaktorPflicht />
       <Button size="sm" onClick={() => setAnlegen(true)}><UserPlus className="mr-1.5 h-4 w-4" />Mensch oder Tier anlegen</Button>
       {isLoading ? <p className="py-5 text-sm text-muted-foreground"><Spinner className="mr-2 inline h-4 w-4" />Lade Personen…</p>
         : isError ? <p className="py-5 text-sm text-destructive">{error.message}</p>

@@ -10,9 +10,12 @@ import {
   clearLoginAttempts,
   WARN_THRESHOLD,
 } from '../middleware/login-rate-limit.js';
+import * as zweiterFaktor from '../service/zweiter-faktor.js';
 
 const router = Router();
 const ADMIN_USERNAME = 'admin';
+// So lange gilt ein richtiges Passwort, bis der zweite Schritt erledigt sein muss.
+const AUSSTEHEND_MS = 5 * 60 * 1000;
 
 /**
  * Einheitliche 401-Antwort für jeden Fehlversuch. Zählt den Versuch und gibt die
@@ -26,7 +29,7 @@ function loginFailed(req, res) {
   return res.status(401).json(body);
 }
 
-function loginSuccess(req, res, username, role, menschId = null) {
+function loginSuccess(req, res, username, role, menschId = null, zusatz = {}) {
   req.session.regenerate((regenerateErr) => {
     if (regenerateErr) {
       console.error('Session regeneration failed:', regenerateErr);
@@ -44,9 +47,60 @@ function loginSuccess(req, res, username, role, menschId = null) {
         console.error('Session save failed:', saveErr);
         return res.status(500).json({ error: 'Interner Fehler' });
       }
-      return res.json({ success: true, username, role });
+      return res.json({ success: true, username, role, ...zusatz });
     });
   });
+}
+
+/**
+ * Richtiges Passwort: direkt anmelden oder den zweiten Schritt verlangen. Im
+ * zweiten Fall bleibt die Sitzung unangemeldet (hasValidSession prüft
+ * `authenticated`) und trägt nur die ausstehende Anmeldung. Der
+ * Fehlversuchszähler bleibt dann stehen: Ein erneuter Passwortschritt darf die
+ * Bremse für den Code nicht zurücksetzen.
+ */
+async function nachPasswort(req, res, username, role, menschId = null) {
+  const konto = zweiterFaktor.kontoAus({ role, menschId, username });
+  let art = null;
+  if (await zweiterFaktor.hatFaktor(konto)) art = 'code';
+  else if (await zweiterFaktor.pflichtAktiv()) art = 'einrichtung';
+  if (!art) {
+    clearLoginAttempts(req);
+    return loginSuccess(req, res, username, role, menschId);
+  }
+  req.session.regenerate((regenerateErr) => {
+    if (regenerateErr) {
+      console.error('Session regeneration failed:', regenerateErr);
+      return res.status(500).json({ error: 'Interner Fehler' });
+    }
+    req.session.anmeldungAusstehend = {
+      username, role, menschId, art, seit: Date.now(),
+      ...(role === 'admin' ? { adminCredentialFingerprint: req.app.locals.adminCredentialFingerprint } : {}),
+    };
+    req.session.save((saveErr) => {
+      if (saveErr) {
+        console.error('Session save failed:', saveErr);
+        return res.status(500).json({ error: 'Interner Fehler' });
+      }
+      return res.json({ zweiterFaktor: art, username });
+    });
+  });
+}
+
+/** Guard für den zweiten Schritt: passende, nicht abgelaufene ausstehende Anmeldung. */
+function ausstehendeAnmeldung(art) {
+  return (req, res, next) => {
+    const a = req.session?.anmeldungAusstehend;
+    const gueltig = a && a.art === art && Date.now() - a.seit <= AUSSTEHEND_MS
+      && (a.role !== 'admin' || a.adminCredentialFingerprint === req.app.locals.adminCredentialFingerprint);
+    if (!gueltig) {
+      if (a) delete req.session.anmeldungAusstehend;
+      return res.status(401).json({ error: 'Die Anmeldung ist abgelaufen. Bitte erneut anmelden.', neuAnmelden: true });
+    }
+    req.anmeldung = a;
+    req.loginAttemptIdentity = a.username;
+    next();
+  };
 }
 
 router.post('/login', loginRateLimit, async (req, res) => {
@@ -65,8 +119,7 @@ router.post('/login', loginRateLimit, async (req, res) => {
     if (password !== process.env.APP_PASSWORD) {
       return loginFailed(req, res);
     }
-    clearLoginAttempts(req);
-    return loginSuccess(req, res, ADMIN_USERNAME, 'admin');
+    return nachPasswort(req, res, ADMIN_USERNAME, 'admin');
   }
 
   // --- DB user check ---
@@ -100,10 +153,62 @@ router.post('/login', loginRateLimit, async (req, res) => {
         [user.id, user.password_hash, upgradedHash],
       );
     }
-    clearLoginAttempts(req);
-    return loginSuccess(req, res, user.username, user.role, user.id);
+    return await nachPasswort(req, res, user.username, user.role, user.id);
   } catch (err) {
     console.error('Login DB error:', err);
+    return res.status(500).json({ error: 'Interner Fehler' });
+  }
+});
+
+function codeFalsch(req, res, ergebnis) {
+  if (ergebnis.gesperrt) {
+    res.set('Retry-After', String(ergebnis.gesperrt));
+    return res.status(429).json({ error: 'Zu viele falsche Codes. Bitte kurz warten.', retryAfterSec: ergebnis.gesperrt });
+  }
+  const verbleibendeVersuche = registerFailedLogin(req);
+  const body = { error: 'Der Code stimmt nicht.' };
+  if (verbleibendeVersuche <= WARN_THRESHOLD) body.verbleibendeVersuche = verbleibendeVersuche;
+  return res.status(401).json(body);
+}
+
+// Zweiter Schritt: Code aus der App oder ein Wiederherstellungscode.
+router.post('/login/zweiter-faktor', ausstehendeAnmeldung('code'), loginRateLimit, async (req, res) => {
+  try {
+    const { username, role, menschId } = req.anmeldung;
+    const ergebnis = await zweiterFaktor.pruefeMitSperre(zweiterFaktor.kontoAus(req.anmeldung), req.body?.code);
+    if (!ergebnis.ok) return codeFalsch(req, res, ergebnis);
+    clearLoginAttempts(req);
+    return loginSuccess(req, res, username, role, menschId,
+      ergebnis.art === 'wiederherstellung' ? { verbleibendeCodes: ergebnis.verbleibendeCodes } : {});
+  } catch (err) {
+    console.error('Zweiter Faktor:', err);
+    return res.status(500).json({ error: 'Interner Fehler' });
+  }
+});
+
+// Pflicht ohne eingerichteten Faktor: Einrichtung als Teil der Anmeldung.
+router.post('/login/einrichten', ausstehendeAnmeldung('einrichtung'), async (req, res) => {
+  try {
+    const daten = await zweiterFaktor.beginneEinrichtung(req.session, zweiterFaktor.kontoAus(req.anmeldung));
+    return res.json(daten);
+  } catch (err) {
+    console.error('Zwei-Faktor-Einrichtung:', err);
+    return res.status(500).json({ error: 'Interner Fehler' });
+  }
+});
+
+router.post('/login/bestaetigen', ausstehendeAnmeldung('einrichtung'), loginRateLimit, async (req, res) => {
+  try {
+    const { username, role, menschId } = req.anmeldung;
+    // Ohne Ausnahme: loginSuccess erzeugt ohnehin eine neue Sitzung.
+    const ergebnis = await zweiterFaktor.schliesseEinrichtungAb(
+      req.session, zweiterFaktor.kontoAus(req.anmeldung), req.body?.code, null);
+    if (ergebnis.abgelaufen) return res.status(409).json({ error: 'Die Einrichtung ist abgelaufen. Bitte neu beginnen.' });
+    if (!ergebnis.ok) return codeFalsch(req, res, ergebnis);
+    clearLoginAttempts(req);
+    return loginSuccess(req, res, username, role, menschId, { wiederherstellungscodes: ergebnis.codes });
+  } catch (err) {
+    console.error('Zwei-Faktor-Bestätigung:', err);
     return res.status(500).json({ error: 'Interner Fehler' });
   }
 });

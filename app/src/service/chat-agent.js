@@ -630,7 +630,7 @@ async function toolGetDocumentMetadata({ postid }) {
   const [einzelpositionen, erstattungEinzelpositionen, akten, wiedervorlagen, zahlungslage] = await Promise.all([
     row.arzt_betrag != null
       ? pool.query(`
-          SELECT subid AS pos, behandlungs_datum, goa_goz_gebueh_pzn AS ziffer, leistung, begruendung, faktor, betrag
+          SELECT subid AS pos, behandlungs_datum, goa_goz_gebueh_pzn AS ziffer, leistung, begruendung, zusatzangaben, faktor, betrag
           FROM postbuch.arztrechnung_einzelposition WHERE postid = $1 ORDER BY subid
         `, [postid]).then(x => x.rows)
       : Promise.resolve(null),

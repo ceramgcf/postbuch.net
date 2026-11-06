@@ -18,6 +18,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { SymLinkButton } from './SymLinkButton';
 import { ErstattungAttachDialog } from './ErstattungAttachDialog';
 import { DisputeStatus } from './DisputeField';
+import { AbgleichLaeuftHinweis } from './ErstattungsbescheidDetail';
 import { RechnungMenu, ErsetzungHinweis } from './RechnungMenu';
 import { rechnungToken } from '@/lib/erstattung';
 import { getDokumentartMeta } from '@/components/postbuch/ArtBadge';
@@ -852,10 +853,18 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
                       );
                     })()}
                   </div>
+                  {eb.kuerzungen_ausstehend && (
+                    <AbgleichLaeuftHinweis>
+                      Kürzungen dieses Bescheids werden noch den Positionen zugeordnet – sie erscheinen hier automatisch.
+                    </AbgleichLaeuftHinweis>
+                  )}
                   {eb.kuerzungen?.length > 0 && (() => {
                     const satz = eb.kostentraeger === 'Beihilfe'
                       ? (parseFloat(data.beihilfe_satz_override ?? data.personen_beihilfe_satz) || null)
                       : (parseFloat(data.pkv_satz_override ?? data.personen_pkv_satz) || null);
+                    // Ist die Kürzung auf Positionen zerlegt, ist eine Zeile ohne
+                    // Position der Rest, den keine Position trägt.
+                    const zerlegt = eb.kuerzungen.some((x) => x.arz_subid != null);
                     return (
                       <div className="mt-2 pl-4 border-l-2 border-red-200 space-y-1">
                         {eb.kuerzungen.map((k, j) => {
@@ -868,8 +877,15 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
                               {satz != null && (
                                 <span className="text-red-400 text-xs ml-1">({formatCurrency(k.betrag)} × {satz}%)</span>
                               )}
+                              {k.arz_subid != null ? (
+                                <span className="text-xs text-muted-foreground ml-1.5">Pos. {k.arz_subid}</span>
+                              ) : zerlegt && (
+                                <span className="text-xs text-muted-foreground ml-1.5">Rest ohne Position</span>
+                              )}
                               {' – '}
-                              <span className="text-muted-foreground">{k.begruendung || 'Keine Begründung'}</span>
+                              <span className="text-muted-foreground whitespace-pre-line">
+                                {k.begruendung || (zerlegt && k.arz_subid == null ? 'keiner Position zuzuordnen' : 'Keine Begründung')}
+                              </span>
                               <div className="mt-1">
                                 <KuerzungStatusActions
                                   ebPostid={eb.eb_postid}

@@ -87,6 +87,7 @@ install.sh --update                         # Update mit Rückfragen
 install.sh --update --yes --non-interactive # Update ohne Rückfragen (Agent)
 install.sh --rollback                       # auf ein vorhandenes Backup zurückrollen
 install.sh --postgres-umzug                 # Datenbank von PostgreSQL 16 auf 18 umziehen
+install.sh --postgres-image                 # PostgreSQL-Image derselben Hauptversion tauschen
 install.sh --dry-run                        # bis einschließlich Backup laufen, dann abbrechen
 install.sh --erwarte-sha256=<hex>           # Tarball muss diese Prüfsumme haben
 install.sh --quelle=<https-url>             # abweichende Bezugsquelle

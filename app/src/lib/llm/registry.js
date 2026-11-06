@@ -99,17 +99,48 @@ export const MAX_OUTPUT_TOKENS_GRENZE = 200000;
  */
 export const MAX_TOKENS_NOTFALL = 4096;
 
+/**
+ * Antwortlänge ohne künstliche Grenze: Die Aufrufer der Dokumentverarbeitung
+ * geben kein `maxTokens` mehr vor, es soll so viel herauskommen wie nötig.
+ * OpenAI-kompatible Anbieter und Ollama lassen das Feld dann einfach weg.
+ * Anthropic und Bedrock verlangen es als Pflichtfeld; dort steht stattdessen
+ * dieser Wert. Liegt er über dem Ausgabemaximum des Modells, nennt die
+ * Ablehnung das Maximum, und callModel wiederholt einmal mit genau diesem Wert
+ * (grenzeAusAblehnung).
+ */
+export const MAX_TOKENS_OHNE_GRENZE = 64000;
+
+/**
+ * Liest aus einer max_tokens-Ablehnung die Ausgabegrenze des Modells, z. B.
+ * „max_tokens: 64000 > 32000, which is the maximum …“ oder „… supports at
+ * most 16384 completion tokens“. Gewählt wird die größte genannte Zahl
+ * unterhalb des abgelehnten Werts; ohne passende Zahl `null`.
+ */
+export function grenzeAusAblehnung(meldung, abgelehnt) {
+  const zahlen = String(meldung || '').match(/\d[\d.,]*\d|\d/g) || [];
+  const kandidaten = zahlen
+    .map((z) => Number(z.replace(/[.,]/g, '')))
+    .filter((n) => Number.isFinite(n) && n >= MAX_OUTPUT_TOKENS_MIN
+      && (!Number.isFinite(abgelehnt) || n < abgelehnt));
+  return kandidaten.length ? Math.max(...kandidaten) : null;
+}
+
 export function normalizeMaxOutputTokens(wert) {
   const n = Math.floor(Number(wert));
   if (!Number.isFinite(n) || n <= 0) return undefined;
   return Math.min(Math.max(n, MAX_OUTPUT_TOKENS_MIN), MAX_OUTPUT_TOKENS_GRENZE);
 }
 
-/** Deckelt den Wunschwert auf die beim Provider hinterlegte Obergrenze. */
+/**
+ * Deckelt den Wunschwert auf die beim Provider hinterlegte Obergrenze. Ohne
+ * Wunschwert (keine künstliche Grenze) gilt die Provider-Grenze selbst, ohne
+ * beides bleibt es bei `undefined`.
+ */
 export function clampMaxTokens(maxTokens, provider) {
   const grenze = provider?.maxOutputTokens;
-  if (!Number.isFinite(grenze) || grenze <= 0) return maxTokens;
-  if (!Number.isFinite(maxTokens) || maxTokens <= 0) return maxTokens;
+  const hatGrenze = Number.isFinite(grenze) && grenze > 0;
+  if (!Number.isFinite(maxTokens) || maxTokens <= 0) return hatGrenze ? grenze : undefined;
+  if (!hatGrenze) return maxTokens;
   return Math.min(maxTokens, grenze);
 }
 

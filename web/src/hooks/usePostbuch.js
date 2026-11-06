@@ -60,8 +60,10 @@ export function usePostbuchDetail(postid) {
     enabled: !!postid,
     // EB-Matching läuft nach der Upload-Pipeline asynchron im Hintergrund weiter
     // (service/erstattungsbescheid.js) – solange erstattungsbescheidAusstehend
-    // gesetzt ist, automatisch nachladen, bis der Fachblock eintrifft.
-    refetchInterval: (query) => query.state.data?.erstattungsbescheidAusstehend ? 4000 : false,
+    // oder kuerzungenAusstehend gesetzt ist (Kürzungszerlegung läuft noch, beim
+    // Bescheid wie bei der betroffenen Rechnung), automatisch nachladen.
+    refetchInterval: (query) => (query.state.data?.erstattungsbescheidAusstehend
+      || query.state.data?.kuerzungenAusstehend) ? 4000 : false,
   });
 }
 

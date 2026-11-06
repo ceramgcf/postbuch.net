@@ -89,23 +89,23 @@ function jobTypeLabel(type) {
 }
 
 // Known step labels per job type.
-// doc-process supports two variants: 10 steps (OneDrive-Eingang) und 11 Schritte (Scanner-Eingang).
+// doc-process supports two variants: 10 Schritte (Ablage-Eingang) und 11 Schritte (Scanner-Eingang).
 const STEP_TEMPLATES = {
   'doc-process': {
     10: [
-      'Upload zu OneDrive', 'Download von OneDrive', 'KI-Analyse', 'Duplikaterkennung',
-      'Duplikat-Handling', 'OneDrive-Sortierung', 'Benachrichtigung', 'PDF rotieren',
+      'Upload in die Ablage', 'Download aus der Ablage', 'KI-Analyse', 'Duplikaterkennung',
+      'Duplikat-Handling', 'Ablage-Sortierung', 'Benachrichtigung', 'PDF rotieren',
       'Datenbank', 'Embedding',
     ],
     11: [
-      'Scan & OCR', 'Upload zu OneDrive', 'Download von OneDrive', 'KI-Analyse', 'Duplikaterkennung',
-      'Duplikat-Handling', 'OneDrive-Sortierung', 'Benachrichtigung', 'PDF rotieren',
+      'Scan & OCR', 'Upload in die Ablage', 'Download aus der Ablage', 'KI-Analyse', 'Duplikaterkennung',
+      'Duplikat-Handling', 'Ablage-Sortierung', 'Benachrichtigung', 'PDF rotieren',
       'Datenbank', 'Embedding',
     ],
   },
   'doc-reprocess': [
-    'Upload zu OneDrive', 'Download von OneDrive', 'KI-Analyse', 'Duplikaterkennung',
-    'Duplikat-Handling', 'OneDrive-Sortierung', 'Benachrichtigung', 'PDF rotieren',
+    'Upload in die Ablage', 'Download aus der Ablage', 'KI-Analyse', 'Duplikaterkennung',
+    'Duplikat-Handling', 'Ablage-Sortierung', 'Benachrichtigung', 'PDF rotieren',
     'Datenbank', 'Embedding',
   ],
 };
@@ -305,7 +305,7 @@ function SuspendedJobCard({ job, onDecide }) {
                   href={job.matchWeburl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  title="Auf OneDrive öffnen"
+                  title="In der Ablage öffnen"
                   className="text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <ExternalLink className="h-3.5 w-3.5" />
@@ -335,7 +335,7 @@ function SuspendedJobCard({ job, onDecide }) {
                   href={job.onedriveWeburl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  title="Auf OneDrive öffnen"
+                  title="In der Ablage öffnen"
                   className="text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <ExternalLink className="h-3.5 w-3.5" />
@@ -750,6 +750,8 @@ export function JobsMonitor({ geteilt = null, folgenIds = [], scanDateien = [], 
 
   const verfolgung = useVerfolgung({ geteilt, folgenIds, scanDateien, onUrlErledigt, fetchJobs });
   const [weiterleitungAbgebrochen, setWeiterleitungAbgebrochen] = useState(false);
+  // Ein abgebrochener Countdown gilt nur für die Verfolgung, in der er abgebrochen wurde.
+  useEffect(() => { setWeiterleitungAbgebrochen(false); }, [verfolgung]);
 
   const allJobs = [...(data?.active || []), ...(data?.recent || [])];
   const verfolgteJobs = verfolgung?.phase === 'laeuft'

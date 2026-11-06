@@ -39,6 +39,7 @@ ausführlichste Behandlung.
 - **Arztrechnung (auch Labor, Hilfsmittel, Rezept)** – [Fachblock](dokumentansicht.md#untertyp-arztrechnung-laborrechnung-hilfsmittelrechnung-rezept) · [Einzelpositionen](dokumentansicht.md#einzelpositionen-der-rechnung) · [Positionen bearbeiten](dokumentansicht.md#positionen-bearbeiten-hinzufügen-und-löschen) · [Einer Periode zuordnen](abrechnung-pkv-beihilfe.md#2-rechnung-einer-periode-zuordnen)
 - **Assistent (Chat)** – [Assistent](suche-und-assistent.md#assistent) · [Wie er arbeitet und Hilfe findet](suche-und-assistent.md#wie-er-arbeitet) · [Bearbeiten-Modus](suche-und-assistent.md#bearbeiten-modus) · [Chats verwalten](suche-und-assistent.md#chats-verwalten) · [Was wähle ich wann?](suche-und-assistent.md#was-wähle-ich-wann)
 - **Aufgabenanzeige** – [Aufgabenanzeige](oberflaeche.md#aufgabenanzeige)
+- **Authenticator-App** → siehe *Zwei-Faktor-Anmeldung*
 - **Auto-Auslöser (Kamerascan)** – [Mit der Kamera in postbuch.net](dokumente-importieren.md#mit-der-kamera-in-postbuchnet)
 - **Automatisch folgen (nach dem Import zum Dokument)** – [Automatisch folgen](dokumente-importieren.md#automatisch-folgen)
 - **Ausgehende Verbindungen** – [Ausgehende Verbindungen](sicherheit.md#ausgehende-verbindungen)
@@ -57,6 +58,7 @@ ausführlichste Behandlung.
 - **Beihilfeergänzungstarif** – [Beihilfe-Kürzung zur PKV-Prüfung vormerken](abrechnung-pkv-beihilfe.md#beihilfe-kürzung-zur-pkv-prüfung-vormerken)
 - **Basisadresse (APP_BASE_URL)** – [Adresse einer laufenden Instanz ändern](installation.md#adresse-einer-laufenden-instanz-ändern) · [ENV-Werte](installation.md#weg-2-manuell-mit-docker-compose)
 - **Beitragsrückerstattung (BRE)** – [Beitragsrückerstattung überwachen](abrechnung-pkv-beihilfe.md#beitragsrückerstattung-überwachen) · [Zurückgehaltene Perioden](abrechnung-pkv-beihilfe.md#zurückgehaltene-perioden)
+- **Belegzeilen (Laborbeleg, Materialbeleg)** – [Einzelpositionen der Rechnung](dokumentansicht.md#einzelpositionen-der-rechnung)
 - **Benachrichtigungen** – [Benachrichtigungen](benachrichtigungen.md) · [Was wo ankommt](benachrichtigungen.md#was-wo-ankommt)
 - **Benutzerdefinierte Ablagestruktur** – [Ablagestruktur wählen](storage-backends.md#ablagestruktur-wählen)
 - **Bestreiten (Rechnung)** – [Eine Rechnung bestreiten](dokumentansicht.md#eine-rechnung-bestreiten) · [Sonderfall Korrekturrechnung](dokumentansicht.md#sonderfall-korrekturrechnung) · [Bestrittene Rechnungen werden übersprungen](abrechnung-pkv-beihilfe.md#bestrittene-rechnungen-werden-übersprungen)
@@ -77,15 +79,17 @@ ausführlichste Behandlung.
 - **Chat** → siehe *Assistent*
 - **Cloudfrei-Check** – [Cloudfrei-Check](ki-provider.md#cloudfrei-check)
 - **Compose-Profile (`COMPOSE_PROFILES`)** – [Optionale Profile](installation.md#optionale-profile) · [Die Dienste](architektur.md#die-dienste)
+- **Compose-Anpassungen (`docker-compose.override.yml`)** – [Eigene Compose-Anpassungen](betrieb-troubleshooting.md#eigene-compose-anpassungen)
 
 ## D
 
 - **Darstellung (mobil / Desktop)** – [Mobil und PWA](mobil-und-pwa.md) · [Desktop-Oberfläche auf Touch-Geräten](mobil-und-pwa.md#desktop-oberfläche-auf-touch-geräten)
 - **Dashboard** – [Dashboard](oberflaeche.md#dashboard)
 - **DEK (Daten-Schlüssel, Backup-Verschlüsselung)** – [Wie das technisch funktioniert](backup-wiederherstellung.md#wie-das-technisch-funktioniert) · [Passwort ändern](backup-wiederherstellung.md#passwort-ändern)
-- **Datei-Upload (Weg 3)** – [Weg 3: Datei-Upload](dokumente-importieren.md#weg-3-datei-upload)
+- **Datei-Upload (Weg 3)** – [Weg 3: Datei-Upload](dokumente-importieren.md#weg-3-datei-upload) · [Fotos hochladen](dokumente-importieren.md#fotos-importieren)
 - **Datenmodell** – [Datenmodell in Stichworten](architektur.md#datenmodell-in-stichworten)
 - **Datenbank-Umzug (PostgreSQL 16 → 18)** – [Datenbank-Umzug auf PostgreSQL 18](betrieb-troubleshooting.md#datenbank-umzug-auf-postgresql-18)
+- **Datenbank-Image aktualisieren** – [Datenbank-Image aktualisieren](betrieb-troubleshooting.md#datenbank-image-aktualisieren)
 - **Datenbankversion anzeigen** – [Datenbank-Umzug auf PostgreSQL 18](betrieb-troubleshooting.md#datenbank-umzug-auf-postgresql-18)
 - **Datenschutz** – [Daten und Datenschutz](faq.md#daten-und-datenschutz) · [Grenzen](sicherheit.md#grenzen--was-postbuchnet-nicht-leistet)
 - **Debug-Modus** – [Debug-Modus](betrieb-troubleshooting.md#debug-modus) · [Ordner `_debug`](storage-backends.md)
@@ -119,6 +123,7 @@ ausführlichste Behandlung.
 - **Entschlüsseln (Backup-Datei, Kommandozeile)** – [Verschlüsselte Datei auf der Kommandozeile entschlüsseln](backup-wiederherstellung.md#verschlüsselte-datei-auf-der-kommandozeile-entschlüsseln)
 - **Einzelpositionen (Arztrechnung)** – [Einzelpositionen der Rechnung](dokumentansicht.md#einzelpositionen-der-rechnung) · [Bearbeiten, hinzufügen, löschen](dokumentansicht.md#positionen-bearbeiten-hinzufügen-und-löschen) · [Abweichung zum Rechnungsbetrag](dokumentansicht.md#abweichung-zum-rechnungsbetrag)
 - **Einzelnes Dokument weitergeben** – [Einzelnes Dokument weitergeben](export-import.md#einzelnes-dokument-weitergeben)
+- **Einzelseiten (jede Seite als eigenes Dokument hochladen)** – [Mit der Kamera in postbuch.net](dokumente-importieren.md#mit-der-kamera-in-postbuchnet)
 - **Embeddings** – [Embeddings](ki-provider.md#embeddings) · [Eingebauter Dienst](ki-provider.md#der-eingebaute-embedding-dienst) · [Anderen Dienst wählen](ki-provider.md#anderen-dienst-wählen) · [Empfehlungen](ki-provider.md#empfehlungen) · [Kosten und Auslöser](ki-provider.md#kosten-und-kostenpflichtige-aufrufe) · [Zwei Suchmodi](suche-und-assistent.md#zwei-modi)
 - **Eigenbehalt (Gesundheitskosten)** – [Seite Gesundheitskosten](analyse.md)
 - **Endabgerechnet (Filter Gesundheitskosten)** – [Seite Gesundheitskosten](analyse.md)
@@ -140,16 +145,22 @@ ausführlichste Behandlung.
 - **Favoritenleiste** – [Die Mobilansicht](mobil-und-pwa.md#die-mobilansicht)
 - **Fehlende PDF reimportieren** → siehe *Fehlt in Dateiablage (Filter)*
 - **Fehlerbilder** – [Häufige Fehlerbilder](betrieb-troubleshooting.md#häufige-fehlerbilder) · [Wenn nichts ankommt](benachrichtigungen.md#wenn-nichts-ankommt) · [Grenzen und Fehlerbilder (MCP)](mcp.md#grenzen-und-fehlerbilder)
+- **Fehler melden (GitHub-Issue)** – [Wo melde ich einen Fehler?](faq.md#hilfe-und-kontakt) · [Wenn nichts mehr hilft](betrieb-troubleshooting.md#wenn-nichts-mehr-hilft)
 - **Fehlt in Dateiablage (Filter)** – [Filterleiste](oberflaeche.md#dokumente) · [Wenn eine Datei endgültig fehlt](storage-backends.md#wenn-eine-datei-endgültig-fehlt) · [PDF ersetzen](dokumentansicht.md#pdf-ersetzen)
 - **Familie (wer sieht was)** – [Lesezugriff auf die eigenen Dokumente beschränken](sicherheit.md#lesezugriff-auf-die-eigenen-dokumente-beschränken)
 - **Fingerabdruck (Datei-Hash)** – [Fingerabdrücke](backup-wiederherstellung.md#fingerabdrücke--die-voraussetzung)
+- **Fotoimport (Fotos wie einen Kamerascan aufbereiten)** – [Fotos importieren](dokumente-importieren.md#fotos-importieren) · [Teilen-Menü](dokumente-importieren.md#pdfs-über-das-teilen-menü-übergeben)
+- **Fragen stellen (GitHub-Discussions)** – [Hilfe und Kontakt](faq.md#hilfe-und-kontakt)
 - **Freigabe (AI ✓ / User ✓)** – [Status und Freigabe](dokumentansicht.md#status-und-freigabe)
 - **Fristen** – [Wiedervorlagen und Fristen](akten-und-organisation.md#wiedervorlagen-und-fristen)
 - **FRITZ!Box (VPN, DNS-Rebind-Schutz)** – [WireGuard über die FRITZ!Box](zugriff-von-unterwegs.md#weg-1-wireguard-über-die-fritzbox) · [FAQ: DuckDNS-Subdomain funktioniert nicht](faq.md#betrieb)
 
 ## G
 
+- **Ganzes Bild (Kamerascan, Fotoimport)** – [Mit der Kamera in postbuch.net](dokumente-importieren.md#mit-der-kamera-in-postbuchnet) · [Fotos importieren](dokumente-importieren.md#fotos-importieren)
 - **Gemeinsam (Ordner)** – [Ablagestruktur wählen](storage-backends.md#ablagestruktur-wählen)
+- **Galerie (Fotos im Kamerascan)** – [Fotos importieren](dokumente-importieren.md#fotos-importieren)
+- **Gemma 4 12B (lokales Modell)** – [Lokales Modell](ki-provider.md#lokales-modell)
 - **Gesundheitskosten (Steuer, Eigenbehalt)** – [Seite Gesundheitskosten](analyse.md) · [Excel-Export](analyse.md#excel-export)
 - **Gesehen (Kürzung als gesehen markieren)** – [Kürzungen als gesehen markieren](abrechnung-pkv-beihilfe.md#kürzungen-als-gesehen-markieren) · [Kürzungen bearbeiten](dokumentansicht.md#kürzungen-bearbeiten)
 - **GiroCode (Überweisungs-QR)** – [Zahlung und GiroCode](dokumentansicht.md#zahlung-und-girocode) · [Erkannte QR-Codes](dokumentansicht.md#erkannte-qr-codes)
@@ -187,6 +198,7 @@ ausführlichste Behandlung.
 - **Kartenansicht der Dokumentliste** – [Karten statt Tabelle](oberflaeche.md#dokumente) · [Mobilansicht](mobil-und-pwa.md#die-mobilansicht)
 - **KI-Anbieter** – [KI-Anbieter](ki-provider.md) · [Provider](ki-provider.md#provider) · [Voraussetzungen](voraussetzungen.md#ki-anbieter)
 - **Klassifikations-Hinweise** – [Eigene Klassifikations-Hinweise](ki-provider.md#eigene-klassifikations-hinweise)
+- **Kontakt (GitHub-Issues und -Discussions)** – [Hilfe und Kontakt](faq.md#hilfe-und-kontakt) · [Wenn nichts mehr hilft](betrieb-troubleshooting.md#wenn-nichts-mehr-hilft)
 - **Korrekturrechnung** – [Sonderfall Korrekturrechnung](dokumentansicht.md#sonderfall-korrekturrechnung) · [Zahlungen ziehen um](dokumentansicht.md#sonderfall-korrekturrechnung) · [Ersetzung aufheben](dokumentansicht.md#sonderfall-korrekturrechnung) · [Assistent und MCP kennen die Ersetzung](dokumentansicht.md#sonderfall-korrekturrechnung)
 - **Kosten** – [Kosten und kostenpflichtige KI-Aufrufe](ki-provider.md#kosten-und-kostenpflichtige-aufrufe) · [Kosten (FAQ)](faq.md#kosten)
 - **Kostenträger-Profile** – [Kostenträger-Profile](ki-provider.md#kostenträger-profile) · [Der Erstattungsbescheid kommt](abrechnung-pkv-beihilfe.md#5-der-erstattungsbescheid-kommt)
@@ -195,12 +207,15 @@ ausführlichste Behandlung.
 
 ## L
 
+- **Laborbeleg (Fremdlabor, Praxislabor)** → siehe *Belegzeilen*
 - **Lebensbereich** – [Grundbegriffe](ueberblick.md#grundbegriffe) · [Nachträglich ändern](dokumentansicht.md#lebensbereich-und-dokumentart-ändern)
 - **Leistungsjahr (Handwerkerrechnung)** – [Fachblock](dokumentansicht.md#untertyp-handwerkerrechnung) · [Gruppiert wird nach Zahljahr](analyse.md)
 - **Lesezugriff** – [Rollen und Zugänge](sicherheit.md#rollen-und-zugänge) · [Nur eigene Dokumente](sicherheit.md#lesezugriff-auf-die-eigenen-dokumente-beschränken)
 - **Lohnanteil (§ 35a EStG)** – [Wie er ermittelt wird](dokumentansicht.md#wie-der-lohnanteil-ermittelt-wird) · [Seite Handwerker](oberflaeche.md#analyse) · [Archivierte zählen mit](analyse.md) · [Rechnung ausschließen](dokumentansicht.md#untertyp-handwerkerrechnung)
 - **Linux (App-Installation)** – [Als App installieren](mobil-und-pwa.md#linux)
+- **llama.cpp** – [Lokales Modell](ki-provider.md#lokales-modell)
 - **localhost (OneDrive-Callback)** – [Localhost-Tunnel von einem anderen Rechner](installation.md#localhost-tunnel-von-einem-anderen-rechner)
+- **Lokales Modell (Empfehlung)** – [Lokales Modell](ki-provider.md#lokales-modell) · [Vorlagen](ki-provider.md#provider)
 - **Logs** – [Wo man nachsieht](betrieb-troubleshooting.md#wo-man-nachsieht)
 - **Löschen** – [Dokument löschen (Ablauf und Löschschutz)](dokumentansicht.md#löschen) · [Fundort der PDF nach dem Löschen](storage-backends.md#der-postbuchnet-papierkorb)
 
@@ -224,9 +239,11 @@ ausführlichste Behandlung.
 ## N
 
 - **Nachzahlung (zweiter Bescheid zur selben Rechnung)** – [Restperioden](abrechnung-pkv-beihilfe.md#restperioden--wenn-ein-bescheid-nur-einen-teil-abrechnet) · [Erstattung von Hand verknüpfen](dokumentansicht.md#erstattungen-von-hand-verknüpfen)
+- **Nachlese (Modellklasse)** – [Arztrechnungen und Nachlese](ki-provider.md#arztrechnungen-und-nachlese) · [Modellstufen](ki-provider.md#modellstufen)
 - **Nachzügler (Dateiablage-Umzug)** – [Umzug zwischen den Dateiablagen](storage-backends.md#umzug-zwischen-den-dateiablagen)
 - **Nextcloud** → siehe *WebDAV*
 - **„Niemals aussondern" (Urkundenflag)** – [Niemals aussondern: der Urkundenflag](akten-und-organisation.md#niemals-aussondern-der-urkundenflag)
+- **Notschalter (zweiter Faktor des Admins)** – [Notschalter für den Administrator](sicherheit.md#notschalter-für-den-administrator)
 - **Notausgang (Zugang im Heimnetz wieder öffnen)** – [Notausgang](sicherheit.md#notausgang)
 - **Notiz** – [Notiz](dokumentansicht.md#notiz)
 - **Nummer eingeben (Sprung)** – [Nummer eingeben = direkt zu Dokument/Akte springen](suche-und-assistent.md#nummer-eingeben--direkt-zu-dokumentakte-springen)
@@ -234,6 +251,7 @@ ausführlichste Behandlung.
 ## O
 
 - **Offene Abrechnung (Dashboard)** – [Dashboard](oberflaeche.md#dashboard) · [Sitzung bestätigen oder verwerfen](abrechnung-pkv-beihilfe.md#4-periode-einreichen--der-abrechnungs-assistent)
+- **Offener Scan (fortsetzen, verwerfen)** – [Mit der Kamera in postbuch.net](dokumente-importieren.md#mit-der-kamera-in-postbuchnet)
 - **Ohne Datum (Ordner)** – [Ablagestruktur wählen](storage-backends.md#ablagestruktur-wählen)
 - **OneDrive** – [OneDrive](storage-backends.md#onedrive) · [App registrieren](onedrive-app-registrierung.md) · [OAuth-Sonderfälle](installation.md#onedrive-oauth-die-sonderfälle) · [Zugriffsumfang](sicherheit.md#wie-weit-der-zugriff-auf-die-dateiablage-reicht)
 - **OneDrive-Gerätecode** – [Gerätecode ohne Secret](onedrive-app-registrierung.md#empfohlen-gerätecode-ohne-secret)
@@ -245,6 +263,7 @@ ausführlichste Behandlung.
 ## P
 
 - **Papierkorb (`<postbuch.net-Wurzelverzeichnis>/_trash`)** – [Der eigene Papierkorb von postbuch.net](storage-backends.md#der-postbuchnet-papierkorb) · [Dokument löschen](dokumentansicht.md#löschen) · [Kein Ersatz für ein Backup](backup-wiederherstellung.md#warum-die-cloud-allein-kein-backup-ist)
+- **Passkeys** – [Grenzen](sicherheit.md#grenzen--was-postbuchnet-nicht-leistet)
 - **Patientenportal (Link im QR-Code)** – [Erkannte QR-Codes](dokumentansicht.md#erkannte-qr-codes)
 - **Pfadprüfung (Dateiablage-Fehler)** – [Ziel liegt außerhalb des Dateiablage-Ordners](betrieb-troubleshooting.md#häufige-fehlerbilder)
 - **PDF-Betrachter** – [Der PDF-Betrachter](dokumentansicht.md#der-pdf-betrachter) · [Auf dem Handy](mobil-und-pwa.md#bedienung-im-pdf-betrachter)
@@ -262,6 +281,7 @@ ausführlichste Behandlung.
 - **PKV-Prüfvormerkung** – [Beihilfe-Kürzung zur PKV-Prüfung vormerken](abrechnung-pkv-beihilfe.md#beihilfe-kürzung-zur-pkv-prüfung-vormerken)
 - **Port-Bindung (`WEB_BIND`, `SCANNER_BIND`)** – [Optionale Profile](installation.md#optionale-profile) · [Oberfläche nur über HTTPS](sicherheit.md#oberfläche-nur-über-https) · [Scanner-Dienst](sicherheit.md#scanner-dienst)
 - **PostgreSQL 18 (Datenbank-Umzug)** – [Datenbank-Umzug auf PostgreSQL 18](betrieb-troubleshooting.md#datenbank-umzug-auf-postgresql-18)
+- **PostgreSQL-Image (Sicherheitskorrekturen)** – [Datenbank-Image aktualisieren](betrieb-troubleshooting.md#datenbank-image-aktualisieren)
 - **Postnummer** – [Grundbegriffe](ueberblick.md#grundbegriffe) · [Direkt hinspringen](suche-und-assistent.md#nummer-eingeben--direkt-zu-dokumentakte-springen)
 - **Prüfblock (PKV-Prüfung)** – [Prüfblock für die PKV](abrechnung-pkv-beihilfe.md#4-periode-einreichen--der-abrechnungs-assistent)
 - **Prüffälle und „zur Prüfung“ (Periodenseite)** – [Beihilfe-Kürzung zur PKV-Prüfung vormerken](abrechnung-pkv-beihilfe.md#beihilfe-kürzung-zur-pkv-prüfung-vormerken)
@@ -292,8 +312,10 @@ ausführlichste Behandlung.
 ## S
 
 - **Sammelmappe (Papierablage)** – [Aufbau des Verbleibs](akten-und-organisation.md#aufbau) · [Sammelmappen verwalten](akten-und-organisation.md#sammelmappen-verwalten) · [Etiketten für Sammelmappen](etiketten-drucken.md#etiketten-für-sammelmappen)
+- **Sammelkürzung (ein Betrag, viele Gründe)** – [Kürzungen bearbeiten](dokumentansicht.md#kürzungen-bearbeiten) · [Kürzungen erkennen](abrechnung-pkv-beihilfe.md#5-der-erstattungsbescheid-kommt)
 - **Scan-Webhook freigeben** – [Scan-Webhook im eigenen Netz](dokumente-importieren.md#weg-5-scan-webhook-im-eigenen-netz) · [Scanner-Dienst](sicherheit.md#scanner-dienst)
 - **Scannen per Handyfoto** – [Scannen per Foto vom Smartphone](dokumente-importieren.md#weg-2-scannen-per-foto-vom-smartphone) · [Mit der Kamera in postbuch.net](dokumente-importieren.md#mit-der-kamera-in-postbuchnet) · [Mit der Cloud-App](dokumente-importieren.md#mit-der-scan-funktion-der-cloud-app)
+- **Scan fortsetzen / für später behalten** → siehe *Offener Scan*
 - **Scanner** – [Scannen über „Importieren“](dokumente-importieren.md#weg-4-scannen-über-importieren) · [Scanner speichert direkt in die Cloud (Weg 6)](dokumente-importieren.md#weg-6-scanner-speichert-direkt-in-die-cloud) · [Optionale Hardware](voraussetzungen.md#optionale-hardware) · [Die Dienste](architektur.md#die-dienste)
 - **Scanner-Token** – [Scan-Webhook im eigenen Netz](dokumente-importieren.md#weg-5-scan-webhook-im-eigenen-netz) · [Scanner-Dienst](sicherheit.md#scanner-dienst)
 - **Scannerprofil (ein-/ausschalten)** – [Scannen über „Importieren“](dokumente-importieren.md#weg-4-scannen-über-importieren) · [Scanner im Assistenten](installation.md#scanner-im-assistenten)
@@ -302,20 +324,25 @@ ausführlichste Behandlung.
 - **Schlüsselbund (Backup-Verschlüsselung)** – [Wie das technisch funktioniert](backup-wiederherstellung.md#wie-das-technisch-funktioniert) · [Aus der Liste](backup-wiederherstellung.md#aus-der-liste)
 - **Schlüsseldatei (`schluessel.json`, Backup-Verschlüsselung)** – [Wie das technisch funktioniert](backup-wiederherstellung.md#wie-das-technisch-funktioniert) · [Beim Neuaufsetzen](backup-wiederherstellung.md#beim-neuaufsetzen) · [Kommandozeile](backup-wiederherstellung.md#verschlüsselte-datei-auf-der-kommandozeile-entschlüsseln)
 - **Semantische Suche** – [Zwei Modi](suche-und-assistent.md#zwei-modi) · [Embeddings](ki-provider.md#embeddings)
+- **Seiten ordnen (Reihenfolge, Seiten entfernen)** – [Mit der Kamera in postbuch.net](dokumente-importieren.md#mit-der-kamera-in-postbuchnet)
 - **Snowflake Arctic Embed** – [Der eingebaute Embedding-Dienst](ki-provider.md#der-eingebaute-embedding-dienst)
 - **Sprachmodell und Embedding (Pflicht im Assistenten)** – [Der KI-Schritt baut sich auf](installation.md#der-ki-schritt-baut-sich-auf)
 - **Selbsttest (Dateiablage)** – [Selbsttest](storage-backends.md#selbsttest)
 - **Sidecar (`schluessel.json`)** – siehe **Schlüsseldatei** · [Wie das technisch funktioniert](backup-wiederherstellung.md#wie-das-technisch-funktioniert)
 - **Sicherheit** – [Sicherheit](sicherheit.md) · [Was von außen erreichbar ist](sicherheit.md#was-von-außen-erreichbar-ist)
+- **Sicherheitslücke melden** – [Und wenn es eine Sicherheitslücke ist?](faq.md#hilfe-und-kontakt)
 - **SSH-Tunnel (OneDrive-Callback)** – [Localhost-Tunnel von einem anderen Rechner](installation.md#localhost-tunnel-von-einem-anderen-rechner)
 - **Status eines Dokuments** – [Status und Freigabe](dokumentansicht.md#status-und-freigabe)
 - **Suche** – [Suche](suche-und-assistent.md#suche) · [Was wähle ich wann?](suche-und-assistent.md#was-wähle-ich-wann)
+- **Support** – [Hilfe und Kontakt](faq.md#hilfe-und-kontakt)
 - **SymLinks (Mehrfachzuordnung)** – [SymLinks](dokumentansicht.md#symlinks)
 
 ## T
 
 - **Tailscale** – [Tailscale](zugriff-von-unterwegs.md#weg-2-tailscale)
+- **TOTP** → siehe *Zwei-Faktor-Anmeldung*
 - **Teilen (PDF an eine App übergeben)** – [Bedienung im PDF-Betrachter](mobil-und-pwa.md#bedienung-im-pdf-betrachter) · [Periode einreichen – der Abrechnungs-Assistent](abrechnung-pkv-beihilfe.md#4-periode-einreichen--der-abrechnungs-assistent)
+- **Teilen (Foto an postbuch.net übergeben)** – [Fotos importieren](dokumente-importieren.md#fotos-importieren)
 - **Teilen (PDF an postbuch.net übergeben)** – [PDFs über das Teilen-Menü übergeben](dokumente-importieren.md#pdfs-über-das-teilen-menü-übergeben) · [Automatisch folgen](dokumente-importieren.md#automatisch-folgen)
 - **Tierarztkosten (Gesundheitskosten)** – [Seite Gesundheitskosten](analyse.md)
 - **Teilzahlung** – [Teilzahlung](dokumentansicht.md#teilzahlung) · [Zahlung und GiroCode](dokumentansicht.md#zahlung-und-girocode) · [Eine Rechnung bestreiten](dokumentansicht.md#eine-rechnung-bestreiten)
@@ -358,7 +385,9 @@ ausführlichste Behandlung.
 - **WebDAV / Nextcloud** – [Eigener WebDAV-Speicher](storage-backends.md#eigener-webdav-speicher) · [Unverschlüsselte Adressen](storage-backends.md#unverschlüsselte-adressen) · [Voraussetzungen](voraussetzungen.md#dateiablage-onedrive-oder-nextcloud)
 - **Webhook (Discord)** – [Webhook-Modus](benachrichtigungen.md#webhook-modus-rückfallebene)
 - **Webhook (Scan auslösen)** – [Scan-Webhook im eigenen Netz](dokumente-importieren.md#weg-5-scan-webhook-im-eigenen-netz)
+- **Weitere Angaben (Einzelposition)** – [Einzelpositionen der Rechnung](dokumentansicht.md#einzelpositionen-der-rechnung)
 - **Wiederherstellen (Backup)** – [Wiederherstellen](backup-wiederherstellung.md#wiederherstellen) · [Zwangssicherung davor](backup-wiederherstellung.md#wiederherstellen) · [Der Ernstfall](backup-wiederherstellung.md#der-ernstfall)
+- **Wiederherstellungscodes (Zwei-Faktor-Anmeldung)** – [Zwei-Faktor-Anmeldung](sicherheit.md#zwei-faktor-anmeldung)
 - **Wiedervorlage** – [Wiedervorlagen und Fristen](akten-und-organisation.md#wiedervorlagen-und-fristen) · [Am Dokument anlegen](dokumentansicht.md#wiedervorlagen)
 - **Wiederverarbeiten** – [Wiederverarbeiten](dokumentansicht.md#wiederverarbeiten) · [Nachträglich korrigieren](dokumente-importieren.md#nachträglich-korrigieren)
 - **Windows (App-Installation)** – [Als App installieren](mobil-und-pwa.md#windows)
@@ -369,6 +398,7 @@ ausführlichste Behandlung.
 
 ## Z
 
+- **Zahn / Region (Einzelposition)** → siehe *Weitere Angaben* – [Einzelpositionen der Rechnung](dokumentansicht.md#einzelpositionen-der-rechnung)
 - **Zahljahr (Steuer)** – [Handwerker und Gesundheitskosten](analyse.md)
 - **Zahlungen umziehen (Korrekturrechnung)** – [Sonderfall Korrekturrechnung](dokumentansicht.md#sonderfall-korrekturrechnung)
 - **Zahlungsziel / Fälligkeit** – [Bezahlen](abrechnung-pkv-beihilfe.md#3-bezahlen) · [Dashboard](oberflaeche.md#dashboard)
@@ -378,6 +408,7 @@ ausführlichste Behandlung.
 - **Zurück-Taste (PWA)** – [Die Zurück-Taste im installierten Zustand](mobil-und-pwa.md#die-zurück-taste-im-installierten-zustand)
 - **Zurückgehalten (Periodenstatus)** – [Grundbegriffe](abrechnung-pkv-beihilfe.md#grundbegriffe) · [Zurückgehaltene Perioden](abrechnung-pkv-beihilfe.md#zurückgehaltene-perioden)
 - **Zwangssicherung (vor dem Wiederherstellen)** – [Wiederherstellen](backup-wiederherstellung.md#wiederherstellen) · [Aus einer lokalen Datei](backup-wiederherstellung.md#aus-einer-lokalen-datei)
+- **Zwei-Faktor-Anmeldung (2FA, TOTP)** – [Zwei-Faktor-Anmeldung](sicherheit.md#zwei-faktor-anmeldung) · [Für alle vorschreiben](sicherheit.md#zwei-faktor-anmeldung) · [Notschalter für den Administrator](sicherheit.md#notschalter-für-den-administrator)
 
 ---
 

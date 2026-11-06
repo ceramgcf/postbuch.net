@@ -28,6 +28,8 @@ export const MODEL_CLASSES = [
     desc: 'Komplexe Dokumente (difficulty ≥ 0.5) – fällt auf Mittel → Leicht zurück' },
   { key: 'fallback', settingKey: 'llm_model_fallback', label: 'Letzter Fallback',
     desc: 'Notfallmodell am Ende jeder Kette, wenn alle anderen Modelle fehlschlagen' },
+  { key: 'nachlese', settingKey: 'llm_model_nachlese', label: 'Nachlese',
+    desc: 'Starkes Modell, das nachliest, wenn eine Plausibilitätsprüfung scheitert (z. B. Positionssumme einer Arztrechnung)' },
 
   { key: 'chat_research', group: 'chat', settingKey: 'chat_model_research', label: 'Assistent: Recherche',
     desc: 'Research-Agent des Büroassistenten (Tool-Use-Loop: Suche + Dokumente lesen)' },

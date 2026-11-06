@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { formatDate, formatCurrency, cn } from '@/lib/utils';
-import { Pencil, Trash2, Plus } from 'lucide-react';
+import { Pencil, Trash2, Plus, ChevronRight } from 'lucide-react';
 import { useAddArztPosition, useUpdateArztPosition, useDeleteArztPosition } from '@/hooks/usePostbuch';
 import { useUndoHistory } from '@/hooks/useUndoHistory';
 import { useAuth } from '@/hooks/useAuth';
@@ -14,7 +14,7 @@ import { ListenZeile, ListenGruppe } from '@/components/listen/ListenZeile';
 import { SymLinkButton } from './SymLinkButton';
 import { positionToken } from '@/lib/erstattung';
 
-const FELDER = ['behandlungs_datum', 'goa_goz_gebueh_pzn', 'leistung', 'faktor', 'betrag', 'begruendung'];
+const FELDER = ['behandlungs_datum', 'goa_goz_gebueh_pzn', 'leistung', 'faktor', 'betrag', 'begruendung', 'zusatzangaben'];
 
 // Server-Zeile → Formularwerte (alles Strings, Dezimalkomma wie bei der Eingabe)
 function zuEntwurf(pos) {
@@ -26,6 +26,7 @@ function zuEntwurf(pos) {
     faktor: zahl(pos?.faktor),
     betrag: zahl(pos?.betrag),
     begruendung: pos?.begruendung ?? '',
+    zusatzangaben: pos?.zusatzangaben ?? '',
   };
 }
 
@@ -68,6 +69,7 @@ function PositionDialog({ offen, titel, entwurf, setEntwurf, fehler, pending, on
           {feld(istTier ? 'GOT / PZN' : 'Ziffer', 'goa_goz_gebueh_pzn', { className: 'h-8 font-mono' })}
         </div>
         {feld('Leistung', 'leistung')}
+        {feld('Weitere Angaben', 'zusatzangaben', { placeholder: 'z. B. Region: 13; Anzahl: 2' })}
         <div className="grid grid-cols-2 gap-3">
           {feld('Faktor', 'faktor', { inputMode: 'decimal', placeholder: 'z. B. 2,3' })}
           {feld('Betrag (€)', 'betrag', { inputMode: 'decimal', required: true, className: 'h-8 font-mono' })}
@@ -96,6 +98,36 @@ function PositionDialog({ offen, titel, entwurf, setEntwurf, fehler, pending, on
  * `abweichung` (Rechnungsbetrag minus Positionssumme) berechnet der Server beim
  * Laden; sie wird unter der Summe angezeigt und nirgends gespeichert.
  */
+// Zeilen eines beigefügten Belegs (Fremd-/Praxislabor, Material), dessen Summe
+// die Position ist. Reine Aufschlüsselung: Summen und Kürzungen rechnen mit dem
+// Positionsbetrag, die Belegzeilen zählen nicht zusätzlich.
+function Belegzeilen({ zeilen }) {
+  if (!zeilen?.length) return null;
+  const belege = [...new Set(zeilen.map((z) => z.beleg).filter(Boolean))].join(', ');
+  return (
+    <details className="group/beleg text-xs text-muted-foreground">
+      <summary className="flex cursor-pointer list-none items-center gap-1 hover:text-foreground [&::-webkit-details-marker]:hidden">
+        <ChevronRight className="h-3.5 w-3.5 shrink-0 transition-transform group-open/beleg:rotate-90" />
+        {belege || 'Beleg'}: {zeilen.length} {zeilen.length === 1 ? 'Zeile' : 'Zeilen'}
+      </summary>
+      <ul className="mt-1 space-y-0.5 border-l pl-3 ml-1.5">
+        {zeilen.map((z) => (
+          <li key={`${z.pos_subid}-${z.zeile}`} className="flex gap-2">
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+              {z.nummer && <span className="font-mono mr-1.5">{z.nummer}</span>}
+              {z.leistung || '–'}
+              {z.menge != null && Number(z.menge) !== 1 && z.einzelpreis != null && (
+                <span className="ml-1.5 whitespace-nowrap">({Number(z.menge).toLocaleString('de-DE')} × {formatCurrency(z.einzelpreis)})</span>
+              )}
+            </span>
+            <span className="shrink-0 font-mono">{formatCurrency(z.betrag)}</span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
 export function ArztPositionenCard({ postid, positionen = [], abweichung, istTier, affectedSubids }) {
   const { canWrite } = useAuth();
   const { istMobil } = useDarstellung();
@@ -216,12 +248,16 @@ export function ArztPositionenCard({ postid, positionen = [], abweichung, istTie
             unten={<span className={cn('truncate font-mono', gekuerzt && 'text-red-400')}>{kennzahlen}</span>}
             untenRechts={aktionen(pos, gekuerzt)}
           >
+            {pos.zusatzangaben && (
+              <p className="text-xs text-muted-foreground">{pos.zusatzangaben}</p>
+            )}
             {pos.begruendung && (
               <p className="text-xs text-muted-foreground">
                 <span className="font-medium text-foreground/70">{istTier ? 'Begründung: ' : 'Begründung (Faktor > 2,3): '}</span>
                 {pos.begruendung}
               </p>
             )}
+            {pos.belegzeilen?.length > 0 && <Belegzeilen zeilen={pos.belegzeilen} />}
           </ListenZeile>
         );
       })}
@@ -251,63 +287,84 @@ export function ArztPositionenCard({ postid, positionen = [], abweichung, istTie
         {positionen.length === 0 ? (
           <p className="text-sm text-muted-foreground">Keine Einzelpositionen erfasst.</p>
         ) : istMobil ? mobilListe : (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>#</TableHead>
-                <TableHead>Datum</TableHead>
-                <TableHead>{istTier ? 'GOT / PZN' : 'Ziffer'}</TableHead>
-                <TableHead>Leistung</TableHead>
-                <TableHead>Faktor</TableHead>
-                <TableHead className="text-right">Betrag</TableHead>
-                <TableHead className="w-8"><span className="sr-only">Aktionen</span></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {positionen.map((pos) => {
-                const gekuerzt = affectedSubids.has(pos.subid);
-                return (
-                  <Fragment key={pos.subid}>
-                    <TableRow className={cn('group', pos.begruendung && 'border-0', gekuerzt && 'text-red-600')}>
-                      <TableCell className={gekuerzt ? 'text-red-400' : 'text-muted-foreground'}>{pos.subid}</TableCell>
-                      <TableCell className="whitespace-nowrap">{formatDate(pos.behandlungs_datum)}</TableCell>
-                      <TableCell className="font-mono text-xs">{pos.goa_goz_gebueh_pzn || '–'}</TableCell>
-                      <TableCell>{pos.leistung || '–'}</TableCell>
-                      <TableCell>{pos.faktor ? `${pos.faktor}×` : '–'}</TableCell>
-                      <TableCell className="text-right font-mono">{formatCurrency(pos.betrag)}</TableCell>
-                      <TableCell className="text-right">
-                        {aktionen(pos, gekuerzt)}
-                      </TableCell>
+          // Die Tabelle erst, wenn die Karte breit genug ist, dass die
+          // Leistung neben den festen Spalten vernünftig Platz hat; schmaler
+          // (z. B. neben dem PDF) dieselbe Kartenliste wie mobil.
+          <div className="@container">
+            <div className="@4xl:hidden">{mobilListe}</div>
+            <div className="hidden @4xl:block">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>#</TableHead>
+                    <TableHead>Datum</TableHead>
+                    <TableHead>{istTier ? 'GOT / PZN' : 'Ziffer'}</TableHead>
+                    <TableHead>Leistung</TableHead>
+                    <TableHead>Faktor</TableHead>
+                    <TableHead className="text-right">Betrag</TableHead>
+                    <TableHead className="w-8"><span className="sr-only">Aktionen</span></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {positionen.map((pos) => {
+                    const gekuerzt = affectedSubids.has(pos.subid);
+                    return (
+                      <Fragment key={pos.subid}>
+                        <TableRow className={cn('group', (pos.begruendung || pos.belegzeilen?.length) && 'border-0', gekuerzt && 'text-red-600')}>
+                          <TableCell className={gekuerzt ? 'text-red-400' : 'text-muted-foreground'}>{pos.subid}</TableCell>
+                          <TableCell className="whitespace-nowrap">{formatDate(pos.behandlungs_datum)}</TableCell>
+                          <TableCell className="font-mono text-xs">{pos.goa_goz_gebueh_pzn || '–'}</TableCell>
+                          <TableCell className="hyphens-auto">
+                            {pos.leistung || '–'}
+                            {pos.zusatzangaben && (
+                              <span className="block text-xs text-muted-foreground [overflow-wrap:anywhere]">{pos.zusatzangaben}</span>
+                            )}
+                          </TableCell>
+                          <TableCell>{pos.faktor ? `${pos.faktor}×` : '–'}</TableCell>
+                          <TableCell className="text-right font-mono">{formatCurrency(pos.betrag)}</TableCell>
+                          <TableCell className="text-right">
+                            {aktionen(pos, gekuerzt)}
+                          </TableCell>
+                        </TableRow>
+                        {pos.begruendung && (
+                          <TableRow className="hover:bg-transparent">
+                            <TableCell />
+                            <TableCell colSpan={6} className="pt-0 text-xs text-muted-foreground align-top">
+                              <span className="font-medium text-foreground/70">{istTier ? 'Begründung: ' : 'Begründung (Faktor > 2,3): '}</span>
+                              {pos.begruendung}
+                            </TableCell>
+                          </TableRow>
+                        )}
+                        {pos.belegzeilen?.length > 0 && (
+                          <TableRow className="hover:bg-transparent">
+                            <TableCell />
+                            <TableCell colSpan={6} className="pt-0 align-top">
+                              <Belegzeilen zeilen={pos.belegzeilen} />
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                  <TableRow className="hover:bg-transparent font-medium">
+                    <TableCell />
+                    <TableCell colSpan={4}>Summe</TableCell>
+                    <TableCell className="text-right font-mono">{formatCurrency(summe)}</TableCell>
+                    <TableCell />
+                  </TableRow>
+                  {abweichungBetrag !== 0 && (
+                    <TableRow className="hover:bg-transparent italic text-muted-foreground"
+                      title="Rechnungsbetrag minus Summe der Positionen, z. B. Mehrwertsteuer oder eine Minderung, die nicht als eigene Position erfasst ist.">
+                      <TableCell />
+                      <TableCell colSpan={4}>Abweichung zum Rechnungsbetrag</TableCell>
+                      <TableCell className="text-right font-mono">{formatCurrency(abweichungBetrag)}</TableCell>
+                      <TableCell />
                     </TableRow>
-                    {pos.begruendung && (
-                      <TableRow className="hover:bg-transparent">
-                        <TableCell />
-                        <TableCell colSpan={6} className="pt-0 text-xs text-muted-foreground align-top">
-                          <span className="font-medium text-foreground/70">{istTier ? 'Begründung: ' : 'Begründung (Faktor > 2,3): '}</span>
-                          {pos.begruendung}
-                        </TableCell>
-                      </TableRow>
-                    )}
-                  </Fragment>
-                );
-              })}
-              <TableRow className="hover:bg-transparent font-medium">
-                <TableCell />
-                <TableCell colSpan={4}>Summe</TableCell>
-                <TableCell className="text-right font-mono">{formatCurrency(summe)}</TableCell>
-                <TableCell />
-              </TableRow>
-              {abweichungBetrag !== 0 && (
-                <TableRow className="hover:bg-transparent italic text-muted-foreground"
-                  title="Rechnungsbetrag minus Summe der Positionen, z. B. Mehrwertsteuer oder eine Minderung, die nicht als eigene Position erfasst ist.">
-                  <TableCell />
-                  <TableCell colSpan={4}>Abweichung zum Rechnungsbetrag</TableCell>
-                  <TableCell className="text-right font-mono">{formatCurrency(abweichungBetrag)}</TableCell>
-                  <TableCell />
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
         )}
       </CardContent>
 

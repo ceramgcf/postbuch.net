@@ -108,13 +108,13 @@ async function extractViaVision(postid, pdfBuffer, focusedQuestion, ctx, meta) {
   try {
     let callOpts;
     if (pdfFaehig) {
-      callOpts = { pdf: pdfBuffer, maxTokens: 2048 };
+      callOpts = { pdf: pdfBuffer };
     } else {
       const { bilder } = await renderPdfToImages(pdfBuffer, { maxSeiten: seitenLimit, strikt: false });
       // Ohne Bild-Block ginge der Prompt raus und das Modell antwortete aus dem
       // Nichts — lieber gar keine Extraktion als eine erfundene.
       if (!bilder.length) throw new Error('Rastern lieferte keine Bilder');
-      callOpts = { bilder, maxTokens: 2048 };
+      callOpts = { bilder };
     }
     const result = await callLLM(cfg, prompt, callOpts, s, {
       ...(meta || {}),

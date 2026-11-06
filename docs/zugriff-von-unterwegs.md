@@ -7,8 +7,9 @@ Instanz selbst bleibt dabei für das Internet unsichtbar, es wird kein Port für
 postbuch.net am Router geöffnet.
 
 Davon abzuraten ist, die Oberfläche per Portfreigabe direkt ins Internet zu
-stellen. postbuch.net hat keine Zwei-Faktor-Anmeldung und ist nicht für den
-offenen Betrieb gehärtet (siehe [Sicherheit](sicherheit.md#grenzen--was-postbuchnet-nicht-leistet)).
+stellen. postbuch.net ist nicht für den offenen Betrieb gehärtet, daran ändert
+auch die optionale [Zwei-Faktor-Anmeldung](sicherheit.md#zwei-faktor-anmeldung)
+nichts (siehe [Sicherheit](sicherheit.md#grenzen--was-postbuchnet-nicht-leistet)).
 Ein VPN nimmt dieses Risiko heraus, ohne dass du auf etwas verzichten musst.
 
 Zwei Wege bieten sich an:

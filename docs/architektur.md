@@ -31,7 +31,10 @@ Zwei Details daran sind Absicht und keine Nachlässigkeit:
 
 Alle Basis-Images sind per Digest festgenagelt – PostgreSQL, Node, nginx,
 Python, die OCR-Basis und Caddy. Ein Rebuild zieht damit nicht unbemerkt eine
-andere Version herein.
+andere Version herein. Neue Digests kommen mit einem Release; das Update tauscht
+dann auch den Datenbankcontainer, mit Sicherung und ohne Wechsel der
+PostgreSQL-Hauptversion (siehe
+[Datenbank-Image aktualisieren](betrieb-troubleshooting.md#datenbank-image-aktualisieren)).
 
 ## Weg eines Dokuments durch die Pipeline
 

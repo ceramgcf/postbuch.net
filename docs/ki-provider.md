@@ -99,6 +99,32 @@ Textmodelle wie Codestral oder die GLM-Modelle von Z.ai können keine Bilder
 lesen. Wer sie nutzen will, legt dafür einen zweiten Mistral-Provider ohne
 **Bilder verstehen** an.
 
+### Lokales Modell
+
+Als Startpunkt für ein lokales Modell hat sich in Tests **Gemma 4 12B** als
+bestes Modell erwiesen, das auf hochwertigen Privatrechnern läuft. Getestet ist
+der Server von [llama.cpp](https://github.com/ggml-org/llama.cpp) mit diesen
+Dateien aus [unsloth/gemma-4-12b-it-GGUF](https://huggingface.co/unsloth/gemma-4-12b-it-GGUF):
+
+- `gemma-4-12b-it-Q5_K_M.gguf` (Modell)
+- `mmproj-F16.gguf` (Bildverarbeitung)
+- `mtp-gemma-4-12b-it.gguf` (Entwurfsmodell, erst ab 12 GB VRAM)
+
+Aufruf mit einer Grafikkarte ab 12 GB VRAM:
+
+```bash
+llama-server -m gemma-4-12b-it-Q5_K_M.gguf --mmproj mmproj-F16.gguf \
+  --model-draft mtp-gemma-4-12b-it.gguf --spec-type draft-mtp -ngld 99 \
+  -ngl 99 -c 65536 -ctk q8_0 -ctv q8_0 -fa on --jinja --reasoning off \
+  --host 0.0.0.0 --port 8080
+```
+
+Unter 12 GB VRAM entfallen `--model-draft`, `--spec-type` und `-ngld`.
+
+In postbuch.net legst du dafür einen Provider mit der Vorlage
+**Benutzerdefiniert** und der Adresse `http://<rechner>:8080/v1` an. Schalte
+**Bilder verstehen** ein; **PDF-Dokumente direkt verarbeiten** bleibt aus.
+
 ### Schlüssel
 
 Der Schlüssel eines Providers wird gespeichert, aber **nie wieder ausgeliefert**
@@ -143,6 +169,24 @@ Prompt-Caching, sofern der Provider es kann (siehe [Cache-Mode](#cache-mode)).
 Funktionen, die sonst eine bestimmte Stufe verwenden, etwa die Auswertung von
 Erstattungsbescheiden, nutzen dann ebenfalls das Analysemodell.
 
+### Arztrechnungen und Nachlese
+
+Die Einzelpositionen einer Arztrechnung liest postbuch.net in einem eigenen
+Aufruf nach der Erkennung, immer mit dem Modell der Stufe **Schwierig** (bei
+einem Modell für alles mit dem Analysemodell). Ebenso zerlegt dieses Modell die
+Kürzungen eines Erstattungsbescheids auf die betroffenen Positionen.
+
+Beide Ergebnisse prüft postbuch.net nach, zum Beispiel ob die Positionen den
+Rechnungsbetrag ergeben, ob die Zeilen eines beigefügten Belegs den Betrag
+ihrer Position ergeben, ob Begründungen im Volltext statt als bloßer Verweis
+vorliegen und ob die Anteile einer Kürzung genau ihren Betrag ergeben und jeden
+Satz der Begründung abdecken. Scheitert
+eine Prüfung, liest das Modell der Klasse **Nachlese** das Dokument mit den
+Befunden erneut. Die Nachlese gilt in beiden Modellwahlen. Solange sie nicht
+eigens eingerichtet ist, übernimmt sie das Modell der Stufe Schwierig bzw. das
+Analysemodell. Für die Nachlese lohnt sich das stärkste verfügbare Modell, denn
+sie läuft nur in den Fällen, an denen das erste Modell gescheitert ist.
+
 ### Modellstufen
 
 Bei gestaffelter Modellwahl benutzt postbuch.net nicht ein Modell, sondern
@@ -157,6 +201,7 @@ günstiges Modell und nur schwierige Post ein teures.
 | **Mittel**           | Schwierigkeit > 0,25 und < 0,5                                                                                                |
 | **Schwierig**        | Schwierigkeit ≥ 0,5                                                                                                           |
 | **Letzter Fallback** | Notfallmodell am Ende jeder Kette                                                                                             |
+| **Nachlese**         | Liest nach, wenn eine Plausibilitätsprüfung scheitert (siehe [Arztrechnungen und Nachlese](#arztrechnungen-und-nachlese)); gilt auch bei einem Modell für alles |
 
 Die Voranalyse läuft zuerst und entscheidet, welche Kette greift:
 
@@ -186,8 +231,8 @@ Jede Zeile wird als **Provider + Modell** gespeichert, nie nur als Modellname.
 Zwei lokale Server mit demselben `llama3.3` wären sonst nicht unterscheidbar.
 
 Im Einrichtungsassistenten müssen **alle Klassen der gewählten Modellwahl** auf
-einen erreichbaren Provider zeigen: bei einem Modell für alles Analysemodell und
-Letzter Fallback, gestaffelt die sechs Stufen, dazu jeweils die vier für
+einen erreichbaren Provider zeigen: bei einem Modell für alles Analysemodell,
+Letzter Fallback und Nachlese, gestaffelt die sechs Stufen und die Nachlese, dazu jeweils die vier für
 Büroassistent und Akten-Vorschlag. Zusätzlich ist ein nutzbares Embedding-Modell Pflicht;
 Sprachmodell und Embedding werden getrennt geprüft.
 
@@ -230,7 +275,8 @@ Maßgeblich ist deshalb immer die Abrechnung des Providers.
 | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Dokument importieren                   | Eigentliche PDF-/Textanalyse und ein Embedding, bei gestaffelter Modellwahl vorher eine kurze Voranalyse; bei ungültiger Antwort zusätzlich ein Reparatur- oder Fallback-Aufruf | meist **1–20 ct je Dokument**; mit sehr günstigen Modellen auch darunter, bei langen oder schwierigen Dokumenten, Retries und teuren Modellen auch darüber |
 | Dokument erneut verarbeiten            | Erneute Analyse und neues Embedding; bei einer fest gewählten Modellstufe entfällt die Voranalyse                                                                    | ungefähr wie ein neuer Import                                                                                                                              |
-| Erstattungsbescheid                    | Zusätzlich zum Import eine eigene Detailauswertung und, falls Kürzungen vorliegen, möglicherweise ein weiterer Zuordnungsaufruf                                       | oft zusätzlich **1–15 ct**                                                                                                                                 |
+| Arztrechnung                           | Zusätzlich zum Import ein Aufruf, der alle Einzelpositionen liest; bei einer gescheiterten Prüfung ein weiterer Aufruf der Nachlese                                   | je nach Länge und Modell oft zusätzlich **2–30 ct**, bei sehr langen Rechnungen auch darüber                                                               |
+| Erstattungsbescheid                    | Zusätzlich zum Import eine eigene Detailauswertung und, falls Kürzungen vorliegen, je Rechnung ein Zerlegungsaufruf mit hohem Denkaufwand, bei einer gescheiterten Prüfung zusätzlich die Nachlese | oft zusätzlich **1–15 ct**, bei langen Sammelkürzungen auch deutlich darüber                                                                               |
 | Eine Antwort des Assistenten           | Mehrere Recherche-Runden, Embedding-Suchen, gegebenenfalls PDF-Vision, Schlussantwort und beim ersten Beitrag ein kurzer Titel-Aufruf                                 | häufig **1–15 ct**, bei breiten Fragen oder PDF-Vision auch **25 ct und mehr**                                                                             |
 | Semantisch suchen                      | Die Anfrage wird für Dokumente und Akten separat eingebettet; „mehr laden" kann erneut aufrufen                                                                       | normalerweise zusammen **unter 0,01 ct je Suche**                                                                                                          |
 | Dokument- oder Aktenmetadaten ändern   | Relevante Dokumentfelder werden neu eingebettet. Auch Aktenanlage, Betreff/Beschreibung sowie Hinzufügen oder Entfernen eines Dokuments erneuern das Akten-Embedding. | normalerweise **unter 0,01 ct je Objekt**                                                                                                                  |

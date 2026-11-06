@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Maximize, RotateCcw, X } from 'lucide-react';
+import { Check, Maximize, RotateCcw } from 'lucide-react';
 import { istKonvex, klemme, standardEcken } from '@/lib/kamerascan/geometrie';
 
 const LUPE = 132; // Durchmesser in CSS-Pixeln
@@ -9,7 +9,7 @@ const ZOOM = 3; // Vergrößerung gegenüber der Bildschirmdarstellung
 // Lupe auf der dem Finger abgewandten Seite (Autozoom), damit die Ecke unter
 // dem Finger sichtbar bleibt. Die Ecke springt nicht unter den Finger, sondern
 // folgt ihm mit dem Abstand vom Aufsetzen.
-export default function EckenEditor({ fotoUrl, breite, hoehe, ecken: start, erkannt, onUebernehmen, onAbbrechen }) {
+export default function EckenEditor({ fotoUrl, breite, hoehe, ecken: start, erkannt, onUebernehmen }) {
   const [ecken, setEcken] = useState(start);
   const [ziehend, setZiehend] = useState(null);
   const [lupeLinks, setLupeLinks] = useState(false);
@@ -107,6 +107,20 @@ export default function EckenEditor({ fotoUrl, breite, hoehe, ecken: start, erka
 
   return (
     <div className="flex h-full flex-col">
+      {/* Hinweis als eigene Zeile über dem Foto – über dem Bild würde er die
+          oberen Ecken verdecken und das Ziehen blockieren. */}
+      {!erkannt && (
+        <div className="mx-3 mb-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 rounded-lg bg-white/10 px-3 py-2 text-center text-sm text-white">
+          <span>Kein Blatt erkannt – die vier Ecken auf die Blattecken ziehen oder das Bild unverändert übernehmen.</span>
+          <button
+            type="button"
+            onClick={() => onUebernehmen(standardEcken(breite, hoehe, 0))}
+            className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold hover:bg-white/25"
+          >
+            Ganzes Bild übernehmen
+          </button>
+        </div>
+      )}
       <div className="relative min-h-0 flex-1">
         <svg
           ref={svgRef}
@@ -153,19 +167,13 @@ export default function EckenEditor({ fotoUrl, breite, hoehe, ecken: start, erka
           style={{ width: LUPE, height: LUPE, display: ziehend == null ? 'none' : 'block' }}
           className={`pointer-events-none absolute top-3 rounded-full border-2 border-white shadow-xl ${lupeLinks ? 'left-3' : 'right-3'}`}
         />
-        {!erkannt && ziehend == null && (
-          <p className="pointer-events-none absolute inset-x-4 top-3 rounded-lg bg-black/70 px-3 py-2 text-center text-sm text-white">
-            Kein Blatt erkannt – bitte die vier Ecken auf die Blattecken ziehen.
-          </p>
-        )}
         {!gueltig && (
           <p className="pointer-events-none absolute inset-x-4 bottom-3 rounded-lg bg-red-600/90 px-3 py-2 text-center text-sm text-white">
             Die Ecken überkreuzen sich.
           </p>
         )}
       </div>
-      <div className="grid grid-cols-4 gap-1 bg-black px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 text-white">
-        <WerkzeugKnopf onClick={onAbbrechen} icon={X} label="Abbrechen" />
+      <div className="grid grid-cols-3 gap-1 bg-black px-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 text-white">
         <WerkzeugKnopf onClick={() => setEcken(start)} icon={RotateCcw} label="Zurücksetzen" />
         <WerkzeugKnopf onClick={() => setEcken(standardEcken(breite, hoehe, 0))} icon={Maximize} label="Ganzes Bild" />
         <WerkzeugKnopf onClick={() => onUebernehmen(ecken)} icon={Check} label="Übernehmen" disabled={!gueltig} betont />

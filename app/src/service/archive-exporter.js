@@ -107,7 +107,11 @@ async function loadDetail(postid) {
       `SELECT * FROM postbuch.arztrechnung_einzelposition WHERE postid = $1 ORDER BY subid`,
       [postid]
     );
-    return { type: 'arztrechnung', fields: arz.rows[0], einzelpositionen: pos.rows, zahlungen: await ladeZahlungenExport(postid), ersetzt: await ladeErsetztExport(postid) };
+    const beleg = await query(
+      `SELECT * FROM postbuch.arztrechnung_belegzeile WHERE postid = $1 ORDER BY pos_subid, zeile`,
+      [postid]
+    );
+    return { type: 'arztrechnung', fields: arz.rows[0], einzelpositionen: pos.rows, belegzeilen: beleg.rows, zahlungen: await ladeZahlungenExport(postid), ersetzt: await ladeErsetztExport(postid) };
   }
 
   // Handwerkerrechnung

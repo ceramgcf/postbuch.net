@@ -6,6 +6,7 @@ import { MobilKopfleiste, MobilMenue, FavoritenLeiste } from './MobilRahmen';
 import { MOBIL_SCROLLER_ID } from '@/lib/mobilScroller';
 import { useDarstellung } from '@/hooks/useDarstellung';
 import { SeiteProvider } from '@/hooks/useSeite';
+import { SeitenstapelProvider } from '@/components/kamerascan/Seitenstapel';
 import { useScrollWiederherstellung } from '@/hooks/useScrollWiederherstellung';
 import { useBackButtonGuard } from '@/hooks/useBackButtonGuard';
 import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
@@ -85,54 +86,58 @@ export function AppShell() {
     // Dokumente zeigt die Detailseite selbst.
     return (
       <SeiteProvider>
-        <div className="flex h-dvh flex-col bg-background">
-          <MobilKopfleiste onMenue={() => setMenueOffen(true)} />
-          <main
-            id={MOBIL_SCROLLER_ID}
-            className="mobil-inhalt relative min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-safe pt-3"
-            style={{ paddingBottom: isDetailPage ? 'calc(1rem + env(safe-area-inset-bottom, 0px))' : '1rem' }}
-          >
-            <Outlet context={outletContext} />
-          </main>
-          <FavoritenLeiste sichtbar={!isDetailPage && !menueOffen} />
-          <MobilMenue offen={menueOffen} onSchliessen={schliesseMenue} />
-          {exitDialog}
-        </div>
+        <SeitenstapelProvider>
+          <div className="flex h-dvh flex-col bg-background">
+            <MobilKopfleiste onMenue={() => setMenueOffen(true)} />
+            <main
+              id={MOBIL_SCROLLER_ID}
+              className="mobil-inhalt relative min-h-0 flex-1 overflow-y-auto overscroll-y-contain px-safe pt-3"
+              style={{ paddingBottom: isDetailPage ? 'calc(1rem + env(safe-area-inset-bottom, 0px))' : '1rem' }}
+            >
+              <Outlet context={outletContext} />
+            </main>
+            <FavoritenLeiste sichtbar={!isDetailPage && !menueOffen} />
+            <MobilMenue offen={menueOffen} onSchliessen={schliesseMenue} />
+            {exitDialog}
+          </div>
+        </SeitenstapelProvider>
       </SeiteProvider>
     );
   }
 
   return (
     <SeiteProvider>
-      <div className="flex h-screen overflow-hidden bg-background">
-        {/* Decorative faded background logo */}
-        <div
-          className="fixed inset-0 pointer-events-none select-none flex items-center justify-center overflow-hidden"
-          style={{ zIndex: 0 }}
-          aria-hidden="true"
-        >
-          <img
-            src="/logo.svg"
-            alt=""
-            className="w-full h-full object-contain"
-            style={{ opacity: 0.15, filter: 'grayscale(30%) blur(9px)' }}
-          />
-        </div>
-        <Sidebar />
-        <main className="flex-1 overflow-auto min-w-0" style={{ position: 'relative', zIndex: 1 }}>
-          <Outlet context={outletContext} />
-        </main>
-        {pdfOpen && pdfPostId && (
-          <PdfPanel
-            postid={pdfPostId}
-            refreshKey={pdfKey}
-            onClose={pdfCloseableRef.current ? closePdf : undefined}
-          />
-        )}
+      <SeitenstapelProvider>
+        <div className="flex h-screen overflow-hidden bg-background">
+          {/* Decorative faded background logo */}
+          <div
+            className="fixed inset-0 pointer-events-none select-none flex items-center justify-center overflow-hidden"
+            style={{ zIndex: 0 }}
+            aria-hidden="true"
+          >
+            <img
+              src="/logo.svg"
+              alt=""
+              className="w-full h-full object-contain"
+              style={{ opacity: 0.15, filter: 'grayscale(30%) blur(9px)' }}
+            />
+          </div>
+          <Sidebar />
+          <main className="flex-1 overflow-auto min-w-0" style={{ position: 'relative', zIndex: 1 }}>
+            <Outlet context={outletContext} />
+          </main>
+          {pdfOpen && pdfPostId && (
+            <PdfPanel
+              postid={pdfPostId}
+              refreshKey={pdfKey}
+              onClose={pdfCloseableRef.current ? closePdf : undefined}
+            />
+          )}
 
-        {/* Exit-Bestätigungsdialog (Hardware-Zurück-Taste im PWA-Modus) */}
-        {exitDialog}
-      </div>
+          {/* Exit-Bestätigungsdialog (Hardware-Zurück-Taste im PWA-Modus) */}
+          {exitDialog}
+        </div>
+      </SeitenstapelProvider>
     </SeiteProvider>
   );
 }

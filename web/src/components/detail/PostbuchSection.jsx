@@ -3,7 +3,8 @@ import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { formatDate } from '@/lib/utils';
+import { formatDate, cn } from '@/lib/utils';
+import { kiKategorieLabel, kostenText } from '@/lib/kiAufrufe';
 import { ArtBadgeEditor } from '@/components/postbuch/ArtBadgeEditor';
 import { StatusBadge } from '@/components/postbuch/StatusBadge';
 import { ChevronDown, ChevronUp, Pencil, Check, X, Plus, Trash2, User, Inbox, Send, Cloud, QrCode, ExternalLink } from 'lucide-react';
@@ -238,6 +239,15 @@ function SaveCancelRow({ field, onSave, onCancel, onRemove, isPending, saveDisab
 export function PostbuchSection({ data }) {
   const [warningsOpen, setWarningsOpen] = useState(false);
   const [aiModelOpen, setAiModelOpen] = useState(false);
+  // Aufschlüsselung je KI-Aufruf aus dem Token-Log; ältere Dokumente ohne
+  // Protokoll zeigen weiter die gespeicherten Summen je Phase.
+  const kiAufrufe = Array.isArray(data.ki_aufrufe) ? data.ki_aufrufe : [];
+  const kiKostenUnvollstaendig = kiAufrufe.some((a) => a.success && a.cost_usd == null);
+  const kiKostenSumme = kiAufrufe.reduce((sum, a) => sum + Number(a.cost_usd ?? 0), 0);
+  // Das Badge nennt das Modell, das zuletzt am Dokument gelesen hat (z. B. die
+  // Nachlese oder die Kürzungszerlegung), nicht nur das der Klassifizierung.
+  const letztesKiModell = kiAufrufe.filter((a) => a.success && a.kategorie !== 'embedding').at(-1)?.model
+    || data.ai_model;
   const [editingField, setEditingField] = useState(null);
   const [draft, setDraft] = useState('');
   const [draftTags, setDraftTags] = useState([]);
@@ -448,7 +458,7 @@ export function PostbuchSection({ data }) {
                     onClick={() => setAiModelOpen((o) => !o)}
                     title="KI-Verarbeitungsdetails anzeigen"
                   >
-                    {data.ai_model}
+                    {letztesKiModell}
                     {aiModelOpen
                       ? <ChevronUp className="h-3 w-3 flex-shrink-0" />
                       : <ChevronDown className="h-3 w-3 flex-shrink-0" />}
@@ -519,6 +529,31 @@ export function PostbuchSection({ data }) {
                 </tr>
               </thead>
               <tbody>
+                {kiAufrufe.length > 0 ? (
+                  <>
+                    {kiAufrufe.map((a, i) => (
+                      <tr key={i} className={cn(i % 2 === 0 && 'bg-muted/40', !a.success && 'text-muted-foreground')}>
+                        <td className="py-1.5 px-2 text-muted-foreground">
+                          {kiKategorieLabel(a.kategorie)}{!a.success && ' (fehlgeschlagen)'}
+                        </td>
+                        <td className="py-1.5 px-2 font-mono">{a.model}</td>
+                        <td className="py-1.5 px-2 text-right tabular-nums">{a.tokens_in != null ? Number(a.tokens_in).toLocaleString('de-DE') : '–'}</td>
+                        <td className="py-1.5 px-2 text-right tabular-nums">{a.tokens_out != null ? Number(a.tokens_out).toLocaleString('de-DE') : '–'}</td>
+                        <td className="py-1.5 px-2 text-right tabular-nums"
+                          title={a.success && a.cost_usd == null ? 'Für dieses Modell ist kein Preis hinterlegt.' : undefined}>
+                          {kostenText(a.cost_usd)}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="border-t border-border font-medium">
+                      <td className="py-1.5 px-2 text-muted-foreground" colSpan={4}>Gesamt</td>
+                      <td className="py-1.5 px-2 text-right tabular-nums whitespace-nowrap"
+                        title={kiKostenUnvollstaendig ? 'Für mindestens ein Modell ist kein Preis hinterlegt.' : undefined}>
+                        {kiKostenUnvollstaendig && 'mind. '}{kostenText(kiKostenSumme)}
+                      </td>
+                    </tr>
+                  </>
+                ) : (<>
                 {data.ai_pre_model && (
                   <tr className="bg-muted/40">
                     <td className="py-1.5 px-2 text-muted-foreground">Vorverarbeitung</td>
@@ -561,6 +596,7 @@ export function PostbuchSection({ data }) {
                     </td>
                   </tr>
                 )}
+                </>)}
               </tbody>
             </table>
           </div>

@@ -78,7 +78,12 @@ async function matAusBereich(roh, x, y, b, h) {
 // Foto laden: `roh` in voller Auflösung bleibt offen, damit ein späterer
 // Ausschnitt aus dem Original statt aus dem verkleinerten Mat kommt.
 async function ladeFoto(foto) {
-  const roh = await createImageBitmap(foto);
+  let roh;
+  try {
+    roh = await createImageBitmap(foto);
+  } catch {
+    throw new Error('Das Bild lässt sich auf diesem Gerät nicht öffnen – das Format wird nicht unterstützt.');
+  }
   diagnose = { fotoRoh: `${roh.width}×${roh.height}` };
   const { mat, faktor } = await matAusBereich(roh, 0, 0, roh.width, roh.height);
   return { roh, mat, faktor };

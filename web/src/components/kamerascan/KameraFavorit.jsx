@@ -1,39 +1,27 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router';
-import { Camera, CheckCircle2 } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
+import { Camera } from 'lucide-react';
 import { kameraVerfuegbar } from '@/lib/kamerascan/kamera';
-import KameraScan from './KameraScan';
-import { useKameraHochladen } from './useKameraHochladen';
-import { etikettPfad } from '@/lib/kamerascan/postbuchQr';
+import { useSeitenstapel } from './Seitenstapel';
 
 /**
- * Kamerascan aus der Favoritenleiste: Knopf in der Mitte der Leiste. Knopf und Overlay sind getrennt, damit der Scan weiterläuft, auch
- * wenn die Leiste selbst ausgeblendet wird (Tastatur, Menü).
+ * Kamerascan aus der Favoritenleiste: Knopf in der Mitte der Leiste. Der Scan
+ * selbst liegt im Seitenstapel über allen Seiten und läuft weiter, auch wenn
+ * die Leiste ausgeblendet wird (Tastatur, Menü). Ein offener Scan zeigt seine
+ * Seitenzahl am Knopf.
  */
 export function useKameraFavorit() {
-  const { canWrite } = useAuth();
-  const [offen, setOffen] = useState(false);
-  const [meldung, setMeldung] = useState(null);
-  const hochladen = useKameraHochladen();
-  const navigate = useNavigate();
-  const verfuegbar = canWrite && kameraVerfuegbar();
+  const stapel = useSeitenstapel();
+  const verfuegbar = stapel.verfuegbar && (kameraVerfuegbar() || !!stapel.offenerScan);
 
-  useEffect(() => {
-    if (!meldung) return undefined;
-    const t = setTimeout(() => setMeldung(null), 5000);
-    return () => clearTimeout(t);
-  }, [meldung]);
-
-  if (!verfuegbar) return { knopf: null, overlay: null };
+  if (!verfuegbar) return { knopf: null };
+  const anzahl = stapel.offenerScan?.anzahl ?? 0;
 
   // Aufbau wie die übrigen Einträge der Leiste; hervorgehoben ist nur das
   // Symbol: Strich im postbuch.net-Farbverlauf mit zartem Glow.
   const knopf = (
     <button
       type="button"
-      onClick={() => { setMeldung(null); setOffen(true); }}
-      aria-label="Mit Kamera scannen"
+      onClick={() => stapel.oeffnen()}
+      aria-label={anzahl ? `Offenen Scan mit ${anzahl === 1 ? '1 Seite' : `${anzahl} Seiten`} fortsetzen` : 'Mit Kamera scannen'}
       className="flex h-14 flex-1 flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-muted-foreground transition-transform active:scale-95"
     >
       <svg width="0" height="0" className="absolute" aria-hidden focusable="false">
@@ -45,38 +33,19 @@ export function useKameraFavorit() {
           </linearGradient>
         </defs>
       </svg>
-      <span className="flex h-7 w-12 items-center justify-center">
+      <span className="relative flex h-7 w-12 items-center justify-center">
         <Camera className="h-6 w-6" color="url(#kamera-favorit-verlauf)" strokeWidth={2.2}
           style={{ filter: 'drop-shadow(0 0 3px rgba(125, 45, 189, 0.35)) drop-shadow(0 0 5px rgba(44, 197, 221, 0.25))' }}
         />
+        {anzahl > 0 && (
+          <span className="absolute -top-1 right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-violet-600 px-1 text-[10px] font-bold leading-none text-white" aria-hidden>
+            {anzahl}
+          </span>
+        )}
       </span>
       Scannen
     </button>
   );
 
-  const overlay = (
-    <>
-      <KameraScan
-        offen={offen}
-        onSchliessen={() => setOffen(false)}
-        onFertig={async (scan) => {
-          const text = await hochladen(scan);
-          if (text) setMeldung(text);
-        }}
-        zielText="Hochladen"
-        onPostbuchQr={(kennung) => navigate(etikettPfad(kennung))}
-      />
-      {meldung && (
-        <div
-          role="status"
-          className="pointer-events-none fixed inset-x-4 bottom-[calc(5.5rem+env(safe-area-inset-bottom))] z-40 mx-auto flex max-w-md items-center gap-2 rounded-xl bg-foreground px-4 py-3 text-sm text-background shadow-lg"
-        >
-          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
-          {meldung}
-        </div>
-      )}
-    </>
-  );
-
-  return { knopf, overlay };
+  return { knopf };
 }

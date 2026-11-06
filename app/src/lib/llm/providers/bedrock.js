@@ -8,7 +8,8 @@
  */
 
 import { AnthropicBedrock } from '@anthropic-ai/bedrock-sdk';
-import { permanentError } from '../registry.js';
+import { permanentError, MAX_TOKENS_OHNE_GRENZE } from '../registry.js';
+import { TIMEOUT_COMPLETION_MS } from '../../net-guard.js';
 import {
   buildAnthropicUserContent,
   buildSystemParam,
@@ -27,17 +28,24 @@ export function getBedrockClient(apiKey, region) {
   return cachedBedrock.client;
 }
 
-export async function callBedrock(model, prompt, { pdf, pdfs, system, maxTokens, cacheSystem }, provider) {
+export async function callBedrock(model, prompt, { pdf, pdfs, system, maxTokens, cacheSystem, timeoutMs }, provider) {
   const client = getBedrockClient(provider?.apiKey, provider?.region);
 
   const body = {
     model,
-    max_tokens: maxTokens,
+    max_tokens: maxTokens ?? MAX_TOKENS_OHNE_GRENZE,
     messages: [{ role: 'user', content: buildAnthropicUserContent(pdfs ?? pdf, prompt) }],
   };
   const sys = buildSystemParam(system, cacheSystem);
   if (sys) body.system = sys;
 
-  const resp = await client.messages.create(body);
-  return { text: extractAnthropicText(resp.content, 'Bedrock'), usage: extractAnthropicUsageObj(resp.usage) };
+  // Ein ausdrücklicher Timeout ersetzt die Schätzung des SDK, die ohne
+  // Streaming jede große max_tokens-Angabe als „dauert länger als 10 Minuten“
+  // ablehnt.
+  const resp = await client.messages.create(body, { timeout: timeoutMs ?? TIMEOUT_COMPLETION_MS });
+  return {
+    text: extractAnthropicText(resp.content, 'Bedrock'),
+    usage: extractAnthropicUsageObj(resp.usage),
+    abgeschnitten: resp.stop_reason === 'max_tokens',
+  };
 }

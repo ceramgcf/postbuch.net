@@ -39,6 +39,10 @@ export const MODEL_CLASSES = [
   klasse('mittel',      'llm_model_mittel',      'Mittel', { modus: 'gestaffelt' }),
   klasse('schwierig',   'llm_model_schwierig',   'Schwierig', { modus: 'gestaffelt' }),
   klasse('fallback',    'llm_model_fallback',    'Letzter Fallback'),
+  // Liest nach, wenn eine Plausibilitätsprüfung scheitert (Arztrechnungs-
+  // positionen, Kürzungszerlegung). Wirkt in beiden Modellwahlen und ist
+  // bewusst vom günstigen Notfallmodell „Letzter Fallback“ getrennt.
+  klasse('nachlese',    'llm_model_nachlese',    'Nachlese'),
 
   // Büroassistent und Akten — eigene Modellwahl, unabhängig von der Kette
   klasse('chat_research',  'chat_model_research',  'Büroassistent · Recherche', { group: 'chat' }),

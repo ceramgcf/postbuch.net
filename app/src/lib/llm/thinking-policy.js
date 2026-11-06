@@ -51,17 +51,22 @@ export const MINIMAL_EFFORT = 'low';
 // aber nie 'high'/'xhigh'/'max' — das ist eine bewusste Produktentscheidung.
 export const IN_APP_EFFORT = 'low';
 
-// Fester Effort-Wert für benannte, einmalige Batch-Läufe (aktuell nur die
-// Kostenträger-Profilierung). Anthropic empfiehlt mindestens 'high', wenn aus
-// wenigen Beispielen eine Struktur abstrahiert werden soll. Keine freie
-// Einstellung — nur über zweck:'profilierung' erreichbar.
+// Fester Effort-Wert für benannte Zwecke, die bewusst nachdenken: die
+// Kostenträger-Profilierung (aus wenigen Beispielen eine Struktur abstrahieren,
+// Anthropic empfiehlt dafür mindestens 'high') und die Zerlegung einer
+// Sammelkürzung auf Einzelpositionen (Begründungstext gegen die Positionsliste
+// abgleichen und Beträge herleiten). Keine freie Einstellung — nur über die
+// Zwecke in DENKENDE_ZWECKE erreichbar.
 export const PROFILIERUNG_EFFORT = 'high';
+export const ZWECK_ZERLEGUNG = 'zerlegung';
+const DENKENDE_ZWECKE = new Set(['profilierung', ZWECK_ZERLEGUNG]);
+const denktHoch = (zweck) => DENKENDE_ZWECKE.has(zweck);
 
 /**
  * @param {object} params
  * @param {string}  params.model
  * @param {boolean} [params.viaMcp] - true = Anfrage kam über den MCP-Connector
- * @param {'interaktiv'|'profilierung'} [params.zweck]
+ * @param {'interaktiv'|'profilierung'|'zerlegung'} [params.zweck]
  * @returns {{ mode: 'none'|'explicit-off'|'minimal'|'adaptive', effort: ?string }}
  *   mode 'none':         Modell kennt Thinking nicht (oder nicht adaptiv) — Wire-Felder weglassen.
  *   mode 'explicit-off': Modell denkt per Default — explizit thinking:{type:'disabled'} senden.
@@ -72,7 +77,7 @@ export const PROFILIERUNG_EFFORT = 'high';
 export function resolveThinkingPolicy({ model, viaMcp = false, zweck = 'interaktiv' }) {
   if (!supportsAdaptiveThinking(model)) return { mode: 'none', effort: null };
   if (viaMcp) return thinkingAus(model);
-  return { mode: 'adaptive', effort: zweck === 'profilierung' ? PROFILIERUNG_EFFORT : IN_APP_EFFORT };
+  return { mode: 'adaptive', effort: denktHoch(zweck) ? PROFILIERUNG_EFFORT : IN_APP_EFFORT };
 }
 
 /**
@@ -136,7 +141,7 @@ export async function learnReasoningCapability(prov, model, context, state) {
 // PROFILIERUNG_EFFORT oben.
 export function policyReasoningEffort(viaMcp, zweck = 'interaktiv') {
   if (viaMcp) return 'none';
-  return zweck === 'profilierung' ? PROFILIERUNG_EFFORT : 'low';
+  return denktHoch(zweck) ? PROFILIERUNG_EFFORT : 'low';
 }
 
 /**
@@ -177,7 +182,7 @@ export async function resolveReasoningEffort(prov, model, context, viaMcp, zweck
 
 /** Zwecke, die bewusst nachdenken dürfen. Alles andere ist Extraktion. */
 export function istExtraktion(zweck) {
-  return zweck !== 'profilierung';
+  return !denktHoch(zweck);
 }
 
 /**

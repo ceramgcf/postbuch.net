@@ -134,7 +134,7 @@ router.post('/scan-complete',
           // → neuen 1-Schritt-Job anlegen, damit der Verlauf konsistent bleibt.
           replaceJobId = tracker.create('doc-replace', `Ersetzen ${replaceForPostId}: ${filename}`, 1);
         }
-        tracker.setStep(replaceJobId, 1, 'OneDrive-Datei austauschen');
+        tracker.setStep(replaceJobId, 1, 'Datei in der Ablage austauschen');
         appLog('INFO', 'webhooks',
           `Scan empfangen (Replace): ${filename} → ${replaceForPostId} (${(pdfBuffer.length / 1024).toFixed(1)} KB)`,
           { entity: 'postbuch', entityId: replaceForPostId }

@@ -26,6 +26,10 @@ const MODEL_TIER_OPTIONS = [
   { key: 'schwierig', label: 'Schwer' },
 ];
 
+// Mobil teilen sich die Buttons die Breite. min-w-0 + Umbruch statt nowrap,
+// sonst schiebt großer Systemtext die Leiste über den Bildschirmrand.
+const MOBIL_BUTTON = 'min-h-10 h-auto min-w-0 flex-1 whitespace-normal py-1.5 leading-tight';
+
 export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, isHistorisch, hatPdf = true, onReprocessComplete, backTo }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [mehrOffen, setMehrOffen] = useState(false);
@@ -110,10 +114,21 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
     if (stufeIstTextOnly) setTextebeneEntfernen(false);
   }, [stufeIstTextOnly]);
 
+  // Der Undo-Verlauf wird erst nach erfolgreichem Löschen verworfen; lehnt der
+  // Server ab (z. B. Löschschutz, 409), zeigt der Dialog die Begründung an.
   const handleDelete = async () => {
+    try {
+      await deleteMutation.mutateAsync(postid);
+    } catch {
+      return;
+    }
     clearHistory();
-    await deleteMutation.mutateAsync(postid);
     navigate(backTo || '/postbuch');
+  };
+
+  const oeffneLoeschdialog = () => {
+    deleteMutation.reset();
+    setDeleteOpen(true);
   };
 
   const handleStatusChange = (newStatus) => {
@@ -283,7 +298,7 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
       hinweis: reprocessSchutz?.geschuetzt ? `Gesperrt: ${reprocessSchutz.gruende.join('; ')}` : null,
     },
     { icon: FileUp, label: hatPdf ? 'PDF ersetzen' : 'Fehlende PDF reimportieren', onClick: () => setReplaceOpen(true) },
-    { icon: Trash2, label: 'Löschen', onClick: () => setDeleteOpen(true), gefahr: true },
+    { icon: Trash2, label: 'Löschen', onClick: oeffneLoeschdialog, gefahr: true },
   ];
 
   // Read-only users see no write buttons at all
@@ -296,15 +311,15 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
   return (
     <>
       {istMobil ? (
-        <div className="flex items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2">
           <Button
             variant={freigabeVariant}
             size="sm"
             onClick={handleGrantUserClearance}
             disabled={isUserClearance || statusMutation.isPending}
-            className={cn('h-10 flex-1', freigabeClass)}
+            className={cn(MOBIL_BUTTON, freigabeClass)}
           >
-            <CheckCheck className="h-4 w-4 mr-1" />
+            <CheckCheck className="h-4 w-4 mr-1 shrink-0" />
             {isUserClearance ? 'Freigabe erteilt' : 'Freigabe erteilen'}
           </Button>
           {hasRechnung && (
@@ -313,9 +328,9 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
               size="sm"
               onClick={handleMarkPaid}
               disabled={paidMutation.isPending || isBezahlt}
-              className={cn('h-10 flex-1', isBezahlt && 'opacity-50')}
+              className={cn(MOBIL_BUTTON, isBezahlt && 'opacity-50')}
             >
-              <Banknote className="h-4 w-4 mr-1" />
+              <Banknote className="h-4 w-4 mr-1 shrink-0" />
               {isBezahlt ? 'Bezahlt' : 'Bezahlt markieren'}
             </Button>
           )}
@@ -335,7 +350,7 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
             disabled={isUserClearance || statusMutation.isPending}
             className={freigabeClass}
           >
-            <CheckCheck className="h-4 w-4 mr-1" />
+            <CheckCheck className="h-4 w-4 mr-1 shrink-0" />
             {isUserClearance ? 'Freigabe erteilt' : 'Freigabe erteilen'}
           </Button>
 
@@ -349,7 +364,7 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
               className={isBezahlt ? 'opacity-50 cursor-not-allowed' : ''}
               title={isBezahlt ? 'Bereits bezahlt' : undefined}
             >
-              <Banknote className="h-4 w-4 mr-1" />
+              <Banknote className="h-4 w-4 mr-1 shrink-0" />
               {isBezahlt ? 'Bezahlt' : 'Als bezahlt markieren'}
             </Button>
           )}
@@ -407,7 +422,7 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
         {/* Gruppe 5 – destruktiv: Löschen */}
         <div className="flex items-center gap-1.5 flex-wrap">
           {/* Löschen */}
-          <Button variant="destructive" size="sm" onClick={() => setDeleteOpen(true)}>
+          <Button variant="destructive" size="sm" onClick={oeffneLoeschdialog}>
             <Trash2 className="h-4 w-4 mr-1" />
             Löschen
           </Button>
@@ -451,6 +466,14 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
           <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5 text-amber-600" />
           <span>Wegen der Komplexität dieser Aktion <strong>kann sie nicht rückgängig gemacht werden</strong>. Der gesamte Undo-Verlauf wird dabei gelöscht.</span>
         </div>
+        {deleteMutation.isError && (
+          <div role="alert" className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            <p className="font-medium">{deleteMutation.error.message}</p>
+            {deleteMutation.error.payload?.hinweis && (
+              <p className="mt-1 text-xs">{deleteMutation.error.payload.hinweis}</p>
+            )}
+          </div>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={() => setDeleteOpen(false)}>Abbrechen</Button>
           <Button variant="destructive" onClick={handleDelete} disabled={deleteMutation.isPending}>

@@ -7,7 +7,7 @@
  *   A) { onedriveFileId }                  — Datei bereits auf OneDrive
  *   B) { pdfBuffer, filename }             — PDF direkt (z.B. Scanner, Session 6)
  *
- * Bei Eingang B wird das PDF zuerst auf OneDrive hochgeladen, dann normal verarbeitet.
+ * Bei Eingang B wird das PDF zuerst in die Ablage hochgeladen, dann normal verarbeitet.
  *
  * Der Job-Tracker bildet den Fortschritt ab:
  *   0: Upload auf OneDrive (nur Scanner)
@@ -15,7 +15,7 @@
  *   2: KI-Analyse
  *   3: Duplikaterkennung
  *   4: Duplikat-Handling
- *   5: OneDrive-Sortierung
+ *   5: Ablage-Sortierung
  *   6: Discord-Benachrichtigung
  *   7: PDF-Rotation
  *   8: Datenbank-Insert
@@ -39,6 +39,7 @@ import {
 } from '../lib/embedding.js';
 import { buildLxdClassificationPromptParts } from '../prompts/classification-lxd.js';
 import { getAktiveTaxonomie, effektiveGruppe } from '../lib/taxonomie.js';
+import { leseArztrechnungPositionen } from './arztrechnung-positionen.js';
 import { wendeInvalidierungAn } from './rechnung-invalidierung.js';
 import { pruefeFachblockStruktur, pruefeUndRepariere, fatalMeldung } from './extract-validator.js';
 import * as duplicateChecker from './duplicate-checker.js';
@@ -375,10 +376,10 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     // (input.textebeneEntfernen, mit Voranalyse-Vorschlag).
     const isFromScanner = !!input.fromScanner && !isResume;
 
-    // ─── PHASE 0: Scanner-Eingang → OneDrive-Upload ───
+    // ─── PHASE 0: Scanner-Eingang → Upload in die Ablage ───
     if (input.pdfBuffer && !onedriveFileId && !isResume) {
       startPhase();
-      tracker.setStep(jobId, stepOffset + 0, 'PDF auf OneDrive hochladen');
+      tracker.setStep(jobId, stepOffset + 0, 'PDF in die Ablage hochladen');
       if (tracker.isCancelled(jobId)) throw new CancellationError();
 
       const inboxFolderId = getFolders(settings).inbox;
@@ -429,7 +430,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     // ─── PHASE 1: PDF herunterladen ───
     if (!isResume) {
       startPhase();
-      tracker.setStep(jobId, stepOffset + 1, 'PDF herunterladen von OneDrive');
+      tracker.setStep(jobId, stepOffset + 1, 'PDF aus der Ablage herunterladen');
       if (tracker.isCancelled(jobId)) throw new CancellationError();
       pdfOriginal = input.pdfBuffer || await storage.download(onedriveFileId);
       endPhase('Download');
@@ -501,8 +502,29 @@ export async function processDocument(input, jobId, stepOffset = 0) {
           validateResult: (data) => pruefeFachblockStruktur(data, aktiveTaxonomie),
         },
       );
-      endPhase('KI-Analyse');
       plog = extractedData._pipelineLog || {};
+
+      // Einzelpositionen einer Arztrechnung liest ein eigener Aufruf mit nur
+      // dieser Aufgabe, vor der Validierung in Phase 2.5. Tokens und Kosten
+      // zählen zur KI-Analyse des Dokuments.
+      if (await effektiveGruppe(extractedData.lebensbereich, extractedData.dokumentart) === 'arztrechnung') {
+        tracker.setStep(jobId, stepOffset + 2, 'KI-Analyse – Einzelpositionen');
+        if (tracker.isCancelled(jobId)) throw new CancellationError();
+        const pos = await leseArztrechnungPositionen(
+          pdfOriginal,
+          extractedData,
+          { personen: activePersonsResult.rows, stripTextLayerGewuenscht },
+          settings,
+          { entity: 'postbuch', entityId: input.modifyPostID || null, correlationId: jobId || null },
+        );
+        plog.analysisTokensIn  = (plog.analysisTokensIn  ?? 0) + pos.tokensIn;
+        plog.analysisTokensOut = (plog.analysisTokensOut ?? 0) + pos.tokensOut;
+        plog.analysisCostUsd   = llm.summeKosten(plog.analysisCostUsd, pos.costUsd);
+        plog.positionenModell  = pos.modell;
+        plog.letztesModell     = pos.letztesModell;
+        plog.positionenBefunde = pos.befunde;
+      }
+      endPhase('KI-Analyse');
       debugLog('ki-analyse', {
         model: plog.analysisModel,
         providerId: plog.analysisProviderId,
@@ -828,9 +850,9 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       }
     }
 
-    // ─── PHASE 5: OneDrive-Sortierung ───
+    // ─── PHASE 5: Ablage-Sortierung ───
     startPhase();
-    tracker.setStep(jobId, stepOffset + 5, 'OneDrive-Sortierung');
+    tracker.setStep(jobId, stepOffset + 5, 'Ablage-Sortierung');
     if (tracker.isCancelled(jobId)) throw new CancellationError();
 
     if (typeof extractedData.lebensbereich !== 'string' || typeof extractedData.dokumentart !== 'string') {
@@ -1245,7 +1267,9 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         importMeta.lastModified || null,
         newEmbedding ? '[' + newEmbedding.join(',') + ']' : null,  // Embedding direkt speichern
         newEmbedding ? newEmbeddingSignature : null,
-        plog.analysisModel    || null,
+        // Das Badge am Dokument zeigt das zuletzt lesende Modell, bei einer
+        // Arztrechnung also ggf. die Nachlese; alle Aufrufe stehen im Token-Log.
+        plog.letztesModell || plog.analysisModel || null,
         plog.preAnalysisModel || null,
         plog.analysisTokensIn    ?? null,
         plog.analysisTokensOut   ?? null,
@@ -1549,6 +1573,16 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         neuanlageClient = null;
         dbStateComplete = true;
       }
+
+    // Aufrufe dieses Laufs, die vor der Vergabe der PostID protokolliert
+    // wurden, dem Dokument zuordnen (Token-Log, Aufschlüsselung am KI-Badge).
+    if (jobId) {
+      await pool.query(
+        `UPDATE llm_call_log SET entity_id = $1
+         WHERE correlation_id = $2 AND entity = 'postbuch' AND entity_id IS NULL`,
+        [finalPostID, jobId],
+      ).catch((e) => console.warn(`[doc-processor] Token-Log-Zuordnung fehlgeschlagen: ${e.message}`));
+    }
 
     if (ebPending) {
       documentInserter.starteErstattungsbescheidVerarbeitung(

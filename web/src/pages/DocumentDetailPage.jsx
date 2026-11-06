@@ -240,7 +240,7 @@ export default function DocumentDetailPage() {
   if (error) return <p className="p-6 text-destructive">Fehler: {error.message}</p>;
   if (!data) return null;
 
-  const { postbuch, arztrechnung, erstattungsbescheid, erstattungsbescheidAusstehend, handwerkerrechnung, generischeRechnung, arztbericht } = data;
+  const { postbuch, arztrechnung, erstattungsbescheid, erstattungsbescheidAusstehend, kuerzungenAusstehend, handwerkerrechnung, generischeRechnung, arztbericht, ki_aufrufe } = data;
   const hasRechnung = !!arztrechnung || !!handwerkerrechnung || !!generischeRechnung;
   const bezahltAm = arztrechnung?.bezahlt_am || handwerkerrechnung?.bezahlt_am || generischeRechnung?.bezahlt_am;
   const isBezahlt = !!bezahltAm;
@@ -469,7 +469,7 @@ export default function DocumentDetailPage() {
       )}
 
       {/* Postbuch Basis */}
-      <PostbuchSection data={{ ...postbuch, erstattungsbescheid }} />
+      <PostbuchSection data={{ ...postbuch, erstattungsbescheid, ki_aufrufe }} />
 
       {/* Benutzernotiz */}
       <NoteSection postid={postid} notiz={postbuch.notiz} />
@@ -675,7 +675,7 @@ export default function DocumentDetailPage() {
 
       {/* Typ-spezifische Details */}
       <ArztrechnungDetail data={arztrechnung} istTier={postbuch.lebensbereich === 'tier'} />
-      <ErstattungsbescheidDetail data={erstattungsbescheid} ausstehend={erstattungsbescheidAusstehend} />
+      <ErstattungsbescheidDetail data={erstattungsbescheid} ausstehend={erstattungsbescheidAusstehend} kuerzungenAusstehend={kuerzungenAusstehend} />
       <HandwerkerrechnungDetail data={handwerkerrechnung} />
       <GenRechnungDetail data={generischeRechnung} art={postbuch.art} />
       <ArztberichtDetail data={arztbericht} />

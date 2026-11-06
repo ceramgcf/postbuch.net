@@ -17,10 +17,10 @@ self.addEventListener('activate', (event) => {
 // synthetische 503 um und blieb nach einem Server-Rollback in bereits
 // geöffneten Tabs aktiv.
 
-// ── Share-Target: geteilte PDFs entgegennehmen ──────────────────────────────
-// Die Dateien landen im Cache-Speicher und werden von der Jobs-Ansicht
-// abgeholt (web/src/lib/geteilteDateien.js), die sie wie eine Dateiauswahl
-// in die Pipeline gibt. Der Nutzer muss dafür angemeldet sein – das prüft
+// ── Share-Target: geteilte PDFs und Fotos entgegennehmen ────────────────────
+// Die Dateien landen im Cache-Speicher (web/src/lib/geteilteDateien.js holt
+// sie ab): PDFs gibt die Jobs-Ansicht wie eine Dateiauswahl in die Pipeline,
+// Fotos öffnet der Fotoimport und bereitet sie wie einen Kamerascan auf. Der Nutzer muss dafür angemeldet sein – das prüft
 // erst die Seite, deshalb der Umweg über den Cache statt eines Direkt-Uploads.
 // Ist postbuch.net beim Teilen nicht erreichbar, nimmt der Service-Worker die
 // Datei gar nicht erst an, sondern meldet das laut mit einer eigenen Seite.
@@ -68,8 +68,8 @@ const NICHT_ERREICHBAR_SEITE = `<!doctype html>
 <body>
 <main>
   <h1>postbuch.net ist nicht erreichbar</h1>
-  <p>Der Server hat nicht geantwortet. Die geteilte PDF konnte deshalb nicht entgegengenommen werden und wurde verworfen.</p>
-  <p>Prüfe die Verbindung zu postbuch.net und teile die PDF danach erneut.</p>
+  <p>Der Server hat nicht geantwortet. Die geteilte Datei konnte deshalb nicht entgegengenommen werden und wurde verworfen.</p>
+  <p>Prüfe die Verbindung zu postbuch.net und teile die Datei danach erneut.</p>
   <a href="/">postbuch.net öffnen</a>
 </main>
 </body>
@@ -82,26 +82,33 @@ async function nimmGeteilteDateienAn(request) {
       headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
     });
   }
-  let anzahl = 0;
+  let pdfs = 0;
+  let fotos = 0;
   try {
     const form = await request.formData();
-    const dateien = form.getAll('pdf').filter((f) => f && typeof f === 'object' && f.size > 0);
+    // Das Manifest liefert PDFs unter „pdf“, Fotos unter „foto“; einsortiert
+    // wird trotzdem nach Dateityp, falls ein Teilen-Menü die Felder vertauscht.
+    const dateien = [...form.getAll('pdf'), ...form.getAll('foto')]
+      .filter((f) => f && typeof f === 'object' && f.size > 0);
     const cache = await caches.open(GETEILT_CACHE);
     const stempel = Date.now();
     for (let i = 0; i < dateien.length; i++) {
       const f = dateien[i];
-      await cache.put(`/__geteilt/${stempel}-${i}`, new Response(f, {
+      const istFoto = (f.type || '').startsWith('image/');
+      await cache.put(`${istFoto ? '/__geteilt-foto/' : '/__geteilt/'}${stempel}-${i}`, new Response(f, {
         headers: {
           'Content-Type': f.type || 'application/pdf',
-          'X-Dateiname': encodeURIComponent(f.name || `geteilt-${i + 1}.pdf`),
+          'X-Dateiname': encodeURIComponent(f.name || `geteilt-${i + 1}${istFoto ? '' : '.pdf'}`),
         },
       }));
-      anzahl++;
+      if (istFoto) fotos++; else pdfs++;
     }
   } catch (err) {
     console.warn('[sw] Geteilte Dateien konnten nicht übernommen werden:', err);
   }
-  return Response.redirect(anzahl > 0 ? '/logs?geteilt=1' : '/logs?geteilt=fehler', 303);
+  // Fotos zuerst: Der Fotoimport reicht wartende PDFs danach an die Jobs-Ansicht weiter.
+  if (fotos > 0) return Response.redirect('/foto-import', 303);
+  return Response.redirect(pdfs > 0 ? '/logs?geteilt=1' : '/logs?geteilt=fehler', 303);
 }
 
 self.addEventListener('fetch', (event) => {

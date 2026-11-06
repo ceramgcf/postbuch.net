@@ -33,10 +33,11 @@ import { getAktiveTaxonomie } from '../lib/taxonomie.js';
 import { toDate, toNumeric, toBetrag, MAX_BETRAG, MAX_FAKTOR } from '../lib/coerce.js';
 import { buildRepairPrompt } from '../prompts/repair.js';
 
-// Hygiene-Budgets. Bislang begrenzte allein maxTokens=8192 in lib/llm.js die
-// Größe des Ergebnisses — ein impliziter Schutz an ganz anderer Stelle, der
-// wegfällt, sobald jemand diesen Wert erhöht.
+// Hygiene-Budgets. Die Modellantwort hat keine Ausgabegrenze mehr; die Größe
+// des Ergebnisses begrenzen allein diese Werte.
 const MAX_STRING_LEN = 4000;
+// Lange Rechnungen führen mehrere hundert Positionen.
+const MAX_ARRAY_EINTRAEGE = 2000;
 const MAX_LISTEN_EINTRAEGE = 40;
 const MAX_LISTEN_EINTRAG_LEN = 120;
 // Im Repair-Prompt zitierte Werte: ein Wert, der eine Regel verletzt, ist per
@@ -53,7 +54,9 @@ const JAHR_MAX = 2100;
 // So ist ein fehlender Block von einem tatsächlich nicht ermittelbaren Wert
 // unterscheidbar und kann bereits in der Modell-Fallback-Kette abgefangen werden.
 const FACHBLOCK_FELDER = {
-  arztrechnung: ['rechnungsdatum', 'nameArzt', 'behandeltePerson', 'leistung', 'gesamtbetrag', 'einzelpositionen'],
+  // Die Einzelpositionen liest ein eigener Schritt nach der Klassifikation
+  // (service/arztrechnung-positionen.js); sie gehören nicht zur Klassifikation.
+  arztrechnung: ['rechnungsdatum', 'nameArzt', 'behandeltePerson', 'leistung', 'gesamtbetrag'],
   handwerkerrechnung: ['rechnungsdatum', 'nameUnternehmen', 'leistung', 'gesamtbetrag', 'lohnkosten'],
   arztbericht: ['behandeltePerson', 'anlass', 'normBefunde', 'pathologischeBefunde'],
   erstattungsbescheid: ['kostenträger', 'bescheiddatum', 'erstattungsbetrag'],
@@ -97,9 +100,6 @@ export function pruefeFachblockStruktur(data, taxonomie) {
     .filter((feld) => !Object.prototype.hasOwnProperty.call(block, feld));
   if (fehlend.length) {
     return `Pflicht-Fachblock "${fachblock}" ist unvollständig; fehlend: ${fehlend.join(', ')}`;
-  }
-  if (fachblock === 'arztrechnung' && !Array.isArray(block.einzelpositionen)) {
-    return 'Pflichtfeld "arztrechnung.einzelpositionen" ist keine Liste';
   }
   return null;
 }
@@ -237,7 +237,7 @@ function saeubere(wert, tiefe = 0) {
   if (typeof wert === 'string') return saeubereString(wert);
   if (typeof wert === 'number') return Number.isFinite(wert) ? wert : null;
   if (wert == null || typeof wert === 'boolean') return wert;
-  if (Array.isArray(wert)) return wert.slice(0, 200).map((v) => saeubere(v, tiefe + 1));
+  if (Array.isArray(wert)) return wert.slice(0, MAX_ARRAY_EINTRAEGE).map((v) => saeubere(v, tiefe + 1));
   if (typeof wert === 'object') {
     const out = {};
     for (const [k, v] of Object.entries(wert)) {
@@ -408,7 +408,7 @@ async function repariere(data, verstoesse, settings, meta) {
     antwort = await callLLM(
       modell,
       user,
-      { system, maxTokens: 2048 },
+      { system },
       settings,
       { ...(meta || {}), kategorie: 'repair' },
     );

@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg18@sha256:2358fcba361ed2233a5ed81b5fe4ca779ccb304120ce531a3bf51c0ed7e2bc11
+    image: pgvector/pgvector:pg18@sha256:c29f30688a9ad961691bdf0ec1650717cc132a5814619d80f80463d6e4c42e47
     container_name: postbuch-postgres
     restart: unless-stopped
     environment:
@@ -83,6 +83,9 @@ services:
       # Empfehlungs-Feeds. Absichtlich ohne Default: jede Installation bestimmt
       # ihre Bezugsquelle selbst.
       POSTBUCH_FEED_BASE_URL: ${POSTBUCH_FEED_BASE_URL:-}
+      # Notschalter: "1" entfernt beim Start die Zwei-Faktor-Anmeldung des Admins
+      # (Telefon verloren). Nicht geseedet; danach wieder aus der .env nehmen.
+      POSTBUCH_TOTP_ADMIN_ZURUECKSETZEN: ${POSTBUCH_TOTP_ADMIN_ZURUECKSETZEN:-}
       # Ablage-Backend der Erstinstallation ('onedrive' | 'nextcloud'). seed-settings.js
       # schreibt den Wert NUR, wenn _settings.storage_backend noch gar nicht existiert
       # — also bei leerer DB. Auf einer bestehenden Instanz wird das aktive Backend

@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router';
 import { useAuth } from '@/hooks/useAuth';
-import { hatGeteilteDateien } from '@/lib/geteilteDateien';
+import { hatGeteilteDateien, hatGeteilteFotos } from '@/lib/geteilteDateien';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { api } from '@/api/client';
+import { CodeFeld, ZweiterFaktorEinrichtung, Wiederherstellungscodes } from '@/components/settings/ZweiterFaktor';
 
 export default function LoginPage() {
   const [username, setUsername] = useState('');
@@ -14,7 +16,14 @@ export default function LoginPage() {
   const [forgotOpen, setForgotOpen] = useState(false);
   const [attemptsLeft, setAttemptsLeft] = useState(null); // null = kein Hinweis nötig
   const [lockSeconds, setLockSeconds] = useState(0);       // > 0 = gesperrt, Countdown läuft
-  const { login } = useAuth();
+  // Zweiter Schritt: null | 'code' | 'einrichtung' | 'codes'
+  const [schritt, setSchritt] = useState(null);
+  const [code, setCode] = useState('');
+  const [wiederherstellung, setWiederherstellung] = useState(false);
+  const [abschluss, setAbschluss] = useState(null); // Login-Antwort, die nach der Code-Anzeige übernommen wird
+  const [hinweis, setHinweis] = useState('');
+  const [neueCodes, setNeueCodes] = useState(null); // Antwort von /login/bestaetigen
+  const { login, anmeldungUebernehmen } = useAuth();
   const navigate = useNavigate();
   const [instanceName, setInstanceName] = useState('');
 
@@ -60,25 +69,86 @@ export default function LoginPage() {
 
     setLoading(true);
     try {
-      await login(username, password);
+      const data = await login(username, password);
       setAttemptsLeft(null);
       setLockSeconds(0);
-      // Vor der Anmeldung geteilte PDFs (Share-Target) warten im Cache des
-      // Service-Workers – dann direkt zur Jobs-Ansicht, die sie abholt.
-      navigate((await hatGeteilteDateien()) ? '/logs?geteilt=1' : '/');
-    } catch (err) {
-      // 429 = Sperre; retryAfterSec startet den Countdown. 401 liefert
-      // verbleibendeVersuche erst, wenn es knapp wird (Server entscheidet).
-      if (err?.status === 429) {
-        setAttemptsLeft(0);
-        setLockSeconds(Number(err?.payload?.retryAfterSec) || 60);
-      } else {
-        const left = err?.payload?.verbleibendeVersuche;
-        setAttemptsLeft(typeof left === 'number' ? left : null);
+      if (data?.zweiterFaktor) {
+        setSchritt(data.zweiterFaktor);
+        setPassword('');
+        return;
       }
-      setError(parseErrorMessage(err?.message, 'Falscher Benutzername oder Passwort'));
+      await weiter();
+    } catch (err) {
+      fehlerAnzeigen(err, 'Falscher Benutzername oder Passwort');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Vor der Anmeldung geteilte Dateien (Share-Target) warten im Cache des
+  // Service-Workers – dann direkt zum Fotoimport bzw. zur Jobs-Ansicht, die
+  // sie abholen. Der Fotoimport reicht wartende PDFs danach weiter.
+  async function weiter() {
+    if (await hatGeteilteFotos()) navigate('/foto-import');
+    else navigate((await hatGeteilteDateien()) ? '/logs?geteilt=1' : '/');
+  }
+
+  async function fertig(data) {
+    await anmeldungUebernehmen(data);
+    await weiter();
+  }
+
+  function zurueckZumPasswort(meldung = '') {
+    setSchritt(null);
+    setCode('');
+    setWiederherstellung(false);
+    setAttemptsLeft(null);
+    setError(meldung);
+  }
+
+  function fehlerAnzeigen(err, fallback) {
+    // 429 = Sperre; retryAfterSec startet den Countdown. 401 liefert
+    // verbleibendeVersuche erst, wenn es knapp wird (Server entscheidet).
+    if (err?.status === 429) {
+      setAttemptsLeft(0);
+      setLockSeconds(Number(err?.payload?.retryAfterSec) || 60);
+    } else {
+      const left = err?.payload?.verbleibendeVersuche;
+      setAttemptsLeft(typeof left === 'number' ? left : null);
+    }
+    setError(parseErrorMessage(err?.message, fallback));
+  }
+
+  const handleCode = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const data = await api.auth.zweiterFaktor(code);
+      if (typeof data.verbleibendeCodes === 'number') {
+        // Wiederherstellungscode verbraucht: kurz sagen, wie viele noch bleiben.
+        setHinweis(data.verbleibendeCodes === 0
+          ? 'Das war der letzte Wiederherstellungscode. Bitte unter Einstellungen → Persönlich neue erzeugen.'
+          : `Noch ${data.verbleibendeCodes} Wiederherstellungscodes übrig.`);
+        setAbschluss(data);
+        return;
+      }
+      await fertig(data);
+    } catch (err) {
+      if (err?.payload?.neuAnmelden) return zurueckZumPasswort(parseErrorMessage(err?.message, 'Bitte erneut anmelden.'));
+      setCode('');
+      fehlerAnzeigen(err, 'Der Code stimmt nicht.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const einrichtungFehler = (fn) => async (...args) => {
+    try {
+      return await fn(...args);
+    } catch (err) {
+      if (err?.payload?.neuAnmelden) zurueckZumPasswort(parseErrorMessage(err?.message, 'Bitte erneut anmelden.'));
+      throw err;
     }
   };
 
@@ -157,6 +227,53 @@ export default function LoginPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {abschluss ? (
+            <div className="space-y-3">
+              <p className="text-sm">{hinweis}</p>
+              <Button className="w-full h-10 btn-gradient text-white font-semibold" onClick={() => fertig(abschluss)}>Weiter</Button>
+            </div>
+          ) : schritt === 'codes' && neueCodes ? (
+            <Wiederherstellungscodes codes={neueCodes.wiederherstellungscodes} weiterText="Weiter" onWeiter={() => fertig(neueCodes)} />
+          ) : schritt === 'einrichtung' ? (
+            <div className="space-y-3">
+              <p className="text-sm font-medium">Für diese Instanz ist die Zwei-Faktor-Anmeldung vorgeschrieben. Bitte jetzt einrichten.</p>
+              <ZweiterFaktorEinrichtung
+                starten={einrichtungFehler(() => api.auth.loginEinrichten())}
+                bestaetigen={einrichtungFehler((c) => api.auth.loginBestaetigen(c))}
+                onFertig={(data) => { setNeueCodes(data); setSchritt('codes'); }}
+                onAbbrechen={() => zurueckZumPasswort()}
+              />
+            </div>
+          ) : schritt === 'code' ? (
+            <form onSubmit={handleCode} className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                {wiederherstellung
+                  ? 'Einen der gesicherten Wiederherstellungscodes eingeben.'
+                  : 'Den 6-stelligen Code aus der Authenticator-App eingeben.'}
+              </p>
+              <CodeFeld value={code} onChange={setCode} wiederherstellung={wiederherstellung} />
+              {error && <p className="text-sm text-destructive font-medium">{error}</p>}
+              {lockSeconds > 0 ? (
+                <p className="text-sm text-destructive">Erneut möglich in {formatLock(lockSeconds)}.</p>
+              ) : attemptsLeft != null && (
+                <p className="text-sm text-destructive">
+                  {attemptsLeft === 1 ? 'Noch 1 Versuch.' : `Noch ${attemptsLeft} Versuche.`}
+                </p>
+              )}
+              <Button type="submit" className="w-full h-10 btn-gradient text-white font-semibold" disabled={loading || lockSeconds > 0 || !code.trim()}>
+                {loading ? 'Prüfe…' : 'Anmelden'}
+              </Button>
+              <div className="pt-1 flex justify-between text-xs">
+                <button type="button" className="text-muted-foreground hover:text-foreground underline underline-offset-2" onClick={() => zurueckZumPasswort()}>
+                  Zurück
+                </button>
+                <button type="button" className="text-muted-foreground hover:text-foreground underline underline-offset-2"
+                  onClick={() => { setWiederherstellung((w) => !w); setCode(''); setError(''); }}>
+                  {wiederherstellung ? 'Code aus der App verwenden' : 'Wiederherstellungscode verwenden'}
+                </button>
+              </div>
+            </form>
+          ) : (
           <form onSubmit={handleSubmit} className="space-y-3">
             <Input
               type="text"
@@ -216,6 +333,7 @@ export default function LoginPage() {
               </div>
             )}
           </form>
+          )}
         </CardContent>
       </Card>
     </div>

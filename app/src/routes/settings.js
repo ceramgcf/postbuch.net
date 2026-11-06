@@ -79,7 +79,9 @@ import { EINGEBAUTES_EMBEDDING } from '../lib/embedding-eingebaut.js';
 import { getHelpEmbeddingStatus, startHelpEmbeddingJob } from '../service/help-corpus.js';
 import { buildLxdClassificationPrompt } from '../prompts/classification-lxd.js';
 import { PRE_ANALYSIS_SYSTEM_PROMPT, PRE_ANALYSIS_USER_MESSAGE } from '../prompts/pre-analysis.js';
-import { buildEbParsePrompt, buildMatchKuerzungenPrompt } from '../prompts/erstattungsbescheid.js';
+import { buildEbParsePrompt, buildZerlegungPrompt } from '../prompts/erstattungsbescheid.js';
+import { buildPositionenPrompt } from '../prompts/arztrechnung-positionen.js';
+import { hatFaktor, setzePflicht } from '../service/zweiter-faktor.js';
 
 const router = Router();
 
@@ -726,6 +728,26 @@ router.put('/notifications/webpush', async (req, res) => {
     res.json(ergebnis);
   } catch (err) {
     console.error('[settings] notifications/webpush PUT Fehler:', err);
+    res.status(500).json({ error: 'Interner Fehler' });
+  }
+});
+
+// ── PUT /api/settings/zweiter-faktor-pflicht ─────────────────────────────────
+// Zwei-Faktor-Anmeldung für alle Zugänge verlangen. Eigene Route statt
+// ALLOWED_SETTING_KEYS: Einschalten setzt voraus, dass der Admin selbst einen
+// Faktor hat, sonst bekäme er die Pflicht erst beim nächsten Login zu spüren.
+router.put('/zweiter-faktor-pflicht', async (req, res) => {
+  const { an } = req.body || {};
+  if (typeof an !== 'boolean') return res.status(400).json({ error: '"an" muss boolean sein.' });
+  try {
+    if (an && !(await hatFaktor({ istAdmin: true }))) {
+      return res.status(409).json({ error: 'Zuerst unter Einstellungen → Persönlich die Zwei-Faktor-Anmeldung für den Admin einrichten.' });
+    }
+    await setzePflicht(an);
+    appLog('WARN', 'auth', an ? 'Zwei-Faktor-Anmeldung für alle Zugänge vorgeschrieben' : 'Pflicht zur Zwei-Faktor-Anmeldung aufgehoben');
+    res.json({ ok: true, pflicht: an });
+  } catch (err) {
+    console.error('[settings] Zwei-Faktor-Pflicht:', err);
     res.status(500).json({ error: 'Interner Fehler' });
   }
 });
@@ -2184,15 +2206,13 @@ router.get('/prompts-preview', async (req, res) => {
 
     const customRules = settings.classification_custom_rules || '';
 
-    // Beispieldaten für den ausschließlich zur Laufzeit befüllten Match-Prompt,
+    // Beispieldaten für den ausschließlich zur Laufzeit befüllten Zerlegungs-Prompt,
     // damit Struktur und Einbettung sichtbar werden.
-    const beispielKuerzungen = {
-      'Beleg 1': [
-        { eb_subid: 1, kuerzung_index: 0, betrag: 12.5, begruendung: '(Beispiel) Höchstbetrag nach GOÄ überschritten' },
-      ],
-    };
+    const beispielKuerzungen = [
+      { eb_subid: 1, kuerzung_index: 0, kuerzungsbetrag: 12.5, begruendung: '(Beispiel) Höchstbetrag nach GOÄ überschritten' },
+    ];
     const beispielEinzelpositionen = [
-      { postid: 'P000001', subid: 1, goaeZiffer: '1', leistung: '(Beispiel) Beratung', betrag: 25.0 },
+      { subid: 1, behandlungs_datum: '2026-01-15', ziffer: '1', leistung: '(Beispiel) Beratung', begruendung: null, faktor: 2.3, betrag: 25.0, zusatzangaben: null },
     ];
 
     const prompts = [
@@ -2219,11 +2239,18 @@ router.get('/prompts-preview', async (req, res) => {
         system: buildEbParsePrompt(ebPatients.rows),
       },
       {
-        id: 'eb-match',
-        title: 'EB-Kürzungs-Zuordnung',
-        description: 'Ordnet EB-Kürzungen den Arztrechnungs-Einzelpositionen zu (service/erstattungsbescheid.js). Die Kürzungen und Rechnungspositionen stehen erst pro Dokument zur Laufzeit fest — hier mit Beispieldaten gefüllt.',
+        id: 'arz-positionen',
+        title: 'Einzelpositionen einer Arztrechnung',
+        description: 'Liest nach der Klassifikation alle Positionen einer Arztrechnung vollständig ein (service/arztrechnung-positionen.js). Kopfdaten stammen aus der Klassifikation – hier mit Beispieldaten gefüllt.',
         dynamic: true,
-        system: buildMatchKuerzungenPrompt(beispielKuerzungen, beispielEinzelpositionen),
+        system: buildPositionenPrompt({ nameArzt: '(Beispiel) Dr. Muster', rechnungsdatum: '2026-01-15', gesamtbetrag: 25.0, dokumentart: 'arztrechnung' }),
+      },
+      {
+        id: 'eb-match',
+        title: 'EB-Kürzungs-Zerlegung',
+        description: 'Zerlegt EB-Kürzungen auf die Arztrechnungs-Einzelpositionen (service/kuerzung-zerlegung.js). Die Kürzungen und Rechnungspositionen stehen erst pro Dokument zur Laufzeit fest – hier mit Beispieldaten gefüllt.',
+        dynamic: true,
+        system: buildZerlegungPrompt(beispielKuerzungen, beispielEinzelpositionen, { arz_postid: 'P000001', rechnungsbetrag: 25.0 }),
       },
     ];
 

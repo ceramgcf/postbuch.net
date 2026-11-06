@@ -412,18 +412,7 @@ nicht erst aus.
   "verwendungszweck": "z. B. Patienten-Nr. oder Name",
   "kontoinhaber": "Name der Abrechnungsstelle oder des Arztes/Unternehmens",
   "einreichungSeiteVon": "Erste Seite (1-basiert) des Rechnungsoriginals, oder null. Nur füllen, wenn das Dokument erkennbar aus einem Deckblatt und/oder Duplikat PLUS einem eigenständigen Rechnungsoriginal besteht (z. B. Seite 1 'Deckblatt zur Rechnung', Seite 2 'Rechnung - Original', Seite 3 Fortsetzung/Duplikat) — im Zweifel null. null bedeutet: das ganze Dokument wird eingereicht.",
-  "einreichungSeiteBis": "Letzte Seite (1-basiert) des Rechnungsoriginals, oder null (immer gemeinsam mit einreichungSeiteVon gesetzt; bei nur einer Originalseite gleich einreichungSeiteVon).",
-  "einzelpositionen": [
-    {
-      "behandeltePerson": "Kurzname aus der Patientenliste oder null",
-      "behandlungsDatum": "YYYY-MM-DD",
-      "ziffer": "GOÄ-/GOZ-/GOT-Ziffer, PZN oder sonstige Kennung; ohne Kennung null",
-      "leistung": "Beschreibung, z. B. 'Beratung', 'Paracetamol 500mg', 'Verbrauchsmaterial'",
-      "begründung": "Text im genauen Wortlaut oder null",
-      "faktor": "Zahl oder null, wenn die Position keinen Faktor ausweist",
-      "betrag": 0.00
-    }
-  ]
+  "einreichungSeiteBis": "Letzte Seite (1-basiert) des Rechnungsoriginals, oder null (immer gemeinsam mit einreichungSeiteVon gesetzt; bei nur einer Originalseite gleich einreichungSeiteVon)."
 }
 
 "arztbericht": {
@@ -545,24 +534,18 @@ C3. bezahlStatus: Suche nach handschriftlichen Zahlungsvermerken (z. B.
 
 D1. Gilt für alle vier Dokumentarten der Gruppe (arztrechnung, laborrechnung,
     rezept, hilfsmittelrechnung), für Human- wie Tiermedizin. Es gibt für sie
-    keinen eigenen JSON-Block; sie füllen alle diesen hier, inklusive
-    einzelpositionen.
-D2. ziffer: Kennung extrahieren, z. B. "1", "3", "250", "PZN12345", "GOZ 1010",
-    "GOT 12". Medikamente, Material und sonstige Positionen ohne Kennung
-    bleiben ausdrücklich null.
-D3. begründung: Bei MENSCHLICHEN GOÄ-/GOZ-Positionen mit Faktor > 2.31
-    sorgfältig auf eine Begründung prüfen und sie wörtlich übernehmen. Bei
-    TIEREN (GOT) besteht diese Begründungspflicht NICHT; eine dennoch
-    vorhandene GOT-Begründung trotzdem wörtlich übernehmen.
-D4. zahlungstermin: letztmöglicher Zahlungstermin. Sind Rechnungsdatum und
+    keinen eigenen JSON-Block; sie füllen alle diesen hier. Die
+    Einzelpositionen liest ein eigener, nachfolgender Schritt vollständig
+    ein; gib sie hier NICHT aus.
+D2. zahlungstermin: letztmöglicher Zahlungstermin. Sind Rechnungsdatum und
     Zahlungsbedingung vorhanden, Fälligkeit errechnen (2026-02-01 +
     "14 Tage netto" → 2026-02-15). Ein explizit genannter Termin hat Vorrang.
     Keine Bedingung erkennbar → null. Die Bedingung selbst in
     zahlungsterminBegründung speichern.
-D5. Bei hilfsmittelrechnung ist nameArzt der Name des Leistungserbringers
+D3. Bei hilfsmittelrechnung ist nameArzt der Name des Leistungserbringers
     (Optiker, Akustiker, Sanitätshaus), nicht der verordnende Arzt.
 
-  ── D6. Sonderregeln "rezept" ──
+  ── D4. Sonderregeln "rezept" ──
 
   Ein Rezept besteht aus ZWEI Teilen, möglicherweise auf verschiedenen Seiten
   oder verdreht im Scan:
@@ -585,18 +568,11 @@ D5. Bei hilfsmittelrechnung ist nameArzt der Name des Leistungserbringers
      ausdrücklich als PZN bezeichnet ist und der Beleg sie anders nennt (z. B.
      "Arzneimittel-Nr."). Mehrere PZNs mit Pipe "|" trennen, eine einzelne ohne
      Trennzeichen.
-  b) einzelpositionen = ausschließlich Medikamente aus dem APOTHEKENBELEG
-     (= tatsächlich abgegeben). Verordnete Medikamente, die dort fehlen, wurden
-     nicht eingelöst und werden ignoriert.
-  c) Generikum: Weicht die taxierte PZN im Apothekenbeleg von der PZN in der
-     Verordnung ab, liegt ein wirkstoffgleicher Austausch vor. Verwende die PZN
-     aus dem Apothekenbeleg und setze der Arzneimittelbezeichnung das Präfix
-     "[GENERIKUM] " voran.
-  d) bezahltAm = Datum auf dem Apothekenbeleg (Einlösedatum), NICHT das
+  b) bezahltAm = Datum auf dem Apothekenbeleg (Einlösedatum), NICHT das
      Verordnungsdatum.
-  e) kontakt = ausstellender Arzt; richtung = "eingang". Das gilt abweichend
+  c) kontakt = ausstellender Arzt; richtung = "eingang". Das gilt abweichend
      von Regel B3.
-  f) briefdatum = Ausstellungsdatum der Verordnung; kann vor dem Bezugsdatum
+  d) briefdatum = Ausstellungsdatum der Verordnung; kann vor dem Bezugsdatum
      liegen.
 
   ⚠ Häufige Fehler:
@@ -662,7 +638,7 @@ G5. Rechenweg beim Selbstrechnen: begünstigte Positionen netto addieren, dann
 G6. Lässt sich der begünstigte Anteil nicht ermitteln, weil Material und
     Arbeit untrennbar in einer Sammelposition stecken, setze null. Setze
     NIEMALS 0.00 als Ersatz für "unbekannt".
-G7. zahlungstermin analog zu D4 berechnen.
+G7. zahlungstermin analog zu D2 berechnen.
 
 ── H. Fachblock "generischeRechnung" ──
 

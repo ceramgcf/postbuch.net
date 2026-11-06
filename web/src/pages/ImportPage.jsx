@@ -20,6 +20,8 @@ import PersonenZuordnung, { KEINE } from '@/components/import/PersonenZuordnung'
 import { MenschDialog } from '@/components/settings/MenschenCard';
 import { leseImportFolgen, folgenUrl } from '@/lib/importFolgen';
 import KameraScanKarte from '@/components/kamerascan/KameraScanKarte';
+import OffenerScanZeile from '@/components/kamerascan/OffenerScanZeile';
+import { useSeitenstapel } from '@/components/kamerascan/Seitenstapel';
 
 // ── Scanner-Konfiguration ───────────────────────────────────────────────────
 
@@ -98,6 +100,10 @@ function fileToBase64(file) {
 
 function istPdf(f) {
   return f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+}
+
+function istBild(f) {
+  return f.type.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(f.name);
 }
 
 function alsEintrag(f) {
@@ -973,8 +979,19 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
   const [dragIndex, setDragIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
 
+  const stapel = useSeitenstapel();
+
+  // Fotos gehen nicht direkt in die Pipeline, sondern in den Scan: Dort werden
+  // sie wie Kameraaufnahmen zugeschnitten, entzerrt und zu einer PDF.
   const addFiles = useCallback((fileList) => {
-    const pdfs = Array.from(fileList || []).filter(istPdf);
+    const dateien = Array.from(fileList || []);
+    const bilder = dateien.filter((f) => !istPdf(f) && istBild(f));
+    if (bilder.length > 0) {
+      stapel.oeffnen(replaceForPostId
+        ? { fotos: bilder, ersetzen: replaceForPostId, onErsetzt: onReplaceComplete }
+        : { fotos: bilder });
+    }
+    const pdfs = dateien.filter(istPdf);
     if (pdfs.length === 0) return;
     setItems(prev => {
       const existing = new Set(prev.map(i => `${i.name}|${i.size}`));
@@ -984,7 +1001,7 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
       return [...prev, ...fresh];
     });
     setFeedback(null);
-  }, []);
+  }, [stapel, replaceForPostId, onReplaceComplete]);
 
   const onFileInputChange = (e) => {
     addFiles(e.target.files);
@@ -1143,13 +1160,13 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
         <div className="flex items-center gap-2">
           <Upload className="h-5 w-5 text-primary" />
           <CardTitle className="text-base">
-            {replaceForPostId ? 'PDF-Upload (Ersatz)' : 'PDF-Upload'}
+            {replaceForPostId ? 'Datei-Upload (Ersatz)' : 'Datei-Upload'}
           </CardTitle>
         </div>
         <CardDescription className="text-xs">
           {replaceForPostId
-            ? `Lade eine PDF – oder mehrere, die in der gewählten Reihenfolge zu einer Datei zusammengeführt werden – als Ersatz für ${replaceForPostId} hoch. Keine Pipeline, keine KI.`
-            : 'Eine oder mehrere PDFs direkt in die Pipeline geben – entweder als Batch (jede einzeln) oder als Sammlung (in eine Datei gemergt).'}
+            ? `Lade eine PDF – oder mehrere, die in der gewählten Reihenfolge zu einer Datei zusammengeführt werden – als Ersatz für ${replaceForPostId} hoch. Fotos werden vorher im Scan zu einer PDF aufbereitet. Keine Pipeline, keine KI.`
+            : 'Eine oder mehrere PDFs direkt in die Pipeline geben – entweder als Batch (jede einzeln) oder als Sammlung (in eine Datei gemergt). Fotos öffnen sich im Scan und werden dort wie Kameraaufnahmen zu einer PDF aufbereitet.'}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -1204,7 +1221,7 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
           className="rounded-xl border-2 border-dashed border-border/60 p-6 text-center hover:border-primary/40 hover:bg-primary/[0.02] transition-colors"
         >
           <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-          <p className="text-sm font-medium">PDFs hierher ziehen</p>
+          <p className="text-sm font-medium">PDFs oder Fotos hierher ziehen</p>
           <p className="text-xs text-muted-foreground mt-1">oder</p>
           <Button
             variant="outline"
@@ -1218,7 +1235,7 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
           <input
             ref={fileInputRef}
             type="file"
-            accept="application/pdf,.pdf"
+            accept="application/pdf,.pdf,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
             multiple
             className="hidden"
             onChange={onFileInputChange}
@@ -1856,6 +1873,7 @@ export default function ImportPage() {
         <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-primary" />
       </Link>
 
+      <OffenerScanZeile />
       <CacheModePanel />
       {/* Auf Touch-Geräten ist die Kamera der naheliegende Weg, am Rechner nicht. */}
       {istTouch && <KameraScanKarte />}

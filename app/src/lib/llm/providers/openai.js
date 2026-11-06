@@ -150,15 +150,21 @@ export function extractOpenAIUsage(usage) {
  *   • Mistral kennt nur `max_tokens`, sonst OpenAI-Konvention. Der JSON-Modus
  *     verlangt laut Mistral, dass „JSON“ im Prompt steht – sonst droht ein
  *     endloser Whitespace-Strom. Wer jsonMode setzt, nennt JSON im Prompt.
+ *   • LM Studio lehnt `response_format: json_object` mit HTTP 400 ab und kennt
+ *     nur `json_schema` oder `text`. Ohne Schema bleibt der JSON-Modus dort
+ *     weg; die Antwort geht wie bei Anthropic über parseJsonFromText().
  */
 function applyDialect(body, dialekt, { maxTokens, jsonMode }) {
+  // Ohne Grenze des Aufrufers bleibt das Feld weg: Der Server liefert dann so
+  // viel, wie das Modell zulässt.
+  const mitGrenze = Number.isFinite(maxTokens) && maxTokens > 0;
   if (dialekt === 'ollama') {
-    body.max_tokens = maxTokens;
+    if (mitGrenze) body.max_tokens = maxTokens;
     if (jsonMode) body.format = 'json';
     return body;
   }
-  Object.assign(body, maxTokensFeld(dialekt, maxTokens));
-  if (jsonMode) body.response_format = { type: 'json_object' };
+  if (mitGrenze) Object.assign(body, maxTokensFeld(dialekt, maxTokens));
+  if (jsonMode && dialekt !== 'lmstudio') body.response_format = { type: 'json_object' };
   return body;
 }
 
@@ -209,7 +215,7 @@ function bildBlock(buffer, mime, dialekt) {
 }
 
 export async function callOpenAI(model, prompt, opts, provider) {
-  const { pdf, pdfs, bilder, system, maxTokens = 8192, cacheSystem = false, jsonMode = false, zweck } = opts || {};
+  const { pdf, pdfs, bilder, system, maxTokens, cacheSystem = false, jsonMode = false, zweck, timeoutMs } = opts || {};
   // Lokale Provider (Ollama/LM Studio) laufen typischerweise ohne Auth; nur bei
   // gesetztem Key wird ein Bearer geschickt. Der Built-in OpenAI braucht ihn.
   const apiKey = provider?.apiKey;
@@ -296,7 +302,7 @@ export async function callOpenAI(model, prompt, opts, provider) {
 
   const post = (body) => guardedFetch(chatCompletionsUrl(provider), {
     method: 'POST', headers, body: JSON.stringify(body),
-  }, { allowPrivate: provider?.allowPrivate === true, timeoutMs: TIMEOUT_COMPLETION_MS });
+  }, { allowPrivate: provider?.allowPrivate === true, timeoutMs: timeoutMs ?? TIMEOUT_COMPLETION_MS });
 
   // Die Kostenträger-Profilierung denkt bewusst (gelernte Fähigkeit in
   // llm_reasoning_capability). Alles andere ist Extraktion: reasoning_effort
@@ -366,6 +372,8 @@ export async function callOpenAI(model, prompt, opts, provider) {
   return {
     text: antwort,
     usage: extractOpenAIUsage(data.usage),
+    // Ausgabegrenze erreicht: die Antwort ist unvollständig.
+    abgeschnitten: data.choices?.[0]?.finish_reason === 'length',
   };
 }
 

@@ -14,6 +14,8 @@ import { appLog } from './app-log.js';
 import actionsRouter from './routes/actions.js';
 import analyseRouter from './routes/analyse.js';
 import authRouter from './routes/auth.js';
+import zweiterFaktorRouter from './routes/zweiter-faktor.js';
+import { notschalterBeimStart as zweiterFaktorNotschalter } from './service/zweiter-faktor.js';
 import aktenRouter from './routes/akten.js';
 import logsRouter from './routes/logs.js';
 import saldenRouter from './routes/salden.js';
@@ -89,6 +91,11 @@ raeumeArchivImportTempAuf().catch((err) => {
 });
 const settings = await loadDynamicSettings();
 await initializeDevGate(settings);
+// Vor app.listen: Bei gesetztem Notschalter darf keine Anmeldung mehr am alten
+// Admin-Faktor hängen.
+await zweiterFaktorNotschalter().catch((err) => {
+  console.error('[zweiter-faktor] Notschalter fehlgeschlagen:', err.message);
+});
 // Muss vor Polling/Queue-Start laufen: nach einem harten Prozessabbruch können
 // Dateien bereits außerhalb der Inbox liegen, obwohl ihr DB-Insert fehlte.
 await recoverPipeline(settings).catch((err) => {
@@ -203,6 +210,9 @@ app.use('/api', (req, res, next) => {
 
 // Auth routes (unprotected — login/logout/check)
 app.use('/api/auth', authRouter);
+// Eigener zweiter Faktor: angemeldet, aber bewusst vor der Write-Protection,
+// damit auch ein Lesezugriff seinen Faktor einrichten kann.
+app.use('/api/auth/zweiter-faktor', requireAuth, zweiterFaktorRouter);
 
 // OneDrive OAuth callback (unprotected — kommt als Browser-Redirect von Microsoft)
 // Sicherheit: CSRF-State-Verifikation in der Route selbst

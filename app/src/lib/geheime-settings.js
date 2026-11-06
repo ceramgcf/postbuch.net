@@ -34,6 +34,8 @@ const SECRET_KEY_NAMES = new Set([
   'webhook_token',
   'scanner_token',
   'nextcloud_app_password',
+  // Schlüssel der Zwei-Faktor-Geheimnisse (service/zweiter-faktor.js).
+  'zweiter_faktor_secret',
 ]);
 
 // Suffixregel ergänzend zur Namensliste. Bewusst ENG gehalten: '_key'/'_token'

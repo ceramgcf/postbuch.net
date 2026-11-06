@@ -42,6 +42,7 @@ OPT_NON_INTERACTIVE=false   # --non-interactive   kein einziger /dev/tty-Zugriff
 OPT_DRY_RUN=false           # --dry-run           bis inkl. Backup, dann sauber raus
 OPT_ROLLBACK=false          # --rollback          auf ein Backup zurueck
 OPT_POSTGRES_UMZUG=false    # --postgres-umzug    Datenbank von PostgreSQL 16 auf 18 umziehen
+OPT_POSTGRES_IMAGE=false    # --postgres-image    PostgreSQL-Image derselben Hauptversion tauschen
 OPT_SHA256=""               # --erwarte-sha256=   Pruefsumme des Tarballs
 OPT_INSTALL_DIR=""          # --install-dir=      abweichendes Zielverzeichnis
 OPT_FEED_BASE_URL=""        # --quelle=           Bezugsquelle dieser Instanz
@@ -1110,6 +1111,111 @@ postgres_umzug_modus() {
     echo "  Datenbank läuft auf PostgreSQL 18."
 }
 
+# Ein Release kann den Digest des PostgreSQL-Images anheben (Sicherheits-
+# korrekturen derselben Hauptversion). Der laufende Container wird dann gegen
+# das neue Image getauscht, aber nur unter drei Bedingungen: Das Update hat
+# ein frisches Datenbank-Backup, die Hauptversion von Image und Datenbestand
+# stimmt überein, und das neue Image liegt vollständig lokal vor. Fehlt eine
+# davon, läuft der bisherige Container weiter. Ein Hauptversionswechsel ist
+# nie Sache dieser Funktion, sondern des Umzugs (scripts/postgres-umzug.sh).
+# Massgeblich ist das Image aus `docker compose config`, also einschliesslich
+# einer docker-compose.override.yml des Betreibers.
+# Setzt PG_IMAGE_SOLL/PG_IMAGE_IST/PG_IMAGE_IST_ID und meldet 0, wenn ein
+# Tausch in Frage kommt. Ein unveränderter Digest ist unveränderlich; ein Tag
+# ohne Digest (nur per Override möglich) kommt immer in Frage und wird nach
+# dem Laden über die Image-ID verglichen.
+postgres_image_pruefen() {
+    PG_IMAGE_IST=$(docker_runtime inspect postbuch-postgres --format '{{.Config.Image}}' 2>/dev/null || true)
+    PG_IMAGE_IST_ID=$(docker_runtime inspect postbuch-postgres --format '{{.Image}}' 2>/dev/null || true)
+    [[ -n "$PG_IMAGE_IST" && -n "$PG_IMAGE_IST_ID" ]] || return 1
+    PG_IMAGE_SOLL=$($DOCKER_COMPOSE config --images postgres 2>/dev/null | head -n 1 || true)
+    if [[ -z "$PG_IMAGE_SOLL" ]]; then
+        warn "PostgreSQL-Image aus der Compose-Konfiguration nicht lesbar – der Datenbankcontainer bleibt unverändert."
+        return 1
+    fi
+    [[ "$PG_IMAGE_SOLL" == "$PG_IMAGE_IST" && "$PG_IMAGE_SOLL" == *@sha256:* ]] && return 1
+    return 0
+}
+
+postgres_image_angleichen() {
+    local soll soll_id release soll_major daten_major
+    postgres_image_pruefen || return 0
+    soll="$PG_IMAGE_SOLL"
+    release=$(grep -oE 'pgvector/pgvector:pg[^[:space:]"]+' "$INSTALL_DIR/docker-compose.yml" 2>/dev/null | head -n 1 || true)
+    if [[ "$soll" != "$release" ]]; then
+        warn "PostgreSQL-Image weicht vom Release ab (Override aktiv): $soll statt $release"
+    fi
+    soll_major=$(printf '%s\n' "$soll" | compose_postgres_major)
+    daten_major=$(postgres_daten_major)
+    if [[ -z "$soll_major" || "$soll_major" != "$daten_major" ]]; then
+        warn "PostgreSQL-Image $soll passt nicht zum Datenbestand (Version ${daten_major:-unbekannt}) – der Datenbankcontainer bleibt unverändert."
+        return 0
+    fi
+    if [[ -z "$POSTGRES_UMZUG_BACKUP" || ! -s "$POSTGRES_UMZUG_BACKUP/db.sql.gz" ]]; then
+        warn "Neues PostgreSQL-Image, aber ohne frisches Datenbank-Backup – der Datenbankcontainer bleibt unverändert."
+        return 0
+    fi
+    info "Lade PostgreSQL-Image ($soll)..."
+    if ! docker_mit_netzwerk_retry "PostgreSQL-Image" $DOCKER_COMPOSE pull postgres; then
+        warn "PostgreSQL-Image nicht ladbar – der bisherige Datenbankcontainer läuft weiter."
+        return 0
+    fi
+    soll_id=$(docker_runtime image inspect "$soll" --format '{{.Id}}' 2>/dev/null || true)
+    [[ -n "$soll_id" && "$soll_id" != "$PG_IMAGE_IST_ID" ]] || return 0
+    info "Tausche den Datenbankcontainer gegen das neue Image (Backup: $POSTGRES_UMZUG_BACKUP)..."
+    if ! $DOCKER_COMPOSE up -d --no-deps --force-recreate postgres; then
+        warn "Datenbankcontainer mit neuem Image nicht startbar. Die Daten in data/postgres sind unverändert; Backup: $POSTGRES_UMZUG_BACKUP"
+        return 1
+    fi
+    success "Datenbankcontainer läuft mit dem neuen Image."
+}
+
+# Holt den Image-Tausch außerhalb eines Updates nach. Der Update-Agent ruft
+# das einmal je installierter Version auf, denn beim Update selbst läuft noch
+# der Installer der Vorversion, der PostgreSQL nie ersetzt.
+postgres_image_modus() {
+    INSTALL_DIR="${OPT_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+    if [[ ! -f "$INSTALL_DIR/docker-compose.yml" ]]; then
+        echo "FEHLER: Keine Installation unter $INSTALL_DIR gefunden." >&2
+        return 1
+    fi
+    docker_headless_pruefen || return 1
+    cd "$INSTALL_DIR"
+    export COMPOSE_PROJECT_NAME="$(basename "$INSTALL_DIR")"
+    if ! postgres_image_pruefen; then
+        echo "  PostgreSQL-Image ist aktuell – nichts zu tun."
+        return 0
+    fi
+    case "$(postgres_umzug_zustand)" in
+        keiner|aufraeumen) ;;
+        *) echo "  PostgreSQL-Umzug steht aus – das Image wechselt mit dem Umzug."; return 0 ;;
+    esac
+    echo "postbuch.net: PostgreSQL-Image aktualisieren"
+    echo "  Verzeichnis: $INSTALL_DIR"
+    phase backup
+    backup_altbestand_besitz_sicherstellen || return 1
+    local backup
+    backup=$(backup_current_installation) || true
+    if [[ -z "$backup" || ! -s "$backup/db.sql.gz" ]]; then
+        echo "FEHLER: Backup mit Datenbank fehlgeschlagen – das Image bleibt unverändert." >&2
+        return 1
+    fi
+    echo "  Backup: $backup"
+    POSTGRES_UMZUG_BACKUP="$backup"
+    phase up
+    if grep -q '^DUCKDNS_API_TOKEN=.' .env 2>/dev/null; then
+        compose_recreate caddy || return 1
+    else
+        compose_recreate || return 1
+    fi
+    if ! warte_auf_app_gesund; then
+        echo "FEHLER: Die App antwortet nach dem Image-Wechsel nicht auf /api/health. Bitte 'docker compose logs app' prüfen." >&2
+        return 1
+    fi
+    phase fertig
+    echo "  PostgreSQL läuft mit $(docker_runtime inspect postbuch-postgres --format '{{.Config.Image}}' 2>/dev/null)."
+}
+
 compose_recreate() {
     # Erst die aktiven Dienste bestimmen: Der Umzug stoppt die Code-Container.
     profil_zustand_sichern
@@ -1125,9 +1231,11 @@ compose_recreate() {
     # unnoetiger DB-Neustart.
     local recreate=("${AKTIVE_CODE_SERVICES[@]}")
     $with_caddy && recreate+=(caddy)
-    # Ein normal gestoppter DB-Container wird wieder gestartet, aber niemals
-    # wegen eines neuen Compose-Digests ersetzt. Neue Codecontainer gehen erst
-    # online, wenn PostgreSQL tatsächlich Verbindungen annimmt.
+    # Ein normal gestoppter DB-Container wird wieder gestartet. Ersetzt wird
+    # er nur über postgres_image_angleichen, also mit frischem Backup und
+    # gleicher Hauptversion. Neue Codecontainer gehen erst online, wenn
+    # PostgreSQL tatsächlich Verbindungen annimmt.
+    postgres_image_angleichen || return 1
     docker_mit_netzwerk_retry "PostgreSQL-Start" \
         $DOCKER_COMPOSE up -d --no-deps --no-recreate postgres || return 1
     local waited=0
@@ -2516,6 +2624,7 @@ Optionen:
   --dry-run                 Bis inkl. Backup laufen, dann ohne Aenderung beenden
   --rollback                Rollback-Dialog starten
   --postgres-umzug          Datenbank von PostgreSQL 16 auf 18 umziehen (mit Backup)
+  --postgres-image          PostgreSQL-Image derselben Hauptversion tauschen (mit Backup)
   --erwarte-sha256=<hex>    Tarball muss diese sha256-Summe haben, sonst Abbruch
   --install-dir=<pfad>      Abweichendes Installationsverzeichnis. Ohne diese
                             Angabe wird die Installation gesucht: Skript-
@@ -2547,6 +2656,7 @@ parse_args() {
             --dry-run)           OPT_DRY_RUN=true ;;
             --rollback)          OPT_ROLLBACK=true ;;
             --postgres-umzug)    OPT_POSTGRES_UMZUG=true ;;
+            --postgres-image)    OPT_POSTGRES_IMAGE=true ;;
             --erwarte-sha256=*)  OPT_SHA256="${1#*=}" ;;
             --install-dir=*)     OPT_INSTALL_DIR="${1#*=}" ;;
             --quelle=*)          OPT_FEED_BASE_URL="${1#*=}" ;;
@@ -3395,7 +3505,7 @@ release_persistente_besitzer_wiederherstellen() { # $1=Ziel $2=uid:gid
     [[ $(id -u) -eq 0 ]] || return 0
     # Diese Dateien werden nicht aus dem Stage übernommen. Der root-Agent kann
     # sie trotzdem ersetzen; data/ und backups bleiben ausdrücklich außen vor.
-    for relativ in .env .postbuch-vertrauen .postbuch-update-agent.log restart.sh caddy/Caddyfile; do
+    for relativ in .env .postbuch-vertrauen .postbuch-update-agent.log restart.sh caddy/Caddyfile docker-compose.override.yml; do
         [[ -e "$ziel/$relativ" || -L "$ziel/$relativ" ]] || continue
         chown -h "$besitzer" "$ziel/$relativ" || return 1
     done
@@ -3414,11 +3524,14 @@ release_stage_promoten() {   # $1 = Stage, $2 = Installationsverzeichnis
         chmod 600 "$caddy_tmp"
     fi
 
+    # Eine docker-compose.override.yml gehört dem Betreiber, wie .env und
+    # Caddyfile. Sie wirkt auf jeden Compose-Aufruf, auch auf die des Updates.
     if command -v rsync >/dev/null 2>&1; then
         if ! rsync -a --delete \
           --exclude='/.env' --exclude='/data/' --exclude='/backups/' \
           --exclude='/.postbuch-vertrauen' --exclude='/.postbuch-update-agent.log' \
-          --exclude='/caddy/Caddyfile' "$stage/" "$ziel/"; then
+          --exclude='/caddy/Caddyfile' --exclude='/docker-compose.override.yml' \
+          "$stage/" "$ziel/"; then
             rm -f "$env_tmp" "$caddy_tmp"
             return 1
         fi
@@ -3429,7 +3542,7 @@ release_stage_promoten() {   # $1 = Stage, $2 = Installationsverzeichnis
         for pfad in "$ziel"/* "$ziel"/.[!.]*; do
             [[ -e "$pfad" ]] || continue
             basis=$(basename "$pfad")
-            case "$basis" in .env|data|backups|.postbuch-vertrauen|.postbuch-update-agent.log) continue ;; esac
+            case "$basis" in .env|data|backups|.postbuch-vertrauen|.postbuch-update-agent.log|docker-compose.override.yml) continue ;; esac
             safe_rm_rf "$pfad" || { rm -f "$env_tmp" "$caddy_tmp"; return 1; }
         done
         cp -a "$stage/." "$ziel/" || { rm -f "$env_tmp" "$caddy_tmp"; return 1; }
@@ -4013,6 +4126,11 @@ fi
 
 if $OPT_POSTGRES_UMZUG; then
     postgres_umzug_modus
+    exit $?
+fi
+
+if $OPT_POSTGRES_IMAGE; then
+    postgres_image_modus
     exit $?
 fi
 

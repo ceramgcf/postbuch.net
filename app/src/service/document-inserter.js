@@ -19,6 +19,11 @@ import { zieheNachBehandelterPerson } from './ablage-sollort.js';
 
 const laufendeErstattungsbescheide = new Map();
 
+/** Läuft der Fachjob dieses Bescheids noch (Abgleich, Kürzungszerlegung, Ablage)? */
+export function laeuftErstattungsbescheid(postid) {
+  return laufendeErstattungsbescheide.has(postid);
+}
+
 // ── Arztrechnung + Einzelpositionen ──────────────────────────────────────────
 
 async function insertArztrechnung(postid, data, client) {
@@ -77,8 +82,8 @@ async function insertArztrechnung(postid, data, client) {
     await client.query(
       `INSERT INTO arztrechnung_einzelposition
          (postid, subid, behandlungs_datum, goa_goz_gebueh_pzn,
-          leistung, begruendung, faktor, betrag)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          leistung, begruendung, faktor, betrag, zusatzangaben)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
       [
         postid,
         i + 1,
@@ -90,8 +95,20 @@ async function insertArztrechnung(postid, data, client) {
         // diese Information; nur ein ausdrücklich vorhandener Wert wird gespeichert.
         toNumeric(ep.faktor),
         toNumeric(ep.betrag),
+        toStr(ep.zusatzangaben),
       ]
     );
+    const belegzeilen = Array.isArray(ep.belegzeilen) ? ep.belegzeilen : [];
+    for (let j = 0; j < belegzeilen.length; j++) {
+      const bz = belegzeilen[j];
+      await client.query(
+        `INSERT INTO arztrechnung_belegzeile
+           (postid, pos_subid, zeile, beleg, nummer, leistung, menge, einzelpreis, betrag)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [postid, i + 1, j + 1, toStr(bz.beleg), toStr(bz.nummer), toStr(bz.leistung),
+          toNumeric(bz.menge), toNumeric(bz.einzelpreis), toNumeric(bz.betrag)]
+      );
+    }
   }
 }
 

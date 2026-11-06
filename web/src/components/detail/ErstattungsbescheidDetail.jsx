@@ -6,24 +6,36 @@ import { KuerzungEditor } from './KuerzungEditor';
 import { useDarstellung } from '@/hooks/useDarstellung';
 import { ListenZeile } from '@/components/listen/ListenZeile';
 
-export function ErstattungsbescheidDetail({ data, ausstehend }) {
+/** Laufender Hintergrundabgleich eines Bescheids; die Ansicht lädt bis zum Ende selbst nach. */
+export function AbgleichLaeuftHinweis({ children }) {
+  return (
+    <Card className="border-sky-500/30 bg-sky-500/5">
+      <CardContent className="flex items-center gap-3 py-4 text-sm">
+        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-sky-400" />
+        <span className="text-foreground/90">{children}</span>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function ErstattungsbescheidDetail({ data, ausstehend, kuerzungenAusstehend }) {
   const { istMobil } = useDarstellung();
   if (!data) {
     if (!ausstehend) return null;
     return (
-      <Card className="border-sky-500/30 bg-sky-500/5">
-        <CardContent className="flex items-center gap-3 py-4 text-sm">
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin text-sky-400" />
-          <span className="text-foreground/90">
-            Erstattungsbescheid wird noch abgeglichen – Positionen und Zuordnung erscheinen hier automatisch, sobald der Abgleich fertig ist.
-          </span>
-        </CardContent>
-      </Card>
+      <AbgleichLaeuftHinweis>
+        Erstattungsbescheid wird noch abgeglichen – Positionen und Zuordnung erscheinen hier automatisch, sobald der Abgleich fertig ist.
+      </AbgleichLaeuftHinweis>
     );
   }
 
   return (
     <div className="space-y-4">
+      {kuerzungenAusstehend && (
+        <AbgleichLaeuftHinweis>
+          Kürzungen werden noch den Rechnungspositionen zugeordnet – das kann bei langen Rechnungen einige Minuten dauern. Sie erscheinen hier automatisch.
+        </AbgleichLaeuftHinweis>
+      )}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Erstattungsbescheid</CardTitle>

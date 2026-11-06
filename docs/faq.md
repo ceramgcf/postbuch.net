@@ -176,6 +176,35 @@ Ja, über den eingebauten MCP-Server. Damit greifen Claude, ChatGPT und andere
 Werkzeuge lesend auf den Bestand zu, mit einem widerrufbaren Token. Siehe
 [MCP-Zugriff](mcp.md).
 
+## Hilfe und Kontakt
+
+**Wo bekomme ich Hilfe, wenn ich nicht weiterkomme?**
+Zuerst in dieser Hilfe: Die [Häufigen Fehlerbilder](betrieb-troubleshooting.md#häufige-fehlerbilder)
+decken die typischen Stolpersteine ab, und der Assistent durchsucht die Hilfe
+auf Nachfrage selbst. Fragen zu Installation, Einrichtung und Bedienung sowie
+Ideen gehören in die
+[GitHub-Discussions](https://github.com/ceramgcf/postbuch.net/discussions)
+des Projekts.
+
+**Wo melde ich einen Fehler?**
+Als [Issue auf GitHub](https://github.com/ceramgcf/postbuch.net/issues). Hilfreich
+sind die postbuch.net-Version (steht oben auf der Seite
+![Hilfe-Symbol](icons/book-open.svg) **Hilfe**), die Schritte bis zum Fehler und
+die passenden Zeilen aus den Logs. Persönliche Daten, Dokumentinhalte und
+Zugangsdaten gehören nicht hinein – Issues sind öffentlich. Wie man an die Logs
+kommt, steht unter [Wo man nachsieht](betrieb-troubleshooting.md#wo-man-nachsieht).
+
+**Und wenn es eine Sicherheitslücke ist?**
+Dann bitte **kein** öffentliches Issue, sondern eine vertrauliche Meldung über
+[„Report a vulnerability“](https://github.com/ceramgcf/postbuch.net/security/advisories/new)
+im Reiter **Security** des Repositorys. Die Meldung sehen nur du und der
+Entwickler.
+
+**Gibt es Support?**
+Nicht im kommerziellen Sinn. postbuch.net ist ein Hobbyprojekt ohne Garantie
+und ohne zugesagte Antwortzeiten. Issues und Discussions werden gelesen und
+nach Möglichkeit beantwortet.
+
 ## Auf lange Sicht
 
 **Was ist, wenn ich aufhöre?**

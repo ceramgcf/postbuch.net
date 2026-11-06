@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "stand": "2026-10-17",
+  "stand": "2026-10-26",
   "hinweis": "Kuratierte Empfehlungen des postbuch.net-Entwicklerteams. Die Reihenfolge je Klasse ist der Rang; postbuch.net nimmt den ersten Kandidaten, auf den diese Instanz nachweislich Zugriff hat. Preise in USD je 1 Million Token.",
   "klassen": {
     "analyse": [
@@ -253,6 +253,44 @@
         "preisOut": 0.5,
         "preisCacheWrite": 0.125,
         "preisCacheRead": 0.01,
+        "waehrung": "USD",
+        "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
+      },
+      {
+        "providerId": "mistral",
+        "providerTyp": "openai-compatible",
+        "model": "mistral-large-4",
+        "label": "Mistral Large 4",
+        "preisIn": 1.36,
+        "preisOut": 4.18,
+        "preisCacheWrite": 1.36,
+        "preisCacheRead": 0.14,
+        "waehrung": "USD",
+        "notiz": "Alternative mit Inferenz in der EU"
+      }
+    ],
+    "nachlese": [
+      {
+        "providerId": "openai",
+        "providerTyp": "openai",
+        "model": "gpt-6.1-sol",
+        "label": "GPT-6.1 Sol",
+        "preisIn": 2.0,
+        "preisOut": 10.0,
+        "preisCacheWrite": 2.5,
+        "preisCacheRead": 0.1,
+        "waehrung": "USD",
+        "notiz": "Liest nach, wenn eine Plausibilitaetspruefung scheitert"
+      },
+      {
+        "providerId": "anthropic",
+        "providerTyp": "anthropic",
+        "model": "claude-opus-5-5",
+        "label": "Claude Opus 5.5",
+        "preisIn": 4.0,
+        "preisOut": 20.0,
+        "preisCacheWrite": 5.0,
+        "preisCacheRead": 0.2,
         "waehrung": "USD",
         "notiz": "Alternative bei fehlendem OpenAI-Zugriff"
       },

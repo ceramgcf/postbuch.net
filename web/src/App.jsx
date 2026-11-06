@@ -23,6 +23,7 @@ import PeriodenPage from '@/pages/PeriodenPage';
 import HandwerkerPage from '@/pages/HandwerkerPage';
 import GesundheitskostenPage from '@/pages/GesundheitskostenPage';
 import LogsPage from '@/pages/LogsPage';
+import FotoImportPage from '@/pages/FotoImportPage';
 import SaldenPage from '@/pages/SaldenPage';
 import SaldoDetailPage from '@/pages/SaldoDetailPage';
 import WiedervorlagenPage from '@/pages/WiedervorlagenPage';
@@ -181,6 +182,7 @@ export default function App() {
           <Route path="analyse/salden/:id" element={<SaldoDetailPage />} />
           <Route path="analyse/wiedervorlagen" element={<WiedervorlagenPage />} />
           <Route path="logs" element={<LogsPage />} />
+          <Route path="foto-import" element={<FotoImportPage />} />
           {/* Anwenderdokumentation aus docs/ – kommt aus der eigenen Instanz,
               braucht kein Internet. */}
           <Route path="hilfe" element={<HilfePage />} />

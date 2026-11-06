@@ -466,6 +466,18 @@ export const api = {
     }),
     logout: () => request('/auth/logout', { method: 'POST' }),
     check: () => request('/auth/check'),
+    // Zweiter Schritt der Anmeldung bzw. Pflicht-Einrichtung währenddessen.
+    zweiterFaktor: (code) => request('/auth/login/zweiter-faktor', { method: 'POST', body: JSON.stringify({ code }) }),
+    loginEinrichten: () => request('/auth/login/einrichten', { method: 'POST' }),
+    loginBestaetigen: (code) => request('/auth/login/bestaetigen', { method: 'POST', body: JSON.stringify({ code }) }),
+  },
+  zweiterFaktor: {
+    status: () => request('/auth/zweiter-faktor'),
+    einrichten: (code) => request('/auth/zweiter-faktor/einrichten', { method: 'POST', body: JSON.stringify({ code }) }),
+    bestaetigen: (code) => request('/auth/zweiter-faktor/bestaetigen', { method: 'POST', body: JSON.stringify({ code }) }),
+    abschalten: (passwort, code) => request('/auth/zweiter-faktor/abschalten', { method: 'POST', body: JSON.stringify({ passwort, code }) }),
+    wiederherstellungscodes: (code) => request('/auth/zweiter-faktor/wiederherstellungscodes', { method: 'POST', body: JSON.stringify({ code }) }),
+    pflicht: (an) => request('/settings/zweiter-faktor-pflicht', { method: 'PUT', body: JSON.stringify({ an }) }),
   },
   logs: {
     list: (params) => {
@@ -524,6 +536,7 @@ export const api = {
     delete: (id) => request(`/menschen/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     loeschVorschau: (id) => request(`/menschen/${encodeURIComponent(id)}/loesch-vorschau`),
     loeschen: (id, data) => request(`/menschen/${encodeURIComponent(id)}/loeschen`, { method: 'POST', body: JSON.stringify(data) }),
+    zweiterFaktorZuruecksetzen: (id) => request(`/menschen/${encodeURIComponent(id)}/zweiter-faktor-zuruecksetzen`, { method: 'POST' }),
   },
   dev: {
     status: () => request('/dev/status'),

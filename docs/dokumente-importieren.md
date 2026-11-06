@@ -4,7 +4,8 @@ postbuch.net nimmt **PDF-Dateien** und **Papier** entgegen – sonst nichts.
 Papier wird dabei zuerst zu einer PDF: gescannt oder mit dem Handy
 abfotografiert.
 
-Word-Dateien, Bilder, Tabellen oder E-Mails werden nicht angenommen. Grund ist
+Word-Dateien, Tabellen oder E-Mails werden nicht angenommen, Fotos eines Blatts
+nur über den [Kamerascan](#fotos-importieren), der daraus eine PDF macht. Grund ist
 kein fehlendes Format, sondern der Anspruch an das Ergebnis: Die KI-Analyse, die
 Dateiablage in der Cloud, die Seitenansicht, der Etikettendruck und jeder spätere
 Export arbeiten mit einem einzigen, seitengetreuen Format. Wandle solche Dateien
@@ -27,10 +28,10 @@ Dieselbe Übersicht zeigt die App selbst unter ![Import-Symbol](icons/upload.svg
 den aufgelösten Ordnerpfaden deiner Instanz. Direkt nach dem
 Einrichtungsassistenten erscheint sie einmal von selbst.
 
-![Import-Seite mit Scanner, PDF-Upload und Dokumentenübergabe](screenshots/import-uebersicht.jpg)
+![Import-Seite mit Scanner, Datei-Upload, Kamerascan und Dokumentenübergabe](screenshots/import-uebersicht.jpg)
 
-_Die Import-Seite mit Scanner-Einstellungen, PDF-Sammlung und bereits
-ausgewählten Dateien._
+_Die Import-Seite am Rechner mit Scanner-Einstellungen, Datei-Upload mit bereits
+ausgewählten Dateien und der Karte für den Kamerascan._
 
 ## Weg 1: Überwachter Cloud-Ordner
 
@@ -65,8 +66,9 @@ In der Mobilansicht öffnet der Knopf
 Vollbild, von jeder Seite aus. Daneben gibt es auf der Seite
 ![Import-Symbol](icons/upload.svg) `Importieren` die Karte
 **Mit Kamera scannen → Kamera öffnen**; sie steht auf Touch-Geräten ganz oben,
-am Rechner unter dem Datei-Upload. Beim ersten Mal fragt der Browser, ob postbuch.net die
-Kamera benutzen darf.
+am Rechner unter dem Datei-Upload. Vorhandene Fotos kommen in denselben Scan,
+siehe [Fotos importieren](#fotos-importieren). Beim ersten Mal fragt der
+Browser, ob postbuch.net die Kamera benutzen darf.
 
 1. **Blatt ins Bild halten.** postbuch.net sucht die Blattränder und legt einen
    Rahmen um das Blatt. Erkannt wird ein Blatt ab etwa einem Achtel der
@@ -79,7 +81,9 @@ Kamera benutzen darf.
    Auslöser zeigt, wie weit es ist; ein Tipp ins Bild bricht eine anstehende
    Auslösung ab. Bei **Manuell** tippst du selbst auf den Auslöser. Nach einer
    Aufnahme wartet die Automatik, bis ein neues Blatt liegt, damit dieselbe
-   Seite nicht zweimal im Dokument landet.
+   Seite nicht zweimal im Dokument landet. Unten links holt
+   ![Galerie-Symbol](icons/images.svg) ein oder mehrere Fotos aus der Galerie
+   in den Scan.
 3. **Vorschau prüfen.** Nach jeder Aufnahme erscheint die Seite entzerrt,
    zugeschnitten und mit verbessertem Kontrast. Das Foto zeigt dabei genau den
    Ausschnitt der Live-Ansicht, auch wenn die Kamera selbst mehr aufnimmt.
@@ -90,11 +94,16 @@ Kamera benutzen darf.
    ![Entfernen-Symbol](icons/trash-2.svg) **Entfernen**, darunter
    ![Plus-Symbol](icons/plus.svg) **Seite hinzufügen** und
    ![Haken-Symbol](icons/check.svg) **Hochladen**. Die Leiste mit den Miniaturen
-   führt zu jeder bisherigen Seite zurück; **Fertig** neben dem Auslöser springt
-   ohne weitere Aufnahme in die Vorschau.
+   führt zu jeder bisherigen Seite zurück; im Livebild steht an ihrem Ende
+   **Fertig**, das ohne weitere Aufnahme in die Vorschau springt.
 4. **Hochladen.** Alle Seiten werden zu **einer** PDF und gehen wie eine
    hochgeladene Datei in die Pipeline. Hochgeladen wird erst die fertige PDF;
-   die Fotos selbst verlassen das Gerät nicht.
+   die Fotos selbst verlassen das Gerät nicht. Ab zwei Seiten sitzt rechts am
+   Knopf ein ![Pfeil-Symbol](icons/chevron-down.svg) Pfeil: **Jede Seite als
+   eigenes Dokument** lädt jede Seite als eigene PDF hoch, etwa für einen
+   Stapel einzelner Belege. Bricht das Hochladen dabei ab, fallen die schon
+   hochgeladenen Seiten aus dem Scan; die übrigen bleiben für einen neuen
+   Versuch stehen.
 
 Oben rechts wählst du **Farbe**, **Grau** oder **SW** (Schwarzweiß). Die Wahl
 gilt für alle Seiten des Scans und lässt sich in der Vorschau noch ändern; die
@@ -114,11 +123,24 @@ sodass du gleich siehst, welches Objektiv das schärfere Bild liefert. Die
 gerade laufende Kamera ist mit **Aktiv** markiert. Solange die Liste offen
 ist, löst die Automatik nicht aus. Die Wahl gilt nur für diesen Browser.
 
+**Seiten ordnen:** Ein Tipp auf ![Raster-Symbol](icons/layout-grid.svg)
+**Seite 2 von 5** oben öffnet alle Seiten als Raster. Eine Seite gedrückt
+halten (mit der Maus: einfach ziehen) und an die neue Stelle ziehen ändert die
+Reihenfolge. Ein Tipp auf eine Seite wählt sie aus; ausgewählte Seiten rücken
+mit ![Links-Symbol](icons/arrow-left.svg) **Nach vorn** bzw.
+![Rechts-Symbol](icons/arrow-right.svg) **Nach hinten** um einen Platz oder
+verschwinden mit **Seiten entfernen**. Erst **Fertig** übernimmt die
+Änderungen; ![Schließen-Symbol](icons/x.svg) oben links bzw. der Zurück-Knopf
+des Geräts bricht ab und lässt die Seiten, wie sie waren.
+
 **Ecken anpassen:** Liegt der Rahmen daneben oder wurde kein Blatt erkannt,
 zeigt **Ecken** das Foto mit vier Eckpunkten. Beim Ziehen einer Ecke erscheint
 oben eine Lupe, die den Bereich unter dem Finger vergrößert. **Zurücksetzen**
 stellt den erkannten Rahmen wieder her, **Ganzes Bild** nimmt das ganze Foto,
-**Übernehmen** entzerrt die Seite neu.
+**Übernehmen** entzerrt die Seite neu. ![Schließen-Symbol](icons/x.svg) oben
+links bzw. der Zurück-Knopf des Geräts bricht ab, ohne die Ecken zu ändern.
+Wurde kein Blatt erkannt, übernimmt **Ganzes Bild übernehmen** im Hinweis
+oben das Foto mit einem Tipp unverändert.
 
 Jede Seite wird im PDF auf DIN-A4-Breite gesetzt und mit höchstens
 **200 dpi** gespeichert. Ein A4-Blatt hat damit 1654 × 2339 Bildpunkte, was für
@@ -147,9 +169,60 @@ verschlüsselte Verbindung (`https://`), über eine unverschlüsselte Adresse im
 Heimnetz erscheint die Karte nicht. Erprobt ist der Kamerascan mit Chrome unter
 Android; auf iPhone und iPad ist er ungetestet.
 
-Der Zurück-Knopf des Geräts bzw. das ![Schließen-Symbol](icons/x.svg) oben
-links beendet den Scan. Sind schon Seiten aufgenommen, fragt postbuch.net
-vorher, ob sie verworfen werden sollen.
+**Scan unterbrechen und fortsetzen:** Der Zurück-Knopf des Geräts bzw. das
+![Schließen-Symbol](icons/x.svg) oben links beendet den Scan. Sind schon
+Seiten aufgenommen, fragt postbuch.net nach: **Für später behalten** legt die
+Seiten auf diesem Gerät ab, **Verwerfen** löscht sie. Ein behaltener Scan
+übersteht auch das Schließen der App. Solange er offen ist, trägt der Knopf
+**Scannen** die Seitenzahl, und auf der Importseite steht oben
+**Offener Scan** mit **Fortsetzen** und **Verwerfen**. Nach dem Hochladen ist
+der Scan erledigt; ein nicht fortgesetzter Scan verfällt nach 24 Stunden. Die
+Seiten liegen nur im Browser dieses Geräts, ein anderes Gerät sieht sie nicht.
+
+### Fotos importieren
+
+Ein schon vorhandenes Foto eines Blatts – aus der Galerie, aus einem Chat oder
+vom Rechner – bekommt dieselbe Aufbereitung wie eine Aufnahme mit der Kamera
+und landet im selben Scan. Es gibt drei Wege dorthin:
+
+- **Teilen-Menü:** Ist die App [installiert](mobil-und-pwa.md#als-app-installieren-pwa),
+  ein oder mehrere Fotos (JPEG, PNG oder WebP) an postbuch.net teilen – unter
+  Android, unter Windows mit Edge, siehe
+  [PDFs über das Teilen-Menü übergeben](#pdfs-über-das-teilen-menü-übergeben).
+- **Galerie-Knopf:** ![Galerie-Symbol](icons/images.svg) unten links im
+  Livebild des Kamerascans öffnet die Fotoauswahl des Geräts.
+- **Datei-Upload:** Fotos, die unter ![Import-Symbol](icons/upload.svg)
+  `Importieren` ausgewählt oder auf das Feld gezogen werden, öffnen den Scan,
+  statt direkt in die Pipeline zu gehen – auch am Rechner, ganz ohne Kamera.
+  PDFs aus derselben Auswahl gehen den gewohnten Weg.
+
+Jedes Foto wird eine Seite. postbuch.net sucht darauf das Blatt und schneidet,
+entzerrt und verbessert es genauso wie beim Kamerascan, auch **Farbe**,
+**Grau** und **SW** gelten gleich. Ist ein Blatt erkannt, erscheint die Seite
+ohne weiteren Schritt fertig zugeschnitten in der Vorschau. Findet postbuch.net
+auf einem Foto kein Blatt, öffnet sich für diese Seite von selbst
+**Ecken anpassen**: Die vier Ecken lassen sich frei auf die Blattecken ziehen,
+oder **Ganzes Bild übernehmen** im Hinweis oben nimmt das Foto unverändert mit
+seinem ganzen Ausschnitt.
+
+Fotos und Kameraaufnahmen lassen sich in einem Scan mischen. Bei einer Seite
+aus einem Foto steht in der Vorschau an der Stelle von **Neu aufnehmen**
+![Ganzes-Bild-Symbol](icons/maximize.svg) **Ganzes Bild**.
+![Plus-Symbol](icons/plus.svg) **Seite hinzufügen** führt ins Livebild, auf
+einem Gerät ohne Kamera direkt in die Fotoauswahl.
+
+**Nacheinander teilen:** Ist schon ein Scan offen, hängen neu geteilte Fotos
+hinten an, statt einen neuen zu beginnen. So lassen sich Fotos aus
+verschiedenen Apps nacheinander zu einem Dokument sammeln: Foto teilen,
+zurück in die Galerie, nächstes Foto teilen. Ein Hinweis meldet jeweils, wie
+viele Seiten der Scan jetzt hat; **Rückgängig** nimmt die gerade angehängten
+Fotos wieder heraus. Wurde der offene Scan länger als 30 Minuten nicht
+angefasst, fragt postbuch.net vorher: **Hinzufügen** hängt an,
+**Neuer Scan** verwirft den alten und beginnt mit den neuen Fotos.
+
+Nach dem Hochladen folgt postbuch.net beim Teilen immer
+[automatisch](#automatisch-folgen), sonst wie beim Kamerascan, wenn „Scannen"
+eingeschaltet ist. Die Fotos selbst verlassen das Gerät nicht.
 
 ### Mit der Scan-Funktion der Cloud-App
 
@@ -164,7 +237,8 @@ Scan über denselben überwachten Ordner wie
 ## Weg 3: Datei-Upload
 
 Auf der Seite ![Import-Symbol](icons/upload.svg) `Importieren` per Drag & Drop
-oder Dateiauswahl. Zwei Modi:
+oder Dateiauswahl. Fotos darunter öffnen den Scan, siehe
+[Fotos importieren](#fotos-importieren). Für PDFs gibt es zwei Modi:
 
 ![Batch-Symbol](icons/inbox.svg) **Batch** – Jede Datei wird **separat**
 verarbeitet und bekommt eine eigene Postnummer. Das ist der Weg für einen Stapel
@@ -179,17 +253,21 @@ gescanntes Schreiben.
 
 ### PDFs über das Teilen-Menü übergeben
 
-Ist postbuch.net auf einem Android-Gerät
-[als App installiert](mobil-und-pwa.md#als-app-installieren-pwa), steht sie im
-**Teilen-Menü** des Geräts zur Auswahl. Eine dort geteilte PDF – etwa aus der
+Ist postbuch.net [als App installiert](mobil-und-pwa.md#als-app-installieren-pwa),
+steht sie unter Android und unter Windows im **Teilen-Menü** des Geräts zur
+Auswahl – unter Windows nur, wenn die App mit **Edge** installiert wurde.
+Eine dort geteilte PDF – etwa aus der
 Mail-App, dem Dateimanager oder dem Download-Ordner – geht **ohne weiteren
 Klick** in die Pipeline, genau wie eine per Dateiauswahl gewählte PDF im Modus
 **Batch**. postbuch.net
 [folgt dabei immer automatisch](#automatisch-folgen): Es öffnet
 ![Logs-Symbol](icons/scroll-text.svg) **Logs → Jobs** und nach erfolgreicher
 Verarbeitung das neue Dokument. Mehrere geteilte PDFs werden einzeln
-verarbeitet. Einen Hinweis für die KI gibt es auf diesem Weg nicht. Andere
-Dateitypen bietet das Teilen-Menü für postbuch.net nicht an.
+verarbeitet. Einen Hinweis für die KI gibt es auf diesem Weg nicht. Geteilte
+Fotos öffnen stattdessen den [Scan](#fotos-importieren) bzw. hängen an einen
+offenen an; werden Fotos und PDFs zusammen geteilt, gehen die PDFs sofort in
+die Pipeline, und der Scan mit den Fotos liegt darüber. Andere Dateitypen
+bietet das Teilen-Menü für postbuch.net nicht an.
 
 Ist postbuch.net beim Teilen nicht erreichbar, erscheint eine eigene
 Fehlerseite: Der Server hat nicht geantwortet, die PDF wurde **nicht
@@ -204,8 +282,16 @@ vollständig eingerichtet: postbuch.net einmal direkt öffnen und erneut teilen.
 
 > [!NOTE]
 >
-> Getestet ist der Weg nur unter Android. Auf iPhone und iPad bietet Safari
-> installierten Web-Apps kein Teilen-Ziel an.
+> Das Teilen-Ziel hängt vom Browser ab, mit dem die App installiert wurde:
+>
+> - **Android:** erprobt mit Chrome.
+> - **Windows:** nur Edge. Eine mit Chrome installierte App erscheint nicht im
+>   Teilen-Dialog.
+> - **iPhone und iPad:** Safari bietet installierten Web-Apps kein Teilen-Ziel
+>   an.
+>
+> Wo das Teilen-Menü fehlt, führen die Dateiauswahl und Drag & Drop zum selben
+> Ergebnis.
 
 ## Weg 4: Scannen über „Importieren"
 
@@ -385,9 +471,10 @@ Wann postbuch.net folgt:
 
 | Weg                                                                  | Folgt                                                                   |
 | -------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| [Teilen-Menü](#pdfs-über-das-teilen-menü-übergeben)                  | immer                                                                   |
+| [Teilen-Menü](#pdfs-über-das-teilen-menü-übergeben)                  | immer, bei Fotos nach dem Hochladen                                     |
 | [Datei-Upload](#weg-3-datei-upload)                                  | nach dem Hochladen, wenn eingeschaltet                                  |
 | [Mit der Kamera in postbuch.net](#mit-der-kamera-in-postbuchnet)     | nach dem Hochladen, wenn „Scannen" eingeschaltet ist                    |
+| [Fotos importieren](#fotos-importieren) per Galerie oder Upload      | nach dem Hochladen, wenn „Scannen" eingeschaltet ist                    |
 | [Scannen über „Importieren"](#weg-4-scannen-über-importieren)        | sobald der Scan in der Pipeline angekommen ist, wenn eingeschaltet      |
 | Überwachter Ordner, Scan-Webhook, Scan per Knopf am Gerät            | nie – dabei schaut niemand auf die App                                  |
 

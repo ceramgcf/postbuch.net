@@ -114,11 +114,39 @@ function sdkThinkingOptions(policy) {
  * @param {Buffer[]} [opts.pdfs] - Optionale mehrere PDFs (z. B. Kostenträger-Profilierung)
  * @param {string} [opts.system] - Optionaler System-Prompt (String = Vollersatz)
  * @param {number} [opts.maxTokens] - Output-Token-Limit (via CLAUDE_CODE_MAX_OUTPUT_TOKENS)
+ * @param {object} [opts.jsonSchema] - Erzwungene Antwortstruktur (prompts/antwort-schemas.js)
  * @param {Buffer[]|null} [buildUserContent] - Reused Content-Builder aus llm.js
  * @param {string} oauthToken    - CLAUDE_CODE_OAUTH_TOKEN
  * @returns {Promise<{ text: string, usage: object }>}
  */
-export async function callClaudeSubscription(model, prompt, { pdf, pdfs, system, maxTokens } = {}, buildUserContent, oauthToken) {
+export async function callClaudeSubscription(model, prompt, opts = {}, buildUserContent, oauthToken) {
+  const { jsonSchema, ...ohne } = opts;
+  if (jsonSchema && !ohneSchema.has(model)) {
+    try {
+      return await aboAufruf(model, prompt, { ...ohne, jsonSchema }, buildUserContent, oauthToken);
+    } catch (err) {
+      // Scheitert nur die Strukturvorgabe, bleibt der Aufruf beim Abo, statt
+      // seitwärts auf die kostenpflichtige API zu gehen.
+      if (!err?.strukturFehler) throw err;
+      ohneSchema.add(model);
+      console.warn(`[claude-subscription] Strukturvorgabe für ${model} gescheitert, weiter ohne Schema: ${err.message}`);
+    }
+  }
+  return aboAufruf(model, prompt, ohne, buildUserContent, oauthToken);
+}
+
+// Modelle, bei denen die Strukturvorgabe im Abo gescheitert ist (bis zum Neustart).
+const ohneSchema = new Set();
+
+/**
+ * Erkennt Fehlermeldungen (inkl. stderr des Subprozesses), die nur an der
+ * Strukturvorgabe liegen, etwa die Schemaprüfung im strikten Modus.
+ */
+export function istStrukturMeldung(text) {
+  return /structured|output_?format|outputFormat|schema|strict mode|union type/i.test(String(text ?? ''));
+}
+
+async function aboAufruf(model, prompt, { pdf, pdfs, system, maxTokens, jsonSchema } = {}, buildUserContent, oauthToken) {
   if (!oauthToken) throw permanentError('Claude-Subscription-Token nicht konfiguriert (llm_claude_oauth_token)');
 
   // Lazy-Import: das SDK lädt einen plattformspezifischen Binary nach. Nur laden,
@@ -196,6 +224,9 @@ export async function callClaudeSubscription(model, prompt, { pdf, pdfs, system,
         // Modelle ohne Abschaltmöglichkeit (z. B. Opus 5.5) lehnen 'disabled' mit
         // 400 ab; dort läuft Thinking stattdessen mit minimalem effort.
         ...sdkThinkingOptions(thinkingAus(model)),
+        // Strukturvorgabe: Das SDK liefert das Ergebnis dann als Objekt in
+        // structured_output; auch mit maxTurns 1 und ohne eingebaute Tools.
+        ...(jsonSchema ? { outputFormat: { type: 'json_schema', schema: jsonSchema } } : {}),
         // Availability-Ebene wie in streamClaudeSubscriptionAgent(): OHNE tools:[]
         // schickt Claude Code die vollständigen Schemata seiner eingebauten Tools
         // mit — gemessen ~11.700 Input-Tokens pro Call, obwohl dieser Single-Turn-
@@ -217,7 +248,9 @@ export async function callClaudeSubscription(model, prompt, { pdf, pdfs, system,
         if (msg.type === 'result') result = msg;
       }
     } catch (err) {
-      throw new Error(withStderr(err.message || 'Claude-Subscription: Subprozess-Fehler'));
+      throw Object.assign(new Error(withStderr(err.message || 'Claude-Subscription: Subprozess-Fehler')), {
+        strukturFehler: Boolean(jsonSchema) && istStrukturMeldung(withStderr(String(err?.message))),
+      });
     }
     return result;
   });
@@ -227,15 +260,25 @@ export async function callClaudeSubscription(model, prompt, { pdf, pdfs, system,
   }
   if (resultMsg.is_error || resultMsg.subtype !== 'success') {
     const detail = Array.isArray(resultMsg.errors) ? resultMsg.errors.join('; ') : (resultMsg.subtype || 'unknown');
-    throw new Error(withStderr(`Claude-Subscription-Fehler: ${detail}`));
+    const meldung = withStderr(`Claude-Subscription-Fehler: ${detail}`);
+    throw Object.assign(new Error(meldung), {
+      strukturFehler: Boolean(jsonSchema) && (resultMsg.subtype === 'error_max_structured_output_retries'
+        || istStrukturMeldung(meldung)),
+    });
   }
-  if (typeof resultMsg.result !== 'string') {
+  const strukturiert = jsonSchema && resultMsg.structured_output != null;
+  if (jsonSchema && !strukturiert) {
+    throw Object.assign(new Error('Claude-Subscription: keine strukturierte Antwort trotz Strukturvorgabe'), { strukturFehler: true });
+  }
+  if (!strukturiert && typeof resultMsg.result !== 'string') {
     throw new Error('Claude-Subscription: unerwartetes result-Format');
   }
 
   const u = resultMsg.usage || {};
   return {
-    text: resultMsg.result,
+    // Strukturierte Antworten gehen als JSON-Text weiter: Alle Aufrufer parsen
+    // die Antwort ohnehin mit parseJsonFromText().
+    text: strukturiert ? JSON.stringify(resultMsg.structured_output) : resultMsg.result,
     // Vollständige Usage-Info des SDK durchreichen (Input/Output + Cache). Beim Abo
     // wird zwar nichts pro Token abgerechnet (Kosten = 0, siehe callModel), aber die
     // Token-Werte sind echte Nutzungsdaten des Claude-Code-Clients (der intern sehr

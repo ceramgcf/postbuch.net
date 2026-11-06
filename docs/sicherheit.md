@@ -109,6 +109,80 @@ alten Admin-Sitzungen sind ungültig.
 - Die Mindestlänge für Passwörter beträgt sechs Zeichen. Das ist eine untere
   Schranke der Software, keine Empfehlung.
 
+### Zwei-Faktor-Anmeldung
+
+Jeder Zugang – der Administrator eingeschlossen – kann zusätzlich zum Passwort
+einen zweiten Faktor einrichten: einen 6-stelligen Code aus einer
+Authenticator-App (TOTP nach RFC 6238, z. B. Microsoft Authenticator, Google
+Authenticator, Aegis, 2FAS oder ein Passwortmanager). Eingerichtet wird er unter
+![Einstellungen-Symbol](icons/settings.svg) **Einstellungen →
+![Persönlich-Symbol](icons/user-round.svg) Persönlich → Zwei-Faktor-Anmeldung**:
+QR-Code scannen oder den Schlüssel abtippen, den ersten Code eingeben, fertig.
+In der App heißt der Eintrag „postbuch.net – *Instanzname*“ mit dem
+Anmeldenamen darunter. Ein Logo übernehmen die Authenticator-Apps nicht aus dem
+QR-Code; in Aegis und 2FAS lässt sich ein Symbol von Hand zuweisen.
+
+- **Wiederherstellungscodes:** Beim Einrichten erzeugt postbuch.net zehn
+  Einmalcodes und zeigt sie genau einmal an. Jeder ersetzt einmalig den Code
+  aus der App, etwa nach dem Verlust des Telefons. Gespeichert wird nur ihr
+  Hashwert. Neue Codes gibt es jederzeit in derselben Karte; die alten werden
+  dabei ungültig.
+- **Ablauf beim Anmelden:** Nach dem Passwort fragt die Anmeldemaske den Code
+  ab. Dafür bleiben fünf Minuten, danach beginnt die Anmeldung von vorn. Jeder
+  Code gilt nur einmal, auch innerhalb seines 30-Sekunden-Fensters.
+- **Bremse:** Falsche Codes zählen zur oben beschriebenen Brute-Force-Bremse.
+  Zusätzlich sperrt jeder Zugang nach fünf falschen Codes für 15 Minuten,
+  unabhängig von der IP-Adresse.
+- **Ändern und Abschalten:** Ein neues Gerät einrichten oder neue
+  Wiederherstellungscodes erzeugen verlangt einen gültigen Code. Abschalten
+  verlangt Passwort und Code. Das Einrichten beendet alle anderen Sitzungen des
+  Zugangs.
+- **Für alle vorschreiben:** Der Administrator kann unter
+  ![Einstellungen-Symbol](icons/settings.svg) **Einstellungen →
+  ![Personen-Symbol](icons/users.svg) Personen & Zugänge** die
+  Zwei-Faktor-Anmeldung für alle Zugänge vorschreiben. Voraussetzung ist, dass
+  er selbst einen Faktor eingerichtet hat. Wer noch keinen hat, richtet ihn bei
+  der nächsten Anmeldung ein, bevor er weiterkommt. Laufende Sitzungen bleiben
+  bestehen. Solange die Pflicht gilt, lässt sich der Faktor nicht abschalten.
+- **Telefon verloren:** Mit einem Wiederherstellungscode anmelden und unter
+  **Persönlich** ein neues Gerät einrichten. Sind auch die Codes weg, setzt der
+  Administrator den Faktor in **Personen & Zugänge** mit **2FA zurücksetzen**
+  zurück. Das beendet zugleich alle Sitzungen und MCP-Token dieses Zugangs.
+  Personen mit eingerichtetem Faktor tragen dort das Badge **2FA**.
+- **Geheimnisse:** Die Schlüssel der Authenticator-Apps liegen verschlüsselt in
+  der Datenbank. Der dafür nötige Schlüssel gehört zu den
+  [Geheimnissen](#geheimnisse), die ein unverschlüsseltes Backup weglässt.
+  Wird ein solches Backup auf einer **anderen** Instanz eingespielt, nimmt sie
+  keine Codes aus der App mehr an; die Anmeldung gelingt dann nur mit einem
+  Wiederherstellungscode, danach den Faktor unter **Persönlich** neu
+  einrichten. Auf derselben Instanz und mit verschlüsseltem Backup ändert sich
+  nichts.
+- **Nicht erfasst:** Die Zwei-Faktor-Anmeldung schützt die Anmeldung an der
+  Oberfläche. [MCP-Token](#mcp-token) und Webhooks authentifizieren sich
+  weiterhin allein mit ihrem Token bzw. Geheimnis.
+
+#### Notschalter für den Administrator
+
+Hat der Administrator Telefon und Wiederherstellungscodes verloren, hilft der
+Zugang zum Server. In der `.env` die Zeile
+
+```bash
+POSTBUCH_TOTP_ADMIN_ZURUECKSETZEN=1
+```
+
+ergänzen und den App-Container neu erstellen
+(`docker compose up -d --force-recreate --no-deps app`). Beim Start entfernt
+postbuch.net den Faktor des Administrators und schreibt eine Warnung ins Log.
+Danach die Zeile wieder entfernen und den Container erneut neu erstellen –
+sonst wird der Faktor bei jedem Start erneut gelöscht. Gilt die Pflicht für
+alle, richtet der Administrator den Faktor bei der nächsten Anmeldung neu ein.
+
+> [!IMPORTANT]
+>
+> Wer die `.env` bearbeiten kann, kann damit den zweiten Faktor des
+> Administrators abschalten. Das ist gewollt: Der Serverzugang ist ohnehin der
+> Generalschlüssel der Instanz (siehe [Grenzen](#grenzen--was-postbuchnet-nicht-leistet)).
+
 ---
 
 ## Was von außen erreichbar ist
@@ -370,9 +444,13 @@ Diese Punkte sind bewusst gewählt, nicht übersehen:
   hat, hat Zugriff auf `.env`, Datenbank und alle Token – und damit auf die
   gesamte Dateiablage, nicht nur auf den postbuch-Ordner (siehe
   [Wie weit der Zugriff auf die Dateiablage reicht](#wie-weit-der-zugriff-auf-die-dateiablage-reicht)).
-- **Keine Zwei-Faktor-Authentifizierung.** Das Passwort ist der einzige Faktor;
-  auch deshalb wird dringend davon abgeraten, die Instanz aus dem Internet
-  erreichbar zu machen.
+- **Nicht für den offenen Betrieb im Internet gehärtet.** Auch mit
+  [Zwei-Faktor-Anmeldung](#zwei-faktor-anmeldung) wird dringend davon
+  abgeraten, die Instanz per Portfreigabe aus dem Internet erreichbar zu
+  machen; der Zugriff von unterwegs gehört hinter ein VPN.
+- **Keine Passkeys.** Der zweite Faktor ist ein Code aus einer
+  Authenticator-App; Passkeys bzw. Sicherheitsschlüssel (WebAuthn) werden nicht
+  unterstützt.
 
 ---
 

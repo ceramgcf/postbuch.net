@@ -15,10 +15,12 @@
 
 import pool from '../db.js';
 import { loadDynamicSettings } from '../config.js';
-import { callLLM, resolveKlassenModell, buildCostMap, calculateCost, parseJsonFromText } from '../lib/llm.js';
+import { callLLM, resolveKlassenModell, buildCostMap, calculateCost, parseJsonFromText, summeKosten } from '../lib/llm.js';
 import * as discord from '../lib/discord.js';
 import { retrieveDocument } from './document-retriever.js';
-import { buildEbParsePrompt, buildMatchKuerzungenPrompt } from '../prompts/erstattungsbescheid.js';
+import { buildEbParsePrompt } from '../prompts/erstattungsbescheid.js';
+import { BESCHEID_SCHEMA } from '../prompts/antwort-schemas.js';
+import { zerlegeKuerzungen } from './kuerzung-zerlegung.js';
 import { uiLog } from '../log.js';
 import { appLog } from '../app-log.js';
 import { sendPushToAllUsers } from '../lib/webpush.js';
@@ -228,9 +230,12 @@ export async function processErstattungsbescheid(postid, korrekturAnweisung = ''
     const costMap = buildCostMap(settings);
     const ebKlasse = EB_MODELLSTUFEN.has(modelTier) ? modelTier : 'mittel';
     const ebParseModel = resolveKlassenModell(ebKlasse, settings).model;
-    const llmResult = await callLLM(ebParseModel, ebParsePrompt, { pdf, maxTokens: 16384 }, settings, {
+    const llmResult = await callLLM(ebParseModel, ebParsePrompt, { pdf, jsonMode: true, jsonSchema: BESCHEID_SCHEMA }, settings, {
       kategorie: 'erstattungsbescheid', entity: 'postbuch', entityId: postid, correlationId: postid,
     });
+    if (llmResult.abgeschnitten) {
+      throw new Error('Bescheid-Auslesung am Ausgabelimit des Modells abgeschnitten');
+    }
     const ebData = parseJsonFromText(llmResult.text);
     const ebTokensIn  = llmResult.usage?.inputTokens  ?? null;
     const ebTokensOut = llmResult.usage?.outputTokens ?? null;
@@ -541,88 +546,93 @@ async function processKuerzungen(postid, epsWithKuerzungen, settings, korrekturA
     }
   }
 
-  // KI-Matching für Kürzungen mit zugeordneter Arztrechnung
+  // Zerlegung der Kürzungen mit zugeordneter Arztrechnung auf deren
+  // Einzelpositionen, je Rechnung ein Aufruf (service/kuerzung-zerlegung.js).
+  // Eine zerlegte Kürzung wird zu mehreren Zeilen; deren Summe ist der
+  // Kürzungsbetrag des Bescheids.
+  const zeilenJeKuerzung = new Map();
   if (kuerzungenForAi.length > 0) {
-    try {
-      // Arztrechnung-Einzelpositionen laden
-      const arzPostids = [...new Set(kuerzungenForAi.map(k => k.arz_postid))];
-      const arzEpsResult = await pool.query(
-        `SELECT postid, subid, behandlungs_datum, goa_goz_gebueh_pzn,
-                leistung, begruendung, faktor, betrag
-         FROM arztrechnung_einzelposition
-         WHERE postid = ANY($1)
-         ORDER BY postid, subid`,
-        [arzPostids]
-      );
-
-      // Gruppierte Kürzungen für KI
-      const groupedKuerzungen = {};
-      for (const k of kuerzungenForAi) {
-        const key = `${k.arz_postid}`;
-        if (!groupedKuerzungen[key]) groupedKuerzungen[key] = [];
-        groupedKuerzungen[key].push({
-          postid: k.postid,
-          eb_subid: k.eb_subid,
-          kuerzung_index: k.kuerzung_index,
-          kuerzungsbetrag: k.kuerzungsbetrag,
-          begruendung: k.begruendung,
-        });
+    const arzPostids = [...new Set(kuerzungenForAi.map(k => k.arz_postid))];
+    const arzEpsResult = await pool.query(
+      `SELECT postid, subid, behandlungs_datum, goa_goz_gebueh_pzn,
+              leistung, begruendung, faktor, betrag, zusatzangaben
+       FROM arztrechnung_einzelposition
+       WHERE postid = ANY($1)
+       ORDER BY postid, subid`,
+      [arzPostids]
+    );
+    const belegzeilen = await pool.query(
+      `SELECT postid, pos_subid, beleg, nummer, leistung, menge, einzelpreis, betrag
+         FROM arztrechnung_belegzeile WHERE postid = ANY($1) ORDER BY postid, pos_subid, zeile`,
+      [arzPostids]
+    );
+    for (const p of arzEpsResult.rows) {
+      p.belegzeilen = belegzeilen.rows.filter((z) => z.postid === p.postid && z.pos_subid === p.subid);
+    }
+    const arzKopf = await pool.query(
+      `SELECT postid, gesamtbetrag FROM arztrechnung WHERE postid = ANY($1)`, [arzPostids]);
+    const gesamt = { tokensIn: 0, tokensOut: 0, costUsd: 0 };
+    const modelle = new Set();
+    for (const arzPostid of arzPostids) {
+      const positionen = arzEpsResult.rows.filter(r => r.postid === arzPostid);
+      if (!positionen.length) continue;
+      const kuerzungen = kuerzungenForAi.filter(k => k.arz_postid === arzPostid);
+      try {
+        const z = await zerlegeKuerzungen(
+          kuerzungen,
+          positionen,
+          { arz_postid: arzPostid, rechnungsbetrag: arzKopf.rows.find(r => r.postid === arzPostid)?.gesamtbetrag ?? null },
+          settings,
+          { kategorie: 'kuerzung', entity: 'postbuch', entityId: postid, correlationId: postid },
+          korrekturAnweisung,
+        );
+        gesamt.tokensIn += z.tokensIn; gesamt.tokensOut += z.tokensOut; gesamt.costUsd = summeKosten(gesamt.costUsd, z.costUsd);
+        z.modelle.forEach(m => modelle.add(m));
+        for (const [key, anteile] of z.zeilen) zeilenJeKuerzung.set(`${arzPostid}:${key}`, anteile);
+        if (!z.zeilen.size) {
+          appLog('WARN', 'erstattungsbescheid',
+            `${postid}: Kürzungen zu ${arzPostid} nicht zerlegt, bleiben ohne Position gespeichert`,
+            { details: z.befunde.join(' '), entity: 'postbuch', entityId: postid });
+        }
+      } catch (err) {
+        // Nicht fatal: Die Kürzungen werden dann ohne Position gespeichert.
+        appLog('WARN', 'erstattungsbescheid', `Kürzungszerlegung ${arzPostid} fehlgeschlagen: ${err.message}`, { entity: 'postbuch', entityId: postid });
       }
-
-      // KI-Matching mit dem "Schwierig"-Modell aus Settings
-      const kuerzungModel = resolveKlassenModell('schwierig', settings).model;
-      const promptBase = buildMatchKuerzungenPrompt(groupedKuerzungen, arzEpsResult.rows);
-      const prompt = korrekturAnweisung
-        ? `### KORREKTUR-ANWEISUNGEN VOM BENUTZER ###\n${korrekturAnweisung}\n\n` + promptBase
-        : promptBase;
-      // Note: korrekturAnweisung is now a proper parameter (was previously a ReferenceError)
-      const matchResult = await callLLM(kuerzungModel, prompt, {}, settings, {
-        kategorie: 'kuerzung', entity: 'postbuch', entityId: postid, correlationId: postid,
-      });
-      const matchedKuerzungen = parseJsonFromText(matchResult.text, { erwartet: 'array' });
-      const kuerzungTokensIn  = matchResult.usage?.inputTokens  ?? null;
-      const kuerzungTokensOut = matchResult.usage?.outputTokens ?? null;
-      const kuerzungCostUsd   = calculateCost(kuerzungModel, kuerzungTokensIn, kuerzungTokensOut, buildCostMap(settings));
-
-      // Token-Daten in erstattungsbescheid speichern
+    }
+    if (modelle.size) {
       await pool.query(
         `UPDATE erstattungsbescheid
          SET ai_kuerzung_model = $2, ai_kuerzung_tokens_in = $3,
              ai_kuerzung_tokens_out = $4, ai_kuerzung_cost_usd = $5
          WHERE postid = $1`,
-        [postid, kuerzungModel, kuerzungTokensIn, kuerzungTokensOut, kuerzungCostUsd]
+        [postid, [...modelle].join(' → '), gesamt.tokensIn, gesamt.tokensOut, gesamt.costUsd]
       );
-
-      // Ergebnisse zuordnen
-      for (const mk of matchedKuerzungen) {
-        const orig = kuerzungenForAi.find(k =>
-          k.eb_subid === mk.eb_subid && k.kuerzung_index === mk.kuerzung_index
-        );
-        if (orig) {
-          orig.arz_subid = mk.arz_subid || null;
-        }
-      }
-
-      appLog('INFO', 'erstattungsbescheid', `Kürzungen-Matching: ${matchedKuerzungen.length} Kürzungen KI-zugeordnet`, { entity: 'postbuch', entityId: postid });
-    } catch (err) {
-      // KI-Matching-Fehler ist nicht fatal — Kürzungen werden ohne arz_subid gespeichert
-      appLog('WARN', 'erstattungsbescheid', `Kürzungen-KI-Matching fehlgeschlagen: ${err.message}`, { entity: 'postbuch', entityId: postid });
     }
   }
 
   // Alle Kürzungen in DB schreiben
   const allKuerzungen = [...kuerzungenForAi, ...kuerzungenDirect];
+  let zeilenAnzahl = 0;
   for (const k of allKuerzungen) {
-    await pool.query(
-      `INSERT INTO erstattungsbescheid_kuerzung
-         (postid, eb_subid, arz_postid, arz_subid, kuerzungsbetrag, begruendung)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [postid, k.eb_subid, k.arz_postid, k.arz_subid, k.kuerzungsbetrag, k.begruendung]
-    );
+    const anteile = k.arz_postid
+      ? zeilenJeKuerzung.get(`${k.arz_postid}:${k.eb_subid}/${k.kuerzung_index}`)
+      : null;
+    const zeilen = anteile?.length
+      ? anteile.map(a => ({ arz_subid: a.arz_subid, betrag: a.betrag, begruendung: a.begruendung }))
+      : [{ arz_subid: k.arz_subid, betrag: k.kuerzungsbetrag, begruendung: k.begruendung }];
+    for (const z of zeilen) {
+      await pool.query(
+        `INSERT INTO erstattungsbescheid_kuerzung
+           (postid, eb_subid, arz_postid, arz_subid, kuerzungsbetrag, begruendung)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [postid, k.eb_subid, k.arz_postid, z.arz_subid, z.betrag, z.begruendung]
+      );
+      zeilenAnzahl++;
+    }
   }
 
   if (allKuerzungen.length > 0) {
-    appLog('INFO', 'erstattungsbescheid', `${allKuerzungen.length} Kürzungen gespeichert`, { entity: 'postbuch', entityId: postid });
+    appLog('INFO', 'erstattungsbescheid', `${allKuerzungen.length} Kürzungen in ${zeilenAnzahl} Zeilen gespeichert`, { entity: 'postbuch', entityId: postid });
   }
 }
 

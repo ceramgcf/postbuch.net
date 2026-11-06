@@ -190,7 +190,8 @@ export const DETAIL_COLUMNS = Object.freeze({
     'pkv_satz_override','beihilfe_satz_override','bezahlt_am_manuell','bestritten_betrag',
     'einreichung_seite_von','einreichung_seite_bis','bre_unbeachtlich'],
   arztrechnung_einzelposition: ['subid','behandlungs_datum','goa_goz_gebueh_pzn','leistung',
-    'begruendung','faktor','betrag'],
+    'begruendung','faktor','betrag','zusatzangaben'],
+  arztrechnung_belegzeile: ['pos_subid','zeile','beleg','nummer','leistung','menge','einzelpreis','betrag'],
   handwerkerrechnung: ['re_nr','rechnungsdatum','leistungsdatum','leistungsjahr','faelligkeit','bezahlt_am',
     'name_unternehmen','leistung','gesamtbetrag','lohnkosten','iban','verwendungszweck','bezahlt_am_manuell','bestritten_betrag',
     'estg35a_irrelevant'],
@@ -817,6 +818,7 @@ export async function importArchive(zipPath, {
               WHERE postid = $1`,
             [finalPostid],
           );
+          const importiertePositionen = new Set();
           for (const ep of detail.einzelpositionen || []) {
             const row = pick(ep, DETAIL_COLUMNS.arztrechnung_einzelposition);
             if (ep.ist_differenz === true) {
@@ -824,6 +826,13 @@ export async function importArchive(zipPath, {
               row.leistung = DIFFERENZ_ALTZEILE_LEISTUNG;
             }
             await insertRow(client, 'postbuch.arztrechnung_einzelposition', { postid: finalPostid, ...row });
+            importiertePositionen.add(Number(ep.subid));
+          }
+          // Nach den Positionen wegen der FK (postid, pos_subid); Archive ohne
+          // Belegzeilen (ältere Versionen) liefern keine.
+          for (const bz of detail.belegzeilen || []) {
+            if (!importiertePositionen.has(Number(bz.pos_subid))) continue;
+            await insertRow(client, 'postbuch.arztrechnung_belegzeile', { postid: finalPostid, ...pick(bz, DETAIL_COLUMNS.arztrechnung_belegzeile) });
           }
         } else if (detail?.type === 'handwerkerrechnung') {
           await insertRow(client, 'postbuch.handwerkerrechnung', { postid: finalPostid, ...pick(detail.fields, DETAIL_COLUMNS.handwerkerrechnung) });

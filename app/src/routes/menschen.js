@@ -18,6 +18,7 @@ import { istZugangsAenderung } from '../lib/zugang-aenderung.js';
 import { getGesamteTaxonomie } from '../lib/taxonomie.js';
 import { GEMEINSAM_ORDNER } from '../service/storage-setup.js';
 import { raeumeAblageNachLoeschung, benennePersonenordnerUm } from '../service/ablage-sollort.js';
+import { entferne as entferneZweitenFaktor, menschenMitFaktor } from '../service/zweiter-faktor.js';
 
 const router = Router();
 const NAME_RE = /^[a-zA-Z0-9_.-]{1,64}$/;
@@ -152,7 +153,8 @@ router.get('/', async (_req, res) => {
                 UNION SELECT postid FROM postbuch.erstattungsbescheid_einzelposition WHERE behandelte_person=m.kurzname
               ) AS pd) AS patient_doc_count
         FROM postbuch.mensch m ORDER BY m.archiviert, m.anzeigename, m.kurzname`);
-    res.json(r.rows);
+    const mitFaktor = await menschenMitFaktor();
+    res.json(r.rows.map((m) => ({ ...m, zweiter_faktor: mitFaktor.has(String(m.id)) })));
   } catch (err) {
     console.error('[menschen] Liste:', err);
     res.status(500).json({ error: 'Menschen konnten nicht geladen werden.' });
@@ -304,6 +306,24 @@ router.patch('/:id', async (req, res) => {
     console.error('[menschen] Update:', err);
     res.status(500).json({ error: 'Mensch konnte nicht aktualisiert werden.' });
   } finally { client.release(); }
+});
+
+// POST /:id/zweiter-faktor-zuruecksetzen — Faktor entfernen, z. B. nach Verlust
+// des Telefons. Beendet wie jede Zugangsänderung alle Sitzungen und MCP-Token,
+// falls der Reset auf eine Kontoübernahme reagiert. Bei Pflicht richtet der
+// Mensch den Faktor beim nächsten Login neu ein.
+router.post('/:id/zweiter-faktor-zuruecksetzen', async (req, res) => {
+  try {
+    const r = await query('SELECT id, anmeldename FROM postbuch.mensch WHERE id = $1', [req.params.id]);
+    if (!r.rowCount) return fehler(res, 404, 'Mensch nicht gefunden.');
+    const m = r.rows[0];
+    const entfernt = await entferneZweitenFaktor({ istAdmin: false, menschId: m.id, username: m.anmeldename }, 'vom Admin zurückgesetzt');
+    if (entfernt) await revokeUserAccess({ menschId: m.id, username: m.anmeldename });
+    res.json({ ok: true, entfernt });
+  } catch (err) {
+    console.error('[menschen] Zwei-Faktor-Reset:', err);
+    res.status(500).json({ error: 'Zwei-Faktor-Anmeldung konnte nicht zurückgesetzt werden.' });
+  }
 });
 
 // GET /:id/loesch-vorschau — was würde ein endgültiges Löschen anrichten?

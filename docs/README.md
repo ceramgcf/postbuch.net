@@ -41,7 +41,7 @@ Mal sehen, ist das README im Wurzelverzeichnis.
 | [Zugriff von unterwegs](zugriff-von-unterwegs.md) | Per VPN ins Heimnetz: WireGuard über die FRITZ!Box oder Tailscale |
 | [Architektur](architektur.md) | Dienste, Datenfluss, Datenmodell, Schema-Pflege |
 | [Betrieb und Troubleshooting](betrieb-troubleshooting.md) | Updates, Neustart, Logs, häufige Fehlerbilder |
-| [FAQ](faq.md) | Kurze Antworten auf wiederkehrende Fragen |
+| [FAQ](faq.md) | Kurze Antworten auf wiederkehrende Fragen, Hilfe und Kontakt |
 
 ## Nachschlagen
 

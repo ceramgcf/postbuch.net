@@ -8,10 +8,10 @@
  *
  * Verwendet von: service/erstattungsbescheid.js
  *
- * Drei Prompts:
+ * Prompts:
  *   1. buildEbParsePrompt(patients, aktiveProfile)  — Extrahiert Strukturdaten aus dem Bescheid-PDF
  *   2. buildProfilierungsPrompt(patients)           — Leitet aus mehreren Bescheiden ein Kostenträger-Profil ab
- *   3. buildMatchKuerzungenPrompt(...)              — Ordnet Kürzungen den Arztrechnung-Positionen zu
+ *   3. buildZerlegungPrompt(...)                    — Zerlegt Kürzungen auf die Arztrechnung-Positionen
  *
  * `patients` ist ein Array { kurzname, vollname, pkv, beihilfe } und enthält
  * idR ALLE Patienten (auch archivierte), weil EBs auf historische Daten Bezug
@@ -179,6 +179,8 @@ Hinweis zur Identifikation: ${personHints}
 15. Wenn mehrere Einzelpositionen einer Rechnung bzw. eines Rezepts aus demselben Grund gekürzt werden, kann es sein, dass diese zusammengefasst aufgezählt werden und nur eine Begründung erfolgt. Erfasse dennoch jede Kürzung als separates Objekt im kuerzungen-Array mit dem jeweiligen Einzelbetrag.
 16. Setze erkanntesProfil auf den exakten Namen des Profils aus dem Abschnitt "Bekannte Absender-Layouts", falls eines davon zum vorliegenden Dokument passt; sonst null. Ein Profil beschreibt nur das Layout und hebt keine der obigen Regeln auf – bei Widerspruch gelten immer diese Regeln.
 
+17. Die Kürzungsbegründung wird VOLLSTÄNDIG und wörtlich übernommen, auch wenn sie aus vielen Absätzen besteht. Stehen vor einzelnen Absätzen Datumsangaben oder andere Zwischenzeilen, gehören sie zum Wortlaut und bleiben an ihrer Stelle; der nächste Schritt ordnet die Absätze damit den Behandlungstagen zu. Nennt der Bescheid für eine Rechnung nur EINEN Kürzungsbetrag mit vielen Gründen, ist das EINE Kürzung mit diesem Betrag und dem ganzen Text – nicht aufteilen.
+
 OUTPUT:
 Nur validiertes JSON, keine Erklärungen.`;
 }
@@ -255,34 +257,112 @@ ${kernPrompt}`;
 }
 
 /**
- * Dynamischer Prompt zum Zuordnen von EB-Kürzungen zu Arztrechnung-Einzelpositionen.
+ * Prompt zum Zerlegen der Kürzungen eines Erstattungsbescheids auf die
+ * Einzelpositionen der zugehörigen Arztrechnung. Eine Kürzung kann eine
+ * einzelne Position betreffen, die ganze Rechnung oder – als Sammelkürzung
+ * mit einem Betrag und vielen Gründen – mehrere Positionen. Die KI liefert je
+ * Kürzung die Anteile; der Code prüft sie (service/kuerzung-zerlegung.js).
  *
- * @param {object} groupedKuerzungen    - Kürzungen aus dem EB, gruppiert nach Beleg
- * @param {Array}  arzEinzelpositionen  - Einzelpositionen der zugehörigen Arztrechnung(en)
- * @returns {string} - Fertig befüllter Prompt
+ * @param {object[]} kuerzungen - [{ eb_subid, kuerzung_index, kuerzungsbetrag, saetze: [{ nr, absatz, text }] }]
+ * @param {object[]} positionen - Einzelpositionen der Rechnung (subid, Datum, Ziffer, …, belegzeilen)
+ * @param {object}   [rechnung] - { arz_postid, rechnungsbetrag, satz }
+ * @returns {string}
  */
-export function buildMatchKuerzungenPrompt(groupedKuerzungen, arzEinzelpositionen) {
-  return `Du erhältst Kürzungen aus einem Erstattungsbescheid und die Einzelpositionen der zugehörigen Arztrechnung(en).
+export function buildZerlegungPrompt(kuerzungen, positionen, rechnung = {}) {
+  return `Du erhältst Kürzungen aus einem Erstattungsbescheid (Beihilfe oder PKV) und die
+vollständigen Einzelpositionen der zugehörigen Arztrechnung.
 
-Deine Aufgabe: Ordne jede Kürzung einer konkreten Einzelposition der Arztrechnung zu (arz_subid).
+Deine Aufgabe: Zerlege jede Kürzung in Anteile je betroffener Einzelposition.
 
-Regeln:
-- Wenn eine Kürzung sich klar auf eine bestimmte Einzelposition der Arztrechnung bezieht (erkennbar z.B. an GOÄ/GOZ/GOT/PZN oder anderer Kennung, Leistungsbeschreibung, Betrag) → setze arz_subid auf die subid dieser Position
-- Wenn eine Kürzung sich auf mehrere Positionen bezieht → setze arz_subid auf null
-- Wenn eine Kürzung sich auf die gesamte Rechnung bezieht (z.B. Rechnung nicht erstattungsfähig, nur Pauschale/Höchstbetrag, globale Kürzung) → setze arz_subid auf null
-- Matche anhand von: Beträgen, GOÄ/GOZ/GOT/PZN bzw. anderer Kennung, Leistungsbeschreibungen, Kürzungsbegründungen
+BEGRIFFE
+- Kürzungsbetrag = der Teil des Rechnungsbetrags, den der Kostenträger NICHT als
+  erstattungsfähig anerkennt, VOR Anwendung des Erstattungssatzes. Alle Anteile sind
+  ebenfalls Beträge vor dem Satz.
+- Ein Anteil gehört zu genau einer Einzelposition (arz_subid) oder, wenn er sich keiner
+  Position zuordnen lässt, zu keiner (arz_subid null).
 
-Kürzungen (gruppiert nach Beleg):
-${JSON.stringify(groupedKuerzungen, null, 2)}
+REGELN
+Z1. Die Summe der Anteile einer Kürzung ist GENAU ihr Kürzungsbetrag (auf den Cent).
+    Was du keiner Position zuordnen kannst, wird ein Anteil mit arz_subid null
+    (Restanteil). Schätze nicht, nur um den Rest zu vermeiden. Ein großer Restanteil ist
+    aber fast immer ein Zeichen, dass ein Absatz nicht auf alle betroffenen Positionen
+    verteilt wurde: Prüfe dann jeden Absatz erneut.
+Z2. Betrifft ein Absatz der Begründung mehrere Positionen (z. B. mehrere Ziffern, eine
+    Ziffer an mehreren Tagen, alle Auslagen, ein Implantat samt Begleitleistungen),
+    erhält JEDE betroffene Position einen eigenen Anteil.
+Z3. Leite jeden Betrag aus der Begründung und den Positionen her, z. B.:
+    - gestrichene Leistung: der volle Positionsbetrag;
+    - Begrenzung des Steigerungsfaktors: Betrag × (berechneter Faktor − zulässiger
+      Faktor) / berechneter Faktor;
+    - ersatzweise anerkannte Gebührennummer: Positionsbetrag minus Betrag der
+      Ersatzleistung bei gleichem Faktor und gleicher Anzahl (Punktzahlen der
+      Gebührenordnung, Punktwert der GOZ 5,62421 Cent, der GOÄ 5,82873 Cent);
+    - prozentuale Anerkennung (z. B. nur 50 % der Auslagen): der nicht anerkannte Teil
+      jeder betroffenen Position. Zu den Auslagen gehören alle Material-, Implantat- und
+      Laborposten der Rechnung, auch Summenposten wie "Auslagen nach § 9 GOZ gemäß
+      Praxislaborbeleg / Fremdlaborrechnung".
+    Nennt die Begründung selbst Beträge (z. B. Auslagen insgesamt und davon
+    erstattungsfähig), haben diese Vorrang vor deiner Herleitung.
+Z4. Ein Anteil ist nie größer als der Betrag seiner Position, und alle Anteile an
+    derselben Position zusammen (über alle Kürzungen) ebenfalls nicht.
+Z5. Datumsangaben im Bescheid vor einem Absatz bezeichnen den Behandlungstag, auf den
+    sich der Absatz bezieht. Nutze sie zur Zuordnung zu behandlungs_datum. Ein
+    offensichtlicher Zahlendreher im Jahr ändert daran nichts.
+Z6. Regionen, Zähne und Anzahlen stehen in zusatzangaben der Positionen (z. B.
+    "Region: 13; Anzahl: 2"). Betrifft ein Absatz nur eine Region einer Position mit
+    mehreren Regionen, ist der Anteil der auf diese Region entfallende Teil.
+Z7. saetze eines Anteils: die Nummern (nr) der Sätze aus der Kürzungsbegründung, die
+    diesen Anteil tragen. Die Begründung jeder Kürzung steht nummeriert in "saetze";
+    zitiere sie nicht, nenne nur die Nummern. Mehrere Anteile dürfen denselben Satz
+    nennen. Allgemeine Sätze, die keine Position betreffen (z. B. Rechtsgrundlage),
+    gehören zum Restanteil; gibt es keinen Restanteil, zum ersten Anteil. Jeder Satz
+    muss in mindestens einem Anteil genannt sein.
+Z8. rechenweg: kurze Herleitung des Betrags, z. B. "2.389,60 × (5,5 − 3,5) / 5,5".
+Z9. Bezieht sich die Kürzung erkennbar auf genau eine Position, ist das genau ein
+    Anteil mit dem vollen Kürzungsbetrag. Betrifft sie pauschal die ganze Rechnung
+    (z. B. Höchstbetrag), ist das ein Anteil mit arz_subid null.
+Z10. Positionen mit "belegzeilen" sind die Summe eines beigefügten Belegs; die
+    Belegzeilen zeigen, welche Leistungen darin stecken, und sind selbst KEINE
+    Positionen. Betrifft ein Absatz Leistungen, die in den Belegzeilen einer Position
+    stehen, gehört der Anteil auf diese Position. Nennt die Begründung keinen Betrag,
+    ist er die Summe der betroffenen Belegzeilen zuzüglich der darauf entfallenden
+    Mehrwertsteuer des Belegs.
 
-Arztrechnung-Einzelpositionen:
-${JSON.stringify(arzEinzelpositionen, null, 2)}
+RECHNUNG
+${JSON.stringify(rechnung)}
 
-Ausgabeformat (exaktes JSON-Array):
-[
-  { "postid": "P001234", "eb_subid": 1, "kuerzung_index": 0, "arz_subid": 3 },
-  { "postid": "P001234", "eb_subid": 1, "kuerzung_index": 1, "arz_subid": null }
-]
+KÜRZUNGEN
+${JSON.stringify(kuerzungen, null, 2)}
 
-Nur validiertes JSON, keine Erklärungen.`;
+EINZELPOSITIONEN DER RECHNUNG
+${JSON.stringify(positionen, null, 2)}
+
+Antworte ausschließlich mit einem JSON-Objekt in dieser Form:
+{
+  "kuerzungen": [
+    {
+      "eb_subid": 1,
+      "kuerzung_index": 0,
+      "anteile": [
+        { "arz_subid": 3, "betrag": 0.00, "saetze": [2, 3], "rechenweg": "…" },
+        { "arz_subid": null, "betrag": 0.00, "saetze": [1], "rechenweg": "…" }
+      ]
+    }
+  ]
+}`;
+}
+
+/**
+ * Zweiter Versuch der Zerlegung mit den Befunden der Prüfung.
+ */
+export function buildZerlegungNachlesePrompt(kuerzungen, positionen, rechnung, befunde, vorher) {
+  return `Eine vorige Zerlegung ist an folgenden Prüfungen gescheitert:
+${befunde.map((b) => `- ${b}`).join('\n')}
+
+VORIGE ZERLEGUNG (nur zum Abgleich):
+${JSON.stringify(vorher)}
+
+Zerlege neu und behebe die Befunde. Prüfe vor der Antwort jede Summe nach.
+
+${buildZerlegungPrompt(kuerzungen, positionen, rechnung)}`;
 }

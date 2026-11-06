@@ -389,6 +389,68 @@ postgres_umzug_automatisch() {
     exit "$exitcode"
 }
 
+# ── PostgreSQL-Image ohne Auftrag ────────────────────────────────────────────
+# Ein Release kann den Digest des PostgreSQL-Images anheben. Beim Update läuft
+# noch der Installer der Vorversion, der den Datenbankcontainer nie ersetzt.
+# Der neue Agent holt den Tausch deshalb beim nächsten Tick einmalig je
+# installierter Version nach (mit Backup, nur gleiche Hauptversion). Ist
+# nichts zu tun, endet der Installer ohne Phase, und der Status bleibt stehen.
+postgres_image_automatisch() {
+    [[ "$AGENT_MODE" == "normal" ]] || return 0
+    [[ -x "$AGENT_LIB/install.sh" ]] || return 0
+    grep -q -- '--postgres-image)' "$AGENT_LIB/install.sh" 2>/dev/null || return 0
+    [[ -d "$INSTALL_DIR/data/postgres" ]] || return 0
+    local version marker nonce erfolg exitcode protokoll begonnen=0 zeile phase
+    version=$(tr -d '[:space:]' < "$INSTALL_DIR/VERSION" 2>/dev/null || true)
+    [[ "$version" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){2}(-[A-Za-z0-9.]+)?$ ]] || return 0
+    marker="$STATE_DIR/postgres-image-$version"
+    [[ -e "$marker" ]] && return 0
+    date -u '+%Y-%m-%dT%H:%M:%SZ' > "$marker"
+    erfolg="Datenbank-Image aktualisiert."
+    nonce=$(vorige_update_nonce)
+    if [[ -n "$nonce" ]]; then
+        erfolg="Update abgeschlossen, Datenbank-Image aktualisiert."
+    else
+        nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+    fi
+    protokoll=$(mktemp) || return 0
+    chmod 600 "$protokoll" 2>/dev/null || true
+    BEGONNEN_AM="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    while IFS= read -r zeile; do
+        printf '%s\n' "$zeile" >> "$protokoll"
+        [[ "$zeile" == "##EXIT:"* ]] && continue
+        [[ "$zeile" == *"##PHASE:"* ]] || { [[ "$begonnen" -eq 1 ]] && printf '%s\n' "$zeile" >> "$LOGFILE" && log_veroeffentlichen; continue; }
+        phase="${zeile##*##PHASE:}"
+        phase="${phase%%[^a-z]*}"
+        if [[ "$begonnen" -eq 0 ]]; then
+            begonnen=1
+            cp -f "$protokoll" "$LOGFILE" 2>/dev/null || true
+            chmod 600 "$LOGFILE" 2>/dev/null || true
+            log "PostgreSQL-Image aktualisieren (Version $version, nonce=$nonce)"
+        else
+            printf '%s\n' "$zeile" >> "$LOGFILE"
+        fi
+        log_veroeffentlichen
+        [[ -n "$phase" ]] && status_schreiben "$nonce" "laeuft" "$phase" "" "Datenbank-Image wird aktualisiert." "update"
+    done < <("$AGENT_LIB/install.sh" --postgres-image --yes --non-interactive "--install-dir=$INSTALL_DIR" 2>&1; echo "##EXIT:$?")
+    exitcode=$(grep -o '##EXIT:[0-9]*' "$protokoll" | tail -n 1 | cut -d: -f2 || true)
+    rm -f "$protokoll"
+    [[ "$begonnen" -eq 1 ]] || return 0
+    if [[ "${exitcode:-1}" -eq 0 ]]; then
+        log "Datenbank-Image aktualisiert."
+        status_schreiben "$nonce" "erfolgreich" "fertig" 0 "$erfolg" "update"
+    else
+        log "Datenbank-Image nicht aktualisiert (Exit ${exitcode:-?})."
+        status_schreiben "$nonce" "fehlgeschlagen" "fehler" "${exitcode:-1}" \
+            "Das Datenbank-Image wurde nicht aktualisiert (Exit ${exitcode:-?}). Details stehen im Protokoll." "update"
+    fi
+    mkdir -p "$VERLAUF/$nonce" 2>/dev/null || true
+    cp -f "$STATUS_JSON" "$VERLAUF/$nonce/datenbank-image-status.json" 2>/dev/null || true
+    cp -f "$LOGFILE"     "$VERLAUF/$nonce/datenbank-image.log"         2>/dev/null || true
+    heartbeat
+    exit "${exitcode:-1}"
+}
+
 # Nonce des letzten Laufs, wenn das ein erfolgreiches Software-Update war.
 vorige_update_nonce() {
     [[ -f "$STATUS_JSON" && ! -L "$STATUS_JSON" ]] || return 0
@@ -411,6 +473,7 @@ heartbeat
 
 if [[ "${POSTBUCH_AGENT_EXEC_KOPIE:-0}" != "1" ]]; then
 postgres_umzug_automatisch
+postgres_image_automatisch
 [[ -f "$ANFORDERUNG" ]] || exit 0
 
 INFLIGHT="$UPDATE_DIR/.anforderung.inflight.$$"

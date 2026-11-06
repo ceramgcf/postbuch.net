@@ -127,14 +127,17 @@ Browsers.
 | Plattform         | Browser                  | Stand                                   |
 | ----------------- | ------------------------ | --------------------------------------- |
 | **Android**       | Chrome, Edge, Brave      | ✅ getestet                             |
-| **Windows**       | Chrome, Edge             | ✅ getestet                             |
+| **Windows**       | Edge (empfohlen), Chrome | ✅ getestet                             |
 | **macOS**         | Safari 17+, Chrome, Edge | ⚠️ nicht getestet                       |
 | **Linux**         | Chrome, Edge, Chromium   | ⚠️ nicht getestet                       |
 | **iPhone / iPad** | Safari                   | ⚠️ nicht getestet – siehe Warnung unten |
 
-Die installierte App erscheint unter Android außerdem im **Teilen-Menü**:
-Eine dort geteilte PDF geht direkt in die Pipeline – siehe
+Die installierte App erscheint unter Android und – mit Edge installiert – unter
+Windows außerdem im **Teilen-Menü**: Eine dort geteilte PDF geht direkt in die
+Pipeline – siehe
 [PDFs über das Teilen-Menü übergeben](dokumente-importieren.md#pdfs-über-das-teilen-menü-übergeben).
+Ein geteiltes Foto wird wie ein Kamerascan zugeschnitten und aufbereitet –
+siehe [Fotos importieren](dokumente-importieren.md#fotos-importieren).
 
 Auf dem Handy scannt postbuch.net Papier auch direkt mit der Kamera – siehe
 [Mit der Kamera in postbuch.net](dokumente-importieren.md#mit-der-kamera-in-postbuchnet).
@@ -170,7 +173,12 @@ Doppeldruck-Schutz der
 
 ### Windows
 
-1. Die Adresse in Chrome oder Edge öffnen und anmelden.
+Für den vollen Funktionsumfang die App **mit Edge installieren**. Nur dann
+erscheint postbuch.net im Teilen-Dialog von Windows, etwa im Explorer oder in
+der Fotos-App. Eine mit Chrome installierte App kann alles andere genauso,
+bietet sich aber nicht als Teilen-Ziel an.
+
+1. Die Adresse in Edge (oder Chrome) öffnen und anmelden.
 2. Rechts in der Adressleiste erscheint ein **Installationssymbol** (Monitor mit
    Pfeil). Alternativ über das Menü – je nach Browserversion unter **Apps →
    Diese Website als App installieren** (Edge) bzw. **Streamen, Speichern und

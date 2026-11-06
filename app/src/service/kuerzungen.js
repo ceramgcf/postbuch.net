@@ -67,7 +67,9 @@ export async function ladeKuerzungen(gesehen = 'offen') {
         a.re_nr AS arz_re_nr,
         ae.leistung AS arz_leistung,
         ae.goa_goz_gebueh_pzn AS arz_ziffer,
-        ae.betrag AS arz_betrag
+        ae.betrag AS arz_betrag,
+        ae.behandlungs_datum AS arz_datum,
+        ae.zusatzangaben AS arz_zusatzangaben
       FROM erstattungsbescheid_kuerzung k
       JOIN erstattungsbescheid_einzelposition ep ON ep.postid = k.postid AND ep.subid = k.eb_subid
       JOIN erstattungsbescheid e ON e.postid = k.postid

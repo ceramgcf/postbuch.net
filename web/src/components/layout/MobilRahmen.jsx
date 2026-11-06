@@ -268,7 +268,6 @@ export function FavoritenLeiste({ sichtbar }) {
           </div>
         </nav>
       )}
-      {kamera.overlay}
     </>
   );
 }

@@ -1,4 +1,5 @@
 import pool from './db.js';
+import { modellwahl } from './lib/llm/model-classes.js';
 
 export const config = {
   db: {
@@ -11,6 +12,14 @@ export async function loadDynamicSettings() {
   const rows = await pool.query('SELECT key, value FROM _settings');
   const s = {};
   for (const r of rows.rows) s[r.key] = r.value;
+  // Die Klasse „Nachlese“ kam später dazu. Solange sie nicht eingerichtet ist,
+  // liest das stärkste Modell der Kette nach (gestaffelt „Schwierig“, sonst
+  // das Analysemodell) statt der Werkseinstellung, deren Provider auf der
+  // Instanz oft gar nicht eingerichtet ist. Gespeichert wird dabei nichts.
+  if (!s.llm_model_nachlese) {
+    const erbe = modellwahl(s) === 'einfach' ? s.llm_model_analyse : s.llm_model_schwierig;
+    if (erbe) s.llm_model_nachlese = erbe;
+  }
   return s;
 }
 

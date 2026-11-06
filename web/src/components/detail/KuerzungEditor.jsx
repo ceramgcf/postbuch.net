@@ -106,8 +106,9 @@ function KuerzungFormDialog({ open, onOpenChange, ebPostid, ep, kuerzung }) {
         </div>
         <div>
           <label className="text-muted-foreground text-xs mb-1 block">Begründung</label>
-          <Input value={begruendung} onChange={(e) => setBegruendung(e.target.value)}
-            placeholder="z. B. Höchstsatz überschritten" className="h-8" />
+          <textarea value={begruendung} onChange={(e) => setBegruendung(e.target.value)}
+            placeholder="z. B. Höchstsatz überschritten" rows={3}
+            className="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50" />
         </div>
         <div>
           <label className="text-muted-foreground text-xs mb-1 block">Betroffene Einzelposition</label>
@@ -203,7 +204,7 @@ export function KuerzungEditor({ ebPostid, ep, kostentraeger }) {
                     <span className="text-muted-foreground/60 italic">keine Position</span>
                   )}
                 </div>
-                {k.begruendung && <div className="text-muted-foreground mt-0.5">{k.begruendung}</div>}
+                {k.begruendung && <div className="text-muted-foreground mt-0.5 whitespace-pre-line">{k.begruendung}</div>}
                 <div className="mt-1">
                   <KuerzungStatusActions
                     ebPostid={ebPostid}

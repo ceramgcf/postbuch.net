@@ -23,6 +23,7 @@ import { setzeBescheidwirkungZurueck } from '../service/periodenabschluss.js';
 import { sperrePerioden } from '../service/perioden-sperre.js';
 import { setzeBreUnbeachtlich } from '../service/bre.js';
 import { istGueltigerStatus } from '../lib/post-status.js';
+import { laeuftErstattungsbescheid } from '../service/document-inserter.js';
 import { effektiveGruppe } from '../lib/taxonomie.js';
 import { UNBEZAHLT_SQL_CONDITION } from '../lib/rechnungs-filter.js';
 import {
@@ -629,7 +630,7 @@ router.get('/:postid', async (req, res) => {
         `SELECT * FROM arztrechnung_einzelposition WHERE postid = $1 ORDER BY subid`,
         [postid]
       );
-      arztrechnung.einzelpositionen = posResult.rows;
+      arztrechnung.einzelpositionen = await mitBelegzeilen(postid, posResult.rows);
       // Abweichung der Positionssumme vom Rechnungsbetrag, nur berechnet, nie
       // gespeichert. null ohne Positionen oder ohne Rechnungsbetrag.
       const abw = await query(
@@ -660,7 +661,7 @@ router.get('/:postid', async (req, res) => {
                      'pkv_pruefung_status', bkpp.status,
                      'pkv_pruefung_periode', bkpp.periode,
                      'pkv_pruefung_erlaeuterung', bkpp.erlaeuterung
-                   )
+                   ) ORDER BY k.kuerzung_id
                  ) FILTER (WHERE k.kuerzung_id IS NOT NULL),
                  '[]'::json
                ) AS kuerzungen
@@ -677,6 +678,10 @@ router.get('/:postid', async (req, res) => {
       `, [postid]);
 
       arztrechnung.erstattungen = ebResult.rows;
+      // Die Kürzungen eines Bescheids entstehen erst nach dem Abgleich; solange
+      // sein Fachjob läuft, fehlen sie hier noch (Hinweis + Nachladen im UI).
+      for (const eb of arztrechnung.erstattungen) eb.kuerzungen_ausstehend = laeuftErstattungsbescheid(eb.eb_postid);
+      if (arztrechnung.erstattungen.some((eb) => eb.kuerzungen_ausstehend)) response.kuerzungenAusstehend = true;
       response.arztrechnung = arztrechnung;
     }
 
@@ -740,6 +745,7 @@ router.get('/:postid', async (req, res) => {
 
       eb.einzelpositionen = epResult.rows;
       response.erstattungsbescheid = eb;
+      if (laeuftErstattungsbescheid(postid)) response.kuerzungenAusstehend = true;
     } else if (await effektiveGruppe(postbuch.lebensbereich, postbuch.dokumentart) === 'erstattungsbescheid') {
       response.erstattungsbescheidAusstehend = true;
     }
@@ -773,6 +779,28 @@ router.get('/:postid', async (req, res) => {
     if (abResult.rows.length > 0) {
       response.arztbericht = abResult.rows[0];
     }
+
+    // KI-Aufrufe zum Dokument aus dem Token-Log, ab dem letzten
+    // Verarbeitungslauf: je Aufruf eine Zeile, auch wenn mehrere Modelle
+    // beteiligt waren (Nachlese, Reparatur, Bescheid-Auswertung). Ein Lauf ist
+    // an seiner correlation_id (Job-ID) erkennbar; die Bescheid-Aufrufe tragen
+    // die PostID und kommen danach.
+    response.ki_aufrufe = (await query(`
+      WITH lauf AS (
+        SELECT min(ts) AS start FROM llm_call_log
+        WHERE correlation_id = (
+          SELECT correlation_id FROM llm_call_log
+          WHERE entity = 'postbuch' AND entity_id = $1
+            AND correlation_id IS NOT NULL AND correlation_id <> $1
+          ORDER BY ts DESC LIMIT 1)
+      )
+      SELECT l.kategorie, l.provider, l.model, l.tokens_in, l.tokens_out,
+             l.cost_usd, l.cost_usd_notional, l.success
+      FROM llm_call_log l, lauf
+      WHERE l.entity = 'postbuch' AND l.entity_id = $1
+        AND l.ts >= COALESCE(lauf.start, '-infinity'::timestamptz)
+      ORDER BY l.ts, l.id
+    `, [postid])).rows;
 
     // Eingeschränkter Lesebereich: keine Angaben aus verknüpften Dokumenten
     // (Erstattungsbescheide, Arztrechnungen), die anderen Personen gehören können.
@@ -1765,7 +1793,7 @@ router.patch('/:postid/arztrechnung', async (req, res) => {
 // der Positionssumme vom Rechnungsbetrag wird nicht gespeichert, sondern beim
 // Laden des Details berechnet (positionen_abweichung).
 
-const POSITION_TEXT_FELDER = ['goa_goz_gebueh_pzn', 'leistung', 'begruendung'];
+const POSITION_TEXT_FELDER = ['goa_goz_gebueh_pzn', 'leistung', 'begruendung', 'zusatzangaben'];
 
 // Liefert { felder } oder { error }. Nur im Body vorhandene Felder werden übernommen.
 function parsePositionFelder(body) {
@@ -1806,7 +1834,22 @@ async function ladePositionen(postid) {
     `SELECT * FROM arztrechnung_einzelposition WHERE postid = $1 ORDER BY subid`,
     [postid]
   );
-  return r.rows;
+  return mitBelegzeilen(postid, r.rows);
+}
+
+// Hängt jeder Position die Zeilen ihres beigefügten Belegs an (leer ohne Beleg).
+async function mitBelegzeilen(postid, positionen) {
+  const r = await query(
+    `SELECT pos_subid, zeile, beleg, nummer, leistung, menge, einzelpreis, betrag
+       FROM arztrechnung_belegzeile WHERE postid = $1 ORDER BY pos_subid, zeile`,
+    [postid]
+  );
+  const jePosition = new Map();
+  for (const z of r.rows) {
+    if (!jePosition.has(z.pos_subid)) jePosition.set(z.pos_subid, []);
+    jePosition.get(z.pos_subid).push(z);
+  }
+  return positionen.map((p) => ({ ...p, belegzeilen: jePosition.get(p.subid) || [] }));
 }
 
 // Sperrt den Rechnungskopf; liefert false, wenn es keine Arztrechnung gibt.

@@ -55,8 +55,9 @@ und Verwendungszweck aus.
 
 ![Fachblock Arztrechnung](screenshots/fachblock-arztrechnung.png)
 
-Außerdem werden alle **Einzelpositionen** mit GOÄ-/GOZ-Ziffer, Faktor,
-Begründung und Betrag erfasst und ausgewiesen. Sie lassen sich anschließend von
+Außerdem werden in einem eigenen Schritt alle **Einzelpositionen** mit
+GOÄ-/GOZ-Ziffer, Faktor, Begründung, weiteren Angaben wie Region oder Anzahl
+und Betrag erfasst und ausgewiesen. Sie lassen sich anschließend von
 Hand korrigieren, ergänzen oder löschen; ergibt ihre Summe nicht den
 Rechnungsbetrag, zeigt die Karte darunter die **Abweichung zum Rechnungsbetrag**
 an ([Einzelpositionen der Rechnung](dokumentansicht.md#einzelpositionen-der-rechnung)).
@@ -336,9 +337,12 @@ Dokumente:
    Matching nicht zweifelsfrei, bleiben betroffene Positionen bewusst
    unzugeordnet – sie können später manuell zugeordnet werden.
 3. **Kürzungen erkennen.** Wo der erstattete Betrag kleiner ist als der
-   eingereichte, werden die Kürzungen erfasst und, wenn nötig, per KI den
-   einzelnen GOÄ-Positionen der Rechnung zugeordnet – samt der Begründung des
-   Kostenträgers.
+   eingereichte, werden die Kürzungen erfasst und per KI auf die einzelnen
+   Positionen der Rechnung zerlegt – samt dem jeweils zutreffenden Teil der
+   Begründung des Kostenträgers. Eine Sammelkürzung mit vielen Gründen wird so
+   zu mehreren Kürzungen, die zusammen den Betrag des Bescheids ergeben.
+   Bis die Zerlegung fertig ist, zeigen Bescheid und Rechnung einen Hinweis
+   darauf; bei langen Rechnungen dauert das einige Minuten.
 4. **Perioden bewerten.** Für jede eingereichte Periode, aus der Rechnungen im
    Bescheid auftauchen, wird anhand der Zuordnungen entschieden:
    - **vollständig abgerechnet** – alle Rechnungen der Periode stehen im

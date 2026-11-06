@@ -47,6 +47,9 @@ CREATE SCHEMA IF NOT EXISTS postbuch;
 -- ══════════════════════════════════════════════════════════════════
 
 CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA postbuch;
+-- Ein neues PostgreSQL-Image kann pgvector anheben. Ohne Update bliebe der
+-- Katalog auf der alten Extensionsversion; bei aktueller Version ein No-op.
+ALTER EXTENSION vector UPDATE;
 
 -- dblink entfernt: erlaubt aus der DB heraus ausgehende Verbindungen (SSRF auf
 -- DB-Ebene) und ist ein klassisches Privilege-Escalation-Werkzeug. Im gesamten
@@ -1002,7 +1005,31 @@ CREATE TABLE IF NOT EXISTS postbuch.arztrechnung_einzelposition (
     begruendung text,
     faktor numeric(5,2),
     betrag numeric(12,2),
+    zusatzangaben text,
     PRIMARY KEY (postid, subid)
+);
+
+-- Weitere Angaben einer Position, die die Rechnung in eigenen Spalten führt
+-- (Region, Anzahl, Zahn …), als Freitext „Bezeichnung: Wert; …“.
+ALTER TABLE postbuch.arztrechnung_einzelposition ADD COLUMN IF NOT EXISTS zusatzangaben text;
+
+-- Zeilen eines beigefügten Belegs (Fremdlabor, Praxislabor, Material) zu der
+-- Rechnungsposition, deren Betrag die Belegsumme ist. Reine Detailangabe: Die
+-- Rechnungssummen, Kürzungen und BRE rechnen ausschließlich mit
+-- arztrechnung_einzelposition, Belegzeilen zählen nie zusätzlich. Die
+-- Mehrwertsteuer des Belegs ist eine eigene Zeile, sodass die Zeilen
+-- zusammen den Positionsbetrag ergeben.
+CREATE TABLE IF NOT EXISTS postbuch.arztrechnung_belegzeile (
+    postid character varying(7) NOT NULL,
+    pos_subid integer NOT NULL,
+    zeile integer NOT NULL,
+    beleg text,
+    nummer text,
+    leistung text,
+    menge numeric(10,2),
+    einzelpreis numeric(12,2),
+    betrag numeric(12,2),
+    PRIMARY KEY (postid, pos_subid, zeile)
 );
 
 -- Zahlungen zu Rechnungen (Arzt/Handwerker/generisch). Jede Zahlung wird mit
@@ -1415,6 +1442,14 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'arztrechnung_einzelposition_postid_fkey') THEN
     ALTER TABLE ONLY postbuch.arztrechnung_einzelposition
       ADD CONSTRAINT arztrechnung_einzelposition_postid_fkey FOREIGN KEY (postid) REFERENCES postbuch.arztrechnung(postid) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+-- subid wird nie umnummeriert (neue Positionen bekommen MAX+1), daher kein ON UPDATE.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'arztrechnung_belegzeile_pos_fkey') THEN
+    ALTER TABLE ONLY postbuch.arztrechnung_belegzeile
+      ADD CONSTRAINT arztrechnung_belegzeile_pos_fkey FOREIGN KEY (postid, pos_subid) REFERENCES postbuch.arztrechnung_einzelposition(postid, subid) ON DELETE CASCADE;
   END IF;
 END $$;
 
@@ -1902,6 +1937,26 @@ CREATE TABLE IF NOT EXISTS postbuch.mcp_tokens (
 );
 CREATE INDEX IF NOT EXISTS mcp_tokens_username_idx ON postbuch.mcp_tokens (username);
 CREATE INDEX IF NOT EXISTS mcp_tokens_mensch_id_idx ON postbuch.mcp_tokens (mensch_id);
+
+-- Zwei-Faktor-Anmeldung (TOTP). Eigene Tabelle statt Spalten an mensch: Der
+-- Admin hat keine mensch-Zeile, und das Geheimnis soll in keinem SELECT der
+-- Menschen-Routen auftauchen. Geschrieben wird nur über
+-- service/zweiter-faktor.js. Eine Zeile gibt es erst nach bestätigter
+-- Einrichtung; das unbestätigte Geheimnis lebt bis dahin nur in der Sitzung.
+-- `geheimnis` ist AES-256-GCM-verschlüsselt mit dem eigenen Schlüssel
+-- _settings.zweiter_faktor_secret, der wie alle Geheimnisse unverschlüsselten
+-- Backups fehlt. Die Wiederherstellungscodes stehen nur als SHA-256-Hash darin.
+CREATE TABLE IF NOT EXISTS postbuch.totp_faktor (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    mensch_id       uuid UNIQUE REFERENCES postbuch.mensch(id) ON DELETE CASCADE,
+    ist_admin       boolean NOT NULL DEFAULT false,
+    geheimnis       text NOT NULL,
+    letzter_schritt bigint,
+    wiederherstellung jsonb NOT NULL DEFAULT '[]'::jsonb,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT totp_faktor_konto_ck CHECK (ist_admin = (mensch_id IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS totp_faktor_admin_uq ON postbuch.totp_faktor ((true)) WHERE ist_admin;
 -- ══════════════════════════════════════════════════════════════════════════════
 -- STORAGE-MIGRATION (Phase 4) — Umzug der Ablage zwischen den Backends
 -- ══════════════════════════════════════════════════════════════════════════════

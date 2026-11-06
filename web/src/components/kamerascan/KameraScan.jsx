@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { createPortal } from 'react-dom';
 import {
-  Camera, Check, Copy, Crop, Flashlight, FlashlightOff, Loader2, Plus, RefreshCw, RotateCw, Settings, Trash2, X,
+  Camera, Check, ChevronDown, ChevronRight, Copy, Crop, Flashlight, FlashlightOff, Images, LayoutGrid, Loader2, Maximize, Plus,
+  RefreshCw, RotateCw, Settings, Trash2, X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { api } from '@/api/client';
@@ -10,16 +11,18 @@ import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/componen
 import { useZurueckSchliesst } from '@/hooks/useBackButtonGuard';
 import { erstelleScanner } from '@/lib/kamerascan/scannerClient';
 import {
-  starteKamera, kameraFehlertext, leseKameraStrom, schreibeKameraStrom, schreibeKameraWahl,
+  kameraVerfuegbar, starteKamera, kameraFehlertext, leseKameraStrom, schreibeKameraStrom, schreibeKameraWahl,
 } from '@/lib/kamerascan/kamera';
 import { erstelleAusloeser } from '@/lib/kamerascan/ausloeser';
-import { skaliereEcken } from '@/lib/kamerascan/geometrie';
+import { skaliereEcken, standardEcken } from '@/lib/kamerascan/geometrie';
 import { erstellePdf } from '@/lib/kamerascan/pdfSchreiber';
 import { etikettAusQr, istSammelmappe, erstelleNativenQrLeser } from '@/lib/kamerascan/postbuchQr';
 import { AutoForwardRing } from '@/components/ui/auto-forward-ring';
 import { useDebugModus } from '@/hooks/useDebugModus';
+import { erstelleStapelSpeicher, neuerSchluessel, stapelLaden } from '@/lib/kamerascan/stapelSpeicher';
 import EckenEditor, { WerkzeugKnopf } from './EckenEditor';
 import KameraEinstellungen from './KameraEinstellungen';
+import SeitenUebersicht from './SeitenUebersicht';
 
 const SPEICHER = 'postbuch.kamerascan';
 const MODI = [
@@ -57,6 +60,12 @@ const STATUS = {
 
 let naechsteSeitenId = 1;
 
+// Neue Fotos hängen ohne Rückfrage an einen offenen Scan an – außer der wurde
+// länger nicht mehr angefasst: Dann landeten fremde Fotos sonst unbemerkt in
+// einem alten Stapel.
+const ANHAENGEN_OHNE_FRAGE_MS = 30 * 60 * 1000;
+const ANHANG_HINWEIS_MS = 8000;
+
 function blobZuDataUrl(blob) {
   return new Promise((resolve, reject) => {
     const leser = new FileReader();
@@ -66,22 +75,65 @@ function blobZuDataUrl(blob) {
   });
 }
 
-function dateiname() {
+function dateiname(art, nummer = null) {
   const d = new Date();
   const z = (n) => String(n).padStart(2, '0');
-  return `Kamerascan_${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}_${z(d.getHours())}-${z(d.getMinutes())}.pdf`;
+  const teil = nummer ? `_Seite-${nummer}` : '';
+  return `${art}_${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}_${z(d.getHours())}-${z(d.getMinutes())}${teil}.pdf`;
+}
+
+function zeitText(zeit) {
+  const d = new Date(zeit);
+  const uhr = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? `von heute, ${uhr}` : `von gestern, ${uhr}`;
+}
+
+function neueSeite(foto, liveHinweis = null, extra = {}) {
+  return {
+    id: naechsteSeitenId++,
+    schluessel: neuerSchluessel(),
+    quelle: 'kamera',
+    foto,
+    liveHinweis,
+    fotoUrl: URL.createObjectURL(foto),
+    ecken: null,
+    erkannt: true,
+    drehung: 0,
+    rechnet: true,
+    vorschauUrl: null,
+    pdf: null,
+    ...extra,
+  };
 }
 
 /**
- * Vollflächiger Kamerascan. Bleibt dauerhaft gemountet und wird per
- * display:none ausgeblendet; Kamera und Worker laufen nur, solange `offen`.
- * `onFertig({ dataB64, dateiname, seiten, groesse })` lädt hoch und wirft bei
- * Fehlern – dann bleibt der Scan erhalten.
+ * Seitenstapel: vollflächiger Kamerascan und Fotoimport in einem. Bleibt
+ * dauerhaft gemountet und wird per display:none ausgeblendet; Worker läuft
+ * nur, solange `offen`, die Kamera erst, wenn wirklich aufgenommen wird.
+ *
+ * Seiten kommen aus der Kamera oder als Bilddateien (`fotos`, Galerie-Knopf):
+ * Jedes Foto wird genauso erkannt, entzerrt und verbessert; ohne erkanntes
+ * Blatt öffnet sich der Ecken-Editor. Mit `dauerhaft` übersteht der Stapel
+ * Schließen und Neuladen (IndexedDB, 24 Stunden) – nacheinander geteilte
+ * Fotos sammeln sich so zu einem Dokument.
+ *
+ * `onFertig({ dokumente: [{ dataB64, dateiname, seiten, groesse }], beiHochgeladen })`
+ * lädt hoch und wirft bei Fehlern – dann bleibt der Scan erhalten. Mit
+ * `einzelnErlaubt` lässt sich jede Seite als eigenes Dokument hochladen.
  */
-export default function KameraScan({ offen, onSchliessen, onFertig, zielText = 'Hochladen', diagnose = false, onPostbuchQr }) {
+export default function KameraScan({
+  offen, onSchliessen, onFertig, zielText = 'Hochladen', diagnose = false, onPostbuchQr, fotos = null,
+  dauerhaft = false, einzelnErlaubt = false,
+}) {
   const [vorgaben, setVorgaben] = useState(leseVorgaben);
   const { modus, auto } = vorgaben;
-  const [phase, setPhase] = useState('kamera'); // kamera | vorschau | ecken | senden
+  const [phase, setPhase] = useState('laden'); // laden | kamera | vorschau | uebersicht | ecken | senden
+  const [ordnen, setOrdnen] = useState(null); // Entwurf von „Seiten ordnen“: { start: Set, reihenfolge: [id] }
+  const [kameraAn, setKameraAn] = useState(false);
+  const [anhang, setAnhang] = useState(null); // { ids, text } – gerade angehängte Fotos
+  const [anhangFrage, setAnhangFrage] = useState(null); // { fotos, anzahl, zeit }
+  const [einzelMenue, setEinzelMenue] = useState(false);
+  const [sendeStand, setSendeStand] = useState(null); // { fertig, gesamt }
   const [seiten, setSeiten] = useState([]);
   const [aktiv, setAktiv] = useState(0);
   const [ersetzeIndex, setErsetzeIndex] = useState(null);
@@ -115,6 +167,18 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
   const auftraege = useRef(new Map());
   const stromRef = useRef(null);
   const kameraStartRef = useRef(Promise.resolve());
+  const fotoWahlRef = useRef(null);
+  const fotosUebernommen = useRef(null);
+  const modusRef = useRef(modus);
+  modusRef.current = modus;
+  // Dauerhafter Stapel: gespeichert wird nur, solange eine Sitzung läuft –
+  // das Aufräumen beim Schließen darf den gespeicherten Stand nicht leeren.
+  const speicherRef = useRef(null);
+  const [speicherFehler, setSpeicherFehler] = useState(false);
+  speicherRef.current ??= erstelleStapelSpeicher({ beiFehler: () => setSpeicherFehler(true) });
+  const sitzungAktiv = useRef(false);
+  const stapelZeit = useRef(null); // letzte Änderung eines fortgesetzten Stapels
+  const eingangRef = useRef(Promise.resolve());
   // Etiketten-QR im Livebild: Treffer läuft 3 s als Countdown, dann öffnet
   // sich das Dokument bzw. die Sammelmappe. Abgebrochene Kennungen bleiben für diese Sitzung stumm.
   const [qrTreffer, setQrTreffer] = useState(null);
@@ -166,9 +230,17 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
     };
   }, [offen]);
 
+  // Die Kamera startet erst, wenn aufgenommen werden soll – wer nur Fotos
+  // übernimmt, wird nicht nach der Kamera gefragt. Danach läuft sie weiter,
+  // damit „Seite hinzufügen“ ohne Wartezeit zurück ins Livebild führt.
+  useEffect(() => {
+    if (!offen) setKameraAn(false);
+    else if (phase === 'kamera') setKameraAn(true);
+  }, [offen, phase]);
+
   // Kamera getrennt vom Worker, damit ein Kamerawechsel nur den Strom neu startet.
   useEffect(() => {
-    if (!offen) return undefined;
+    if (!offen || !kameraAn) return undefined;
     let beendet = false;
     setFehler(null);
     let kameraObjekt = null;
@@ -194,7 +266,7 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
       setLive(null);
       liveRef.current = null;
     };
-  }, [offen, kameraLauf]);
+  }, [offen, kameraLauf, kameraAn]);
 
   const kameraNeuStarten = () => {
     ausloeserRef.current?.sperren(performance.now());
@@ -207,20 +279,44 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
       if (s.fotoUrl) URL.revokeObjectURL(s.fotoUrl);
     }
     auftraege.current.clear();
+    sitzungAktiv.current = false;
+    stapelZeit.current = null;
+    fotosUebernommen.current = null;
+    seitenRef.current = [];
     setSeiten([]);
     setAktiv(0);
     setErsetzeIndex(null);
-    setPhase('kamera');
+    setPhase('laden');
     setHinweis(null);
+    setAnhang(null);
+    setAnhangFrage(null);
+    setEinzelMenue(false);
+    setSendeStand(null);
+    setSpeicherFehler(false);
+    setFehler(null);
     setLive(null);
     liveRef.current = null;
   }, []);
 
+  // Schließen behält einen dauerhaften Stapel für später; verwerfen löscht ihn.
   const schliessen = useCallback(() => {
     setVerwerfenFrage(false);
     aufraeumen();
     onSchliessen();
   }, [aufraeumen, onSchliessen]);
+
+  const verwerfen = useCallback(() => {
+    if (dauerhaft) speicherRef.current.leeren();
+    schliessen();
+  }, [dauerhaft, schliessen]);
+
+  // „Ecken anpassen“ und „Seiten ordnen“ sind Unteransichten: X und Zurück
+  // verlassen nur sie und verwerfen ihre Änderungen, nicht den ganzen Scan.
+  const unteransicht = phase === 'ecken' || phase === 'uebersicht';
+  const unteransichtAbbrechen = () => {
+    setOrdnen(null);
+    setPhase('vorschau');
+  };
 
   const versucheSchliessen = useCallback(() => {
     if (phase === 'senden') return;
@@ -229,7 +325,7 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
   }, [phase, schliessen]);
 
   useZurueckSchliesst(offen, versucheSchliessen);
-  useZurueckSchliesst(offen && phase === 'ecken', () => setPhase('vorschau'));
+  useZurueckSchliesst(offen && unteransicht, () => unteransichtAbbrechen());
   useZurueckSchliesst(offen && einstellungen, () => setEinstellungen(false));
 
   // ── Seiten rechnen ─────────────────────────────────────────────────────────
@@ -287,18 +383,7 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
       if (diagnose) {
         kamera.diagnose().then((d) => setKameraDiagnose({ angefordert: stromRef.current?.name, ...d }), (err) => setKameraDiagnose({ fehler: err?.message }));
       }
-      const seite = {
-        id: naechsteSeitenId++,
-        foto,
-        liveHinweis,
-        fotoUrl: URL.createObjectURL(foto),
-        ecken: null,
-        erkannt: true,
-        drehung: 0,
-        rechnet: true,
-        vorschauUrl: null,
-        pdf: null,
-      };
+      const seite = neueSeite(foto, liveHinweis);
       const neu = seitenRef.current.slice();
       let index;
       if (ersetzeIndex != null && ersetzeIndex < neu.length) {
@@ -328,6 +413,132 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
 
   const aufnehmenRef = useRef(aufnehmen);
   aufnehmenRef.current = aufnehmen;
+
+  // ── Dauerhafter Stapel ─────────────────────────────────────────────────────
+  // Beim Öffnen einen gespeicherten Stapel fortsetzen; die fertigen Seiten
+  // rechnet der Scanner aus den Rohdaten neu.
+  const rechneNacheinander = useCallback(async (liste) => {
+    for (const s of liste) {
+      if (!seitenRef.current.some((x) => x.id === s.id)) continue;
+      await rechne(s, modusRef.current);
+    }
+  }, [rechne]);
+
+  useEffect(() => {
+    if (!offen) return;
+    eingangRef.current = (async () => {
+      const gespeichert = dauerhaft && seitenRef.current.length === 0 ? await stapelLaden() : null;
+      if (gespeichert) {
+        const liste = gespeichert.seiten.map((g) => neueSeite(g.foto, g.liveHinweis, {
+          schluessel: g.schluessel,
+          quelle: g.quelle ?? 'kamera',
+          ecken: g.ecken ?? null,
+          drehung: g.drehung ?? 0,
+          erkannt: g.erkannt ?? true,
+          pruefen: !!g.pruefen,
+        }));
+        speicherRef.current.kennt(liste);
+        stapelZeit.current = gespeichert.zeit;
+        seitenRef.current = liste;
+        setSeiten(liste);
+        setAktiv(liste.length - 1);
+        setPhase('vorschau');
+        sitzungAktiv.current = true;
+        rechneNacheinander(liste);
+        return;
+      }
+      sitzungAktiv.current = dauerhaft;
+      if (seitenRef.current.length === 0 && !(Array.isArray(fotos) && fotos.length)) setPhase('kamera');
+    })();
+  // `fotos` nur als Anfangszustand: Neue Fotos übernimmt der Effekt unten.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [offen, dauerhaft, rechneNacheinander]);
+
+  useEffect(() => {
+    if (!offen || !sitzungAktiv.current || phase === 'laden') return;
+    // Ein fortgesetzter Stapel gilt ab der ersten echten Änderung als frisch.
+    speicherRef.current.speichern(seiten).then((geaendert) => { if (geaendert) stapelZeit.current = null; });
+  }, [offen, seiten, phase]);
+
+  // ── Fotos übernehmen ───────────────────────────────────────────────────────
+  // Fotos nacheinander rechnen: Jedes belegt im Worker mehrere große Mats.
+  const fotosHinzufuegen = useCallback(async (dateien, { melden = false } = {}) => {
+    const bilder = dateien.filter((f) => f && f.size > 0);
+    if (bilder.length === 0) {
+      if (seitenRef.current.length === 0) setPhase('kamera');
+      return;
+    }
+    const neu = bilder.map((f) => neueSeite(f, null, { pruefen: true, quelle: 'foto' }));
+    const alle = [...seitenRef.current, ...neu];
+    seitenRef.current = alle;
+    setSeiten(alle);
+    setAktiv(alle.length - neu.length);
+    setErsetzeIndex(null);
+    setPhase('vorschau');
+    if (melden) {
+      const n = neu.length;
+      setAnhang({
+        ids: new Set(neu.map((s) => s.id)),
+        text: `${n === 1 ? '1 Foto' : `${n} Fotos`} zum offenen Scan hinzugefügt – jetzt ${alle.length} Seiten`,
+      });
+    }
+    await rechneNacheinander(neu);
+  }, [rechneNacheinander]);
+
+  const fotosEingang = useCallback((dateien) => {
+    const vorhanden = seitenRef.current.length;
+    if (vorhanden > 0 && stapelZeit.current && Date.now() - stapelZeit.current > ANHAENGEN_OHNE_FRAGE_MS) {
+      setAnhangFrage({ fotos: dateien, anzahl: vorhanden, zeit: stapelZeit.current });
+      return;
+    }
+    fotosHinzufuegen(dateien, { melden: vorhanden > 0 });
+  }, [fotosHinzufuegen]);
+
+  useEffect(() => {
+    if (!offen || !Array.isArray(fotos) || fotos.length === 0 || fotosUebernommen.current === fotos) return;
+    fotosUebernommen.current = fotos;
+    eingangRef.current.then(() => fotosEingang(fotos));
+  }, [offen, fotos, fotosEingang]);
+
+  useEffect(() => {
+    if (!anhang) return undefined;
+    const t = setTimeout(() => setAnhang(null), ANHANG_HINWEIS_MS);
+    return () => clearTimeout(t);
+  }, [anhang]);
+
+  const seitenWeg = useCallback((ids) => {
+    for (const s of seitenRef.current) {
+      if (!ids.has(s.id)) continue;
+      if (s.vorschauUrl) URL.revokeObjectURL(s.vorschauUrl);
+      if (s.fotoUrl) URL.revokeObjectURL(s.fotoUrl);
+      auftraege.current.delete(s.id);
+    }
+    const rest = seitenRef.current.filter((s) => !ids.has(s.id));
+    seitenRef.current = rest;
+    setSeiten(rest);
+    return rest;
+  }, []);
+
+  const anhangRueckgaengig = () => {
+    if (!anhang) return;
+    const rest = seitenWeg(anhang.ids);
+    setAnhang(null);
+    setAktiv(Math.max(0, rest.length - 1));
+    setPhase(rest.length ? 'vorschau' : 'kamera');
+  };
+
+  // Wurde auf einem Foto kein Blatt erkannt, öffnet sich – sobald alle Fotos
+  // gerechnet sind – der Ecken-Editor für die erste solche Seite. Jede Seite
+  // nur einmal, damit „Abbrechen“ im Editor nicht in einer Schleife endet.
+  useEffect(() => {
+    if (!offen || phase !== 'vorschau' || seiten.some((s) => s.rechnet)) return;
+    const i = seiten.findIndex((s) => s.pruefen && !s.erkannt && s.fotoBreite && !s.fehler);
+    if (i < 0) return;
+    const id = seiten[i].id;
+    setSeiten((alt) => alt.map((s) => (s.id === id ? { ...s, pruefen: false } : s)));
+    setAktiv(i);
+    setPhase('ecken');
+  }, [offen, phase, seiten]);
 
   // ── Live-Analyse ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -439,20 +650,21 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
     rechne(neu, modus);
   };
 
+  // Ohne Seiten zurück zur Kamera – oder, wo es keine gibt, schließen.
+  const nachEntfernen = (rest, index) => {
+    if (rest.length > 0) {
+      setAktiv(Math.min(index, rest.length - 1));
+      return;
+    }
+    setAktiv(0);
+    if (kameraVerfuegbar() && !fehler) setPhase('kamera');
+    else verwerfen();
+  };
+
   const entfernen = (index = aktiv) => {
     const s = seiten[index];
     if (!s) return;
-    if (s.vorschauUrl) URL.revokeObjectURL(s.vorschauUrl);
-    if (s.fotoUrl) URL.revokeObjectURL(s.fotoUrl);
-    auftraege.current.delete(s.id);
-    const rest = seiten.filter((_, i) => i !== index);
-    setSeiten(rest);
-    if (rest.length === 0) {
-      setAktiv(0);
-      setPhase('kamera');
-    } else {
-      setAktiv(Math.min(index, rest.length - 1));
-    }
+    nachEntfernen(seitenWeg(new Set([s.id])), index);
   };
 
   const neuAufnehmen = () => {
@@ -460,34 +672,104 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
     setPhase('kamera');
   };
 
+  const galerieOeffnen = () => fotoWahlRef.current?.click();
+
+  // „Seite hinzufügen“ führt ins Livebild (dort sitzt auch der Galerie-Knopf);
+  // ohne nutzbare Kamera direkt in die Fotoauswahl.
   const seiteHinzufuegen = () => {
+    if (!kameraVerfuegbar() || fehler) {
+      galerieOeffnen();
+      return;
+    }
     setErsetzeIndex(null);
     setPhase('kamera');
   };
 
+  // „Seiten ordnen“ arbeitet auf einem Entwurf der Reihenfolge; erst „Fertig“
+  // übernimmt Umsortieren und Entfernen. Seiten, die währenddessen
+  // hinzukommen (z. B. geteilte Fotos), hängen hinten an.
+  const ordnenOeffnen = () => {
+    const ids = seitenRef.current.map((s) => s.id);
+    setOrdnen({ start: new Set(ids), reihenfolge: ids });
+    setPhase('uebersicht');
+  };
+
+  const ordnenFertig = () => {
+    if (!ordnen) return;
+    const aktivId = seitenRef.current[aktiv]?.id;
+    const behalten = new Set(ordnen.reihenfolge);
+    const weg = new Set([...ordnen.start].filter((id) => !behalten.has(id)));
+    const rest = weg.size ? seitenWeg(weg) : seitenRef.current;
+    const nachId = new Map(rest.map((s) => [s.id, s]));
+    const neu = [
+      ...ordnen.reihenfolge.map((id) => nachId.get(id)).filter(Boolean),
+      ...rest.filter((s) => !ordnen.start.has(s.id)),
+    ];
+    setOrdnen(null);
+    if (neu.length === 0) {
+      nachEntfernen(neu, 0);
+      return;
+    }
+    seitenRef.current = neu;
+    setSeiten(neu);
+    setAktiv(Math.max(0, neu.findIndex((s) => s.id === aktivId)));
+    setPhase('vorschau');
+  };
+
+  // Von Hand gesetzte Ecken gelten als erkannt – der Hinweis „Kein Blatt
+  // erkannt“ hat sich damit erledigt.
   const eckenUebernehmen = (ecken) => {
     if (!aktuelle) return;
-    const neu = { ...aktuelle, ecken };
-    aendere(aktuelle.id, { ecken });
+    const neu = { ...aktuelle, ecken, erkannt: true };
+    aendere(aktuelle.id, { ecken, erkannt: true });
     setPhase('vorschau');
     rechne(neu, modus);
   };
 
+  const ganzesBild = () => {
+    if (!aktuelle?.fotoBreite) return;
+    eckenUebernehmen(standardEcken(aktuelle.fotoBreite, aktuelle.fotoHoehe, 0));
+  };
+
   const alleFertig = seiten.length > 0 && seiten.every((s) => !s.rechnet && s.pdf);
 
-  const abschliessen = async () => {
+  const abschliessen = async ({ einzeln = false } = {}) => {
     if (!alleFertig) return;
+    setEinzelMenue(false);
     setPhase('senden');
     setHinweis(null);
+    const liste = seitenRef.current;
+    const art = liste.every((s) => s.quelle === 'foto') ? 'Fotoimport' : 'Kamerascan';
+    const gruppen = einzeln ? liste.map((s) => [s]) : [liste];
+    const erledigt = new Set();
+    setSendeStand({ fertig: 0, gesamt: gruppen.length });
     try {
-      const pdf = erstellePdf(seiten.map((s) => s.pdf));
-      const blob = new Blob([pdf], { type: 'application/pdf' });
-      const dataB64 = await blobZuDataUrl(blob);
-      await onFertig({ dataB64, dateiname: dateiname(), seiten: seiten.length, groesse: blob.size });
+      const dokumente = await Promise.all(gruppen.map(async (g, i) => {
+        const blob = new Blob([erstellePdf(g.map((s) => s.pdf))], { type: 'application/pdf' });
+        return { dataB64: await blobZuDataUrl(blob), dateiname: dateiname(art, einzeln ? i + 1 : null), seiten: g.length, groesse: blob.size };
+      }));
+      await onFertig({
+        dokumente,
+        beiHochgeladen: (i) => {
+          erledigt.add(i);
+          setSendeStand({ fertig: erledigt.size, gesamt: gruppen.length });
+        },
+      });
+      if (dauerhaft) speicherRef.current.leeren();
       aufraeumen();
       onSchliessen();
     } catch (err) {
-      setHinweis(err.message || 'Hochladen fehlgeschlagen');
+      const text = err.message || 'Hochladen fehlgeschlagen';
+      if (erledigt.size > 0) {
+        // Schon hochgeladene Seiten fallen aus dem Stapel, damit ein neuer
+        // Versuch sie nicht doppelt anlegt.
+        const rest = seitenWeg(new Set([...erledigt].flatMap((i) => gruppen[i].map((s) => s.id))));
+        setAktiv(0);
+        setHinweis(`${erledigt.size} von ${gruppen.length} Dokumenten hochgeladen, die übrigen ${rest.length === 1 ? 'Seite bleibt' : `${rest.length} Seiten bleiben`} im Scan. ${text}`);
+      } else {
+        setHinweis(text);
+      }
+      setSendeStand(null);
       setPhase('vorschau');
     }
   };
@@ -501,6 +783,7 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
     ? skaliereEcken(live.ecken, videoRef.current.videoWidth / live.breite, videoRef.current.videoHeight / live.hoehe)
     : null;
   const vb = videoRef.current;
+  const nurFotos = seiten.length > 0 && seiten.every((s) => s.quelle === 'foto');
 
   return createPortal(
     <div
@@ -508,19 +791,41 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
       style={{ display: offen ? 'flex' : 'none' }}
       role="dialog"
       aria-modal="true"
-      aria-label="Mit Kamera scannen"
+      aria-label={nurFotos ? 'Fotos importieren' : 'Mit Kamera scannen'}
     >
       {/* Kopfzeile */}
       <div className="flex items-center gap-2 px-2 pb-2 pt-[max(0.5rem,env(safe-area-inset-top))]">
-        <button type="button" onClick={versucheSchliessen} className="flex h-11 w-11 items-center justify-center rounded-full hover:bg-white/10" aria-label="Kamerascan schließen">
+        <button
+          type="button"
+          onClick={unteransicht ? unteransichtAbbrechen : versucheSchliessen}
+          className="flex h-11 w-11 items-center justify-center rounded-full hover:bg-white/10"
+          aria-label={unteransicht ? 'Abbrechen' : 'Scan schließen'}
+        >
           <X className="h-6 w-6" />
         </button>
         <div className="min-w-0 flex-1 truncate text-sm font-medium">
           {phase === 'ecken' ? 'Ecken anpassen'
-            : phase === 'kamera' ? (ersetzeIndex != null ? `Seite ${ersetzeIndex + 1} neu aufnehmen` : `Seite ${seiten.length + 1}`)
-              : `Seite ${aktiv + 1} von ${seiten.length}`}
+            : phase === 'uebersicht' ? 'Seiten ordnen'
+              : phase === 'laden' ? ''
+                : phase === 'kamera' ? (ersetzeIndex != null ? `Seite ${ersetzeIndex + 1} neu aufnehmen` : `Seite ${seiten.length + 1}`)
+                  : phase === 'vorschau' ? (
+                    <button
+                      type="button"
+                      onClick={ordnenOeffnen}
+                      className="-ml-2 flex max-w-full items-center gap-1.5 rounded-full px-2 py-1.5 hover:bg-white/10"
+                      aria-label={`Seite ${aktiv + 1} von ${seiten.length} – Seiten ordnen`}
+                    >
+                      <LayoutGrid className="h-4 w-4 shrink-0" />
+                      <span className="truncate">Seite {aktiv + 1} von {seiten.length}</span>
+                    </button>
+                  ) : `Seite ${aktiv + 1} von ${seiten.length}`}
         </div>
-        {phase !== 'ecken' && (
+        {phase === 'uebersicht' && (
+          <button type="button" onClick={ordnenFertig} className="rounded-full bg-white px-4 py-1.5 text-sm font-semibold text-black">
+            Fertig
+          </button>
+        )}
+        {phase !== 'ecken' && phase !== 'uebersicht' && phase !== 'laden' && (
           <div className="flex rounded-full bg-white/10 p-0.5" role="radiogroup" aria-label="Farbmodus">
             {MODI.map((m) => (
               <button
@@ -599,12 +904,30 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
           />
         )}
         {fehler && (
-          <div className="absolute inset-x-4 top-1/3 rounded-xl bg-neutral-900 p-4 text-sm">
+          <div className="absolute inset-x-4 top-1/3 rounded-xl bg-neutral-900 p-4 text-sm" onClick={(e) => e.stopPropagation()}>
             <p>{fehler}</p>
-            <Button className="mt-3" variant="secondary" onClick={schliessen}>Schließen</Button>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button variant="secondary" onClick={galerieOeffnen}><Images className="h-4 w-4" /> Fotos auswählen</Button>
+              <Button variant="outline" className="border-white/30 bg-transparent text-white" onClick={versucheSchliessen}>Schließen</Button>
+            </div>
           </div>
         )}
       </div>
+
+      {phase === 'laden' && (
+        <div className="flex min-h-0 flex-1 items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-white/70" aria-label="Wird geladen" />
+        </div>
+      )}
+
+      {phase === 'uebersicht' && ordnen && (
+        <SeitenUebersicht
+          seiten={ordnen.reihenfolge.map((id) => seiten.find((s) => s.id === id)).filter(Boolean)}
+          aktivId={seiten[aktiv]?.id}
+          onReihenfolge={(neu) => setOrdnen((o) => ({ ...o, reihenfolge: neu.map((s) => s.id) }))}
+          onEntfernen={(ids) => setOrdnen((o) => ({ ...o, reihenfolge: o.reihenfolge.filter((id) => !ids.has(id)) }))}
+        />
+      )}
 
       {/* Vorschau der aktuellen Seite */}
       {phase === 'vorschau' && aktuelle && (
@@ -643,7 +966,6 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
             ecken={aktuelle.ecken}
             erkannt={aktuelle.erkannt}
             onUebernehmen={eckenUebernehmen}
-            onAbbrechen={() => setPhase('vorschau')}
           />
         </div>
       )}
@@ -651,23 +973,38 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
       {phase === 'senden' && (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-sm">
           <Loader2 className="h-8 w-8 animate-spin" />
-          PDF mit {seiten.length} {seiten.length === 1 ? 'Seite' : 'Seiten'} wird hochgeladen …
+          {sendeStand?.gesamt > 1
+            ? `${sendeStand.gesamt} Dokumente werden hochgeladen … (${sendeStand.fertig} von ${sendeStand.gesamt})`
+            : `PDF mit ${seiten.length} ${seiten.length === 1 ? 'Seite' : 'Seiten'} wird hochgeladen …`}
         </div>
       )}
 
       {hinweis && phase !== 'senden' && (
         <div className="mx-3 mb-2 rounded-lg bg-red-600/90 px-3 py-2 text-sm" role="alert">{hinweis}</div>
       )}
+      {speicherFehler && phase !== 'senden' && (
+        <div className="mx-3 mb-2 rounded-lg bg-amber-500/90 px-3 py-2 text-sm text-black" role="alert">
+          Scan konnte nicht auf dem Gerät gesichert werden – bitte jetzt hochladen.
+        </div>
+      )}
+      {anhang && (phase === 'vorschau' || phase === 'kamera') && (
+        <div className="mx-3 mb-2 flex items-center gap-3 rounded-lg bg-neutral-800 px-3 py-2 text-sm" role="status">
+          <span className="min-w-0 flex-1">{anhang.text}</span>
+          <button type="button" onClick={anhangRueckgaengig} className="shrink-0 rounded-full px-2 py-1 font-semibold text-violet-300 hover:bg-white/10">
+            Rückgängig
+          </button>
+        </div>
+      )}
 
       {/* Seitenleiste */}
       {(phase === 'vorschau' || (phase === 'kamera' && seiten.length > 0)) && (
-        <div className="flex gap-2 overflow-x-auto px-3 py-2" aria-label="Seiten">
+        <div className="flex items-center gap-2 overflow-x-auto px-3 py-2" aria-label="Seiten">
           {seiten.map((s, i) => (
             <button
               key={s.id}
               type="button"
               onClick={() => { setAktiv(i); setErsetzeIndex(null); setPhase('vorschau'); }}
-              className={`relative h-16 w-12 shrink-0 overflow-hidden rounded-md border-2 bg-white/10 ${phase === 'vorschau' && i === aktiv ? 'border-violet-400' : 'border-transparent'}`}
+              className={`relative h-16 w-12 shrink-0 overflow-hidden rounded-md border-2 bg-white/10 ${phase === 'vorschau' && i === aktiv ? 'border-violet-400' : 'border-transparent'} ${anhang?.ids.has(s.id) ? 'animate-pulse ring-2 ring-violet-400' : ''}`}
               aria-label={`Seite ${i + 1}`}
             >
               {s.vorschauUrl && <img src={s.vorschauUrl} alt="" className="h-full w-full object-cover" />}
@@ -675,6 +1012,16 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
               <span className="absolute bottom-0 right-0 rounded-tl bg-black/70 px-1 text-[10px]">{i + 1}</span>
             </button>
           ))}
+          {/* Im Livebild führt „Fertig“ am Ende der Leiste zur Prüfung der Seiten. */}
+          {phase === 'kamera' && (
+            <button
+              type="button"
+              onClick={() => { setErsetzeIndex(null); setAktiv(seiten.length - 1); setPhase('vorschau'); }}
+              className="sticky right-0 ml-auto flex h-10 shrink-0 items-center gap-1 rounded-full bg-white pl-4 pr-3 text-sm font-semibold text-black shadow-lg"
+            >
+              Fertig <ChevronRight className="h-4 w-4" />
+            </button>
+          )}
         </div>
       )}
 
@@ -682,9 +1029,14 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
       {phase === 'kamera' && (
         <div className="grid grid-cols-3 items-center px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-2">
           <div>
-            {seiten.length > 0 && (
-              <button type="button" onClick={() => { setErsetzeIndex(null); setPhase('vorschau'); }} className="rounded-full px-3 py-2 text-sm font-medium hover:bg-white/10">
-                Fertig ({seiten.length})
+            {ersetzeIndex == null && (
+              <button
+                type="button"
+                onClick={galerieOeffnen}
+                className="flex h-12 w-12 items-center justify-center rounded-full bg-white/10 hover:bg-white/20"
+                aria-label="Fotos aus der Galerie hinzufügen"
+              >
+                <Images className="h-5 w-5" />
               </button>
             )}
           </div>
@@ -723,28 +1075,124 @@ export default function KameraScan({ offen, onSchliessen, onFertig, zielText = '
           <div className="grid grid-cols-4 gap-1">
             <WerkzeugKnopf icon={Crop} label="Ecken" onClick={() => setPhase('ecken')} disabled={aktuelle.rechnet || !aktuelle.fotoBreite} />
             <WerkzeugKnopf icon={RotateCw} label="Drehen" onClick={drehen} disabled={aktuelle.rechnet} />
-            <WerkzeugKnopf icon={RefreshCw} label="Neu aufnehmen" onClick={neuAufnehmen} />
+            {aktuelle.quelle === 'foto' || !kameraVerfuegbar()
+              ? <WerkzeugKnopf icon={Maximize} label="Ganzes Bild" onClick={ganzesBild} disabled={aktuelle.rechnet || !aktuelle.fotoBreite} />
+              : <WerkzeugKnopf icon={RefreshCw} label="Neu aufnehmen" onClick={neuAufnehmen} />}
             <WerkzeugKnopf icon={Trash2} label="Entfernen" onClick={() => entfernen()} />
           </div>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <Button variant="secondary" className="h-12" onClick={seiteHinzufuegen}>
               <Plus className="h-4 w-4" /> Seite hinzufügen
             </Button>
-            <Button className="h-12" onClick={abschliessen} disabled={!alleFertig}>
-              <Check className="h-4 w-4" /> {zielText} ({seiten.length})
-            </Button>
+            {einzelnErlaubt && seiten.length > 1 ? (
+              <div className="relative flex">
+                <Button className="h-12 min-w-0 flex-1 rounded-r-none" onClick={() => abschliessen()} disabled={!alleFertig}>
+                  <Check className="h-4 w-4" /> {zielText} ({seiten.length})
+                </Button>
+                <Button
+                  className="h-12 w-10 shrink-0 rounded-l-none border-l border-white/20 px-0"
+                  onClick={() => setEinzelMenue((an) => !an)}
+                  disabled={!alleFertig}
+                  aria-label="Weitere Möglichkeiten zum Hochladen"
+                  aria-haspopup="menu"
+                  aria-expanded={einzelMenue}
+                >
+                  <ChevronDown className="h-4 w-4" />
+                </Button>
+                {einzelMenue && (
+                  <>
+                    <div className="fixed inset-0 z-10" onClick={() => setEinzelMenue(false)} aria-hidden />
+                    <div role="menu" className="absolute bottom-full right-0 z-20 mb-2 w-64 overflow-hidden rounded-xl bg-neutral-800 shadow-xl">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => abschliessen({ einzeln: true })}
+                        className="w-full px-4 py-3 text-left hover:bg-white/10"
+                      >
+                        <span className="block text-sm font-medium">Jede Seite als eigenes Dokument</span>
+                        <span className="block text-xs text-white/60">{seiten.length} Dokumente statt einem</span>
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : (
+              <Button className="h-12" onClick={() => abschliessen()} disabled={!alleFertig}>
+                <Check className="h-4 w-4" /> {zielText} ({seiten.length})
+              </Button>
+            )}
           </div>
         </div>
       )}
 
+      <input
+        ref={fotoWahlRef}
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const gewaehlt = [...(e.target.files || [])];
+          e.target.value = '';
+          if (gewaehlt.length === 0) return;
+          // Aus „Neu aufnehmen“ heraus ersetzt das erste Foto die Seite.
+          if (ersetzeIndex != null) {
+            const weg = seitenRef.current[ersetzeIndex];
+            if (weg) seitenWeg(new Set([weg.id]));
+            setErsetzeIndex(null);
+          }
+          fotosHinzufuegen(gewaehlt);
+        }}
+      />
+
       <Dialog open={verwerfenFrage} onOpenChange={setVerwerfenFrage} size="sm">
-        <DialogTitle>Scan verwerfen?</DialogTitle>
+        {dauerhaft ? (
+          <>
+            <DialogTitle>Scan schließen?</DialogTitle>
+            <DialogDescription>
+              {seiten.length === 1 ? 'Die Seite bleibt' : `Die ${seiten.length} Seiten bleiben`} bis zu 24 Stunden auf
+              diesem Gerät und {seiten.length === 1 ? 'lässt' : 'lassen'} sich über „Scannen“ fortsetzen.
+            </DialogDescription>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setVerwerfenFrage(false)}>Weiter scannen</Button>
+              <Button variant="destructive" onClick={verwerfen}>Verwerfen</Button>
+              <Button onClick={schliessen}>Für später behalten</Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogTitle>Scan verwerfen?</DialogTitle>
+            <DialogDescription>
+              {seiten.length === 1 ? 'Die Seite geht verloren.' : `Die ${seiten.length} Seiten gehen verloren.`}
+            </DialogDescription>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setVerwerfenFrage(false)}>Weiter scannen</Button>
+              <Button variant="destructive" onClick={verwerfen}>Verwerfen</Button>
+            </DialogFooter>
+          </>
+        )}
+      </Dialog>
+
+      <Dialog open={!!anhangFrage} onOpenChange={(o) => { if (!o) setAnhangFrage(null); }} size="sm">
+        <DialogTitle>Zum offenen Scan hinzufügen?</DialogTitle>
         <DialogDescription>
-          {seiten.length === 1 ? 'Die aufgenommene Seite geht verloren.' : `Die ${seiten.length} aufgenommenen Seiten gehen verloren.`}
+          {anhangFrage && `Es gibt noch einen offenen Scan ${zeitText(anhangFrage.zeit)} mit ${anhangFrage.anzahl === 1 ? '1 Seite' : `${anhangFrage.anzahl} Seiten`}. Mit „Neuer Scan“ wird er verworfen.`}
         </DialogDescription>
         <DialogFooter>
-          <Button variant="outline" onClick={() => setVerwerfenFrage(false)}>Weiter scannen</Button>
-          <Button variant="destructive" onClick={schliessen}>Verwerfen</Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              const neu = anhangFrage.fotos;
+              setAnhangFrage(null);
+              seitenWeg(new Set(seitenRef.current.map((s) => s.id)));
+              fotosHinzufuegen(neu);
+            }}
+          >
+            Neuer Scan
+          </Button>
+          <Button onClick={() => { const neu = anhangFrage.fotos; setAnhangFrage(null); fotosHinzufuegen(neu, { melden: true }); }}>
+            Hinzufügen
+          </Button>
         </DialogFooter>
       </Dialog>
     </div>,

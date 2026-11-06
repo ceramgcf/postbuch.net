@@ -19,6 +19,19 @@ angezeigt. Sie sind an Endnutzer gerichtet, nicht an Entwickler.
 
 ---
 
+## 2.14.0 – 2026-11-07
+
+- Neu: Optionale Zwei-Faktor-Anmeldung mit Authenticator-App und Wiederherstellungscodes. Der Admin kann sie für alle Zugänge vorschreiben und bei Geräteverlust zurücksetzen.
+- Neu: Vorhandene Fotos aus Galerie, Chat oder vom Rechner werden im Kamerascan wie Aufnahmen zugeschnitten und entzerrt, auch über Teilen-Menü und Datei-Upload.
+- Neu: Unter Windows erscheint postbuch.net im Teilen-Menü, wenn die PWA über den Edge-Browser installiert wurde.
+- Ein angefangener Kamerascan bleibt offen, nacheinander geteilte Fotos werden angehängt.
+- Sammelkürzungen im Erstattungsbescheid werden auf die einzelnen Rechnungspositionen aufgeteilt.
+- Fremdbelegpositionen werden jetzt entsprechend dem Fremdbeleg aufgeschlüsselt.
+- Verbesserte Robustheit der LLM-Ausgaben in der Verarbeitungspipeline.
+- Der Löschdialog zeigt eine abgelehnte Löschung an, der Verlauf zum Rückgängigmachen bleibt erhalten.
+- Das Update spielt Sicherheitskorrekturen am Datenbank-Image ein, mit Backup vorab und ohne Wechsel der PostgreSQL-Hauptversion.
+- Aktualisierte Abhängigkeiten und Basis-Images mit Sicherheitskorrekturen.
+
 ## 2.13.0 – 2026-10-24
 
 - Neu: Komplett neuer App-Modus. Auf Smartphones und kleinen Tablets wechselt postbuch.net automatisch in eine eigene Mobilansicht, breitere Bildschirme behalten die Desktop-Oberfläche.

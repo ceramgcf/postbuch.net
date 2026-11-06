@@ -6,13 +6,23 @@
  */
 
 import { guardedFetch, readLimitedText, TIMEOUT_COMPLETION_MS, NetGuardError } from '../../net-guard.js';
-import { joinUrl, permanentError } from '../registry.js';
+import { joinUrl, permanentError, MAX_TOKENS_OHNE_GRENZE } from '../registry.js';
 import {
   resolveThinkingPolicy, istExtraktion, anthropicExtraktionsFelder, anthropicExtraktionsStufe,
   anthropicNaechsteStufe, anthropicStufeBestaetigt, extraktionsModus,
 } from '../thinking-policy.js';
 
 export const ANTHROPIC_VERSION = '2023-06-01';
+
+// Modelle, die eine Strukturvorgabe (output_config.format) mit HTTP 400
+// abgelehnt haben; sie bekommen bis zum Neustart kein Schema mehr.
+const ohneSchema = new Set();
+
+/** Lehnt die API die Strukturvorgabe ab (nicht die Thinking-Felder)? */
+export function istSchemaAblehnung(status, text) {
+  const t = String(text || '');
+  return status === 400 && /output_config|format|schema/i.test(t) && !/thinking|effort/i.test(t);
+}
 
 /**
  * User-Content-Blöcke (optional PDF-Dokument(e) + Text). `pdfOrPdfs` nimmt
@@ -90,13 +100,14 @@ export function buildThinkingBodyFields(policy) {
   };
 }
 
-export async function callAnthropic(model, prompt, { pdf, pdfs, system, maxTokens, cacheSystem, zweck }, provider) {
+export async function callAnthropic(model, prompt, { pdf, pdfs, system, maxTokens, cacheSystem, zweck, jsonSchema, timeoutMs }, provider) {
   const apiKey = provider?.apiKey;
   if (!apiKey) throw permanentError('Anthropic API-Key nicht konfiguriert');
 
   const body = {
     model,
-    max_tokens: maxTokens,
+    // Pflichtfeld bei Anthropic: ohne Grenze des Aufrufers das Ausgabemaximum.
+    max_tokens: maxTokens ?? MAX_TOKENS_OHNE_GRENZE,
     messages: [{ role: 'user', content: buildAnthropicUserContent(pdfs ?? pdf, prompt) }],
   };
   const sys = buildSystemParam(system, cacheSystem);
@@ -108,6 +119,15 @@ export async function callAnthropic(model, prompt, { pdf, pdfs, system, maxToken
   let stufe = extraktion ? anthropicExtraktionsStufe(provider?.id, model, modus) : null;
   if (!extraktion) Object.assign(body, buildThinkingBodyFields(resolveThinkingPolicy({ model, zweck })));
 
+  const schemaSchluessel = `${provider?.id} ${model}`;
+  let mitSchema = Boolean(jsonSchema) && !ohneSchema.has(schemaSchluessel);
+  // output_config zusammenführen: Die Thinking-Felder setzen dort ggf. effort.
+  const sendeBody = () => {
+    const b = extraktion ? { ...body, ...anthropicExtraktionsFelder(stufe) } : { ...body };
+    if (mitSchema) b.output_config = { ...b.output_config, format: { type: 'json_schema', schema: jsonSchema } };
+    return JSON.stringify(b);
+  };
+
   const post = () => guardedFetch(messagesUrl(provider), {
     method: 'POST',
     headers: {
@@ -116,14 +136,23 @@ export async function callAnthropic(model, prompt, { pdf, pdfs, system, maxToken
       'anthropic-beta': 'pdfs-2024-09-25',
       'content-type': 'application/json',
     },
-    body: JSON.stringify(extraktion ? { ...body, ...anthropicExtraktionsFelder(stufe) } : body),
-  }, { allowPrivate: provider?.allowPrivate === true, timeoutMs: TIMEOUT_COMPLETION_MS });
+    body: sendeBody(),
+  }, { allowPrivate: provider?.allowPrivate === true, timeoutMs: timeoutMs ?? TIMEOUT_COMPLETION_MS });
 
   let { response } = await post();
   let text = await readLimitedText(response);
-  // Abgelehnte Thinking-Stufe: nächste Stufe sofort versuchen (die Anfrage wurde
-  // nicht verarbeitet, es fallen keine Token an).
-  while (extraktion && !response.ok) {
+  // Abgelehnte Strukturvorgabe oder Thinking-Stufe: sofort erneut versuchen
+  // (die Anfrage wurde nicht verarbeitet, es fallen keine Token an).
+  while (!response.ok) {
+    // Ohne Schema parst der Aufrufer die Antwort wie bisher selbst.
+    if (mitSchema && istSchemaAblehnung(response.status, text)) {
+      ohneSchema.add(schemaSchluessel);
+      mitSchema = false;
+      ({ response } = await post());
+      text = await readLimitedText(response);
+      continue;
+    }
+    if (!extraktion) break;
     const naechste = anthropicNaechsteStufe(provider?.id, model, modus, stufe, response.status, text);
     if (naechste == null) break;
     stufe = naechste;
@@ -138,5 +167,10 @@ export async function callAnthropic(model, prompt, { pdf, pdfs, system, maxToken
   }
 
   const data = JSON.parse(text);
-  return { text: extractAnthropicText(data.content, 'Anthropic'), usage: extractAnthropicUsageObj(data.usage) };
+  return {
+    text: extractAnthropicText(data.content, 'Anthropic'),
+    usage: extractAnthropicUsageObj(data.usage),
+    // Die Ausgabegrenze war erreicht: die Antwort ist unvollständig.
+    abgeschnitten: data.stop_reason === 'max_tokens',
+  };
 }

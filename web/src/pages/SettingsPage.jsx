@@ -52,6 +52,7 @@ import { renderLabelCanvas } from '@/lib/labelRenderer';
 import { gleichesModell } from '@/lib/modellId';
 import { leseImportFolgen, schreibeImportFolgen } from '@/lib/importFolgen';
 import { Switch } from '@/components/ui/switch';
+import ZweiterFaktorKarte from '@/components/settings/ZweiterFaktor';
 import {
   useVerbleibKategorienAll,
   useCreateVerbleibKategorie,
@@ -4701,6 +4702,7 @@ function KontoTab() {
         )}
       </CardContent>
     </Card>
+    <ZweiterFaktorKarte />
     {canWrite && <ImportFolgenKarte />}
     </>
   );

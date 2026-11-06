@@ -29,7 +29,8 @@ const KUERZUNG_KARTE = [
   ) },
   { key: 'arzt', mobil: 'titel', zelle: (k) => k.name_arzt || '–' },
   { key: 'leistung', mobil: 'text', zelle: (k) => [
-    k.arz_leistung, k.arz_ziffer && `(${k.arz_ziffer})`, k.begruendung && `– ${k.begruendung}`,
+    k.arz_leistung || (k.arz_postid && k.arz_subid == null && 'Ohne Einzelposition'),
+    k.arz_ziffer && `(${k.arz_ziffer})`, k.begruendung && `– ${k.begruendung}`,
   ].filter(Boolean).join(' ') },
   { key: 'status', mobil: 'badges', zelle: (k, { status }) => (
     <div className="flex flex-col gap-1.5 items-start" onClick={stopp}>{status(k)}</div>
@@ -350,11 +351,13 @@ export default function KuerzungenPage() {
                       <TableCell>{k.behandelte_person || '–'}</TableCell>
                       <TableCell className="truncate">{k.name_arzt || '–'}</TableCell>
                       <TableCell>
-                        {k.arz_leistung || '–'}
+                        {k.arz_leistung || (k.arz_postid && k.arz_subid == null
+                          ? <span className="text-muted-foreground">Ohne Einzelposition</span> : '–')}
                         {k.arz_ziffer && <span className="ml-1 text-muted-foreground font-mono text-xs">({k.arz_ziffer})</span>}
+                        {k.arz_zusatzangaben && <div className="text-muted-foreground text-xs">{k.arz_zusatzangaben}</div>}
                       </TableCell>
                       <TableCell className="text-right font-mono text-red-600">{formatCurrency(k.kuerzungsbetrag_effektiv ?? k.kuerzungsbetrag)}</TableCell>
-                      <TableCell className="text-sm">{k.begruendung || '–'}</TableCell>
+                      <TableCell className="text-sm whitespace-pre-line">{k.begruendung || '–'}</TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-1.5 items-start">
                           {statusZelle(k)}

@@ -8,6 +8,7 @@ import {
   Coins, Activity, Bot, ChevronRight, ChevronDown, Link2,
   RefreshCw, AlertCircle, Cpu,
 } from 'lucide-react';
+import { KI_KATEGORIE_LABEL } from '@/lib/kiAufrufe';
 
 // ── Formatierung ────────────────────────────────────────────────────────────
 // Einzeleinträge: Cent für kleine Beträge, Dollar ab $1.
@@ -91,16 +92,7 @@ function fmtTs(iso) {
   });
 }
 
-const KATEGORIE_LABEL = {
-  preanalysis:         'Voranalyse',
-  analysis:            'Dok-Analyse',
-  erstattungsbescheid: 'EB-Parse',
-  kuerzung:            'Kürzungs-Match',
-  embedding:           'Embedding',
-  search:              'Such-Embedding',
-  akte_vorschlag:      'Akte-Vorschlag',
-  other:               'Sonstiges',
-};
+const KATEGORIE_LABEL = KI_KATEGORIE_LABEL;
 
 // Kennzeichnet die Abrechnungsschiene eines Aufrufs durchgängig: „Abo" =
 // Claude-Subscription (Pauschaltarif, keine Token-Kosten), „API" = klassischer

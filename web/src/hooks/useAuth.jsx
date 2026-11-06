@@ -25,8 +25,9 @@ export function AuthProvider({ children }) {
       });
   }, []);
 
-  const login = useCallback(async (username, password) => {
-    const data = await api.auth.login(username, password);
+  // Übernimmt eine abgeschlossene Anmeldung (Passwort allein oder nach dem
+  // zweiten Faktor) in den Kontext.
+  const anmeldungUebernehmen = useCallback(async (data) => {
     // Der Lesebereich steht nur in /auth/check. Er muss vor dem ersten Rendern
     // der App feststehen, sonst starten die globalen Abfragen der vollen Oberfläche.
     const check = data.role === 'lesezugriff' ? await api.auth.check().catch(() => null) : null;
@@ -35,6 +36,13 @@ export function AuthProvider({ children }) {
     setUsername(data.username ?? null);
     setRole(data.role ?? null);
   }, []);
+
+  /** Liefert die Antwort; bei `zweiterFaktor` ist die Anmeldung noch nicht fertig. */
+  const login = useCallback(async (username, password) => {
+    const data = await api.auth.login(username, password);
+    if (!data.zweiterFaktor) await anmeldungUebernehmen(data);
+    return data;
+  }, [anmeldungUebernehmen]);
 
   const logout = useCallback(async () => {
     await api.auth.logout();
@@ -52,7 +60,7 @@ export function AuthProvider({ children }) {
   const istEingeschraenkt = role === 'lesezugriff' && lesebereich !== 'alle';
 
   return (
-    <AuthContext.Provider value={{ authenticated, username, role, canWrite, isAdmin, istEingeschraenkt, login, logout }}>
+    <AuthContext.Provider value={{ authenticated, username, role, canWrite, isAdmin, istEingeschraenkt, login, anmeldungUebernehmen, logout }}>
       {children}
     </AuthContext.Provider>
   );
