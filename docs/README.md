@@ -37,7 +37,7 @@ Mal sehen, ist das README im Wurzelverzeichnis.
 | [OneDrive-App registrieren](onedrive-app-registrierung.md) | Gerätecode ohne Secret, Legacy-Redirect und Secret-Erneuerung |
 | [KI-Anbieter](ki-provider.md) | Provider, Modellstufen, Embeddings, cloudfreier Betrieb |
 | [Backup und Wiederherstellung](backup-wiederherstellung.md) | Datenbank **und** Dokumente sichern, Restore, Notfallwiederherstellung |
-| [Sicherheit](sicherheit.md) | Rollenmodell, Netzwerk, Secrets, Meldewege |
+| [Sicherheit](sicherheit.md) | Rollenmodell, Zwei-Faktor-Anmeldung, Netzwerk, Secrets, Meldewege |
 | [Zugriff von unterwegs](zugriff-von-unterwegs.md) | Per VPN ins Heimnetz: WireGuard über die FRITZ!Box oder Tailscale |
 | [Architektur](architektur.md) | Dienste, Datenfluss, Datenmodell, Schema-Pflege |
 | [Betrieb und Troubleshooting](betrieb-troubleshooting.md) | Updates, Neustart, Logs, häufige Fehlerbilder |

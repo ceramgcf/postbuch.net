@@ -20,17 +20,20 @@ sehr genaue Beschreibung von Dateien, die möglicherweise nicht mehr existieren.
 
 **Enthalten:** sämtliche Dokumentdaten (Titel, Beträge, Daten, Klassifikation,
 Zuordnung zu Personen, Akten, Verbleib, Fristen, Abrechnungsperioden,
-Einreichungen, Erstattungen), alle Personen und Zugänge samt Passwort-Hashes
-und alle Einstellungen aus `_settings`.
+Einreichungen, Erstattungen), alle Personen und Zugänge samt Passwort-Hashes,
+eingerichteter [Zwei-Faktor-Anmeldung](sicherheit.md#zwei-faktor-anmeldung)
+(Geheimnis verschlüsselt, Wiederherstellungscodes nur als Hashwert) und alle
+Einstellungen aus `_settings`.
 
 **Zugangsdaten nur verschlüsselt:** Mit der standardmäßig aktiven
 [Backup-Verschlüsselung](#backup-verschlüsselung) ist die gesamte Datei
 passwortgeschützt und enthält auch **alle Zugangsdaten dieser Instanz**: die
 Verbindung zur Dateiablage (OAuth-Token, Client-Secret bzw. WebDAV-
 App-Passwort), jeden hinterlegten KI-Schlüssel, Discord-Zugang,
-Webhook- und Scanner-Token, den privaten Schlüssel für Push-Mitteilungen und
-das Sitzungsgeheimnis. Ein unverschlüsseltes Backup lässt genau diese Einträge
-weg; alles andere steht darin im Klartext.
+Webhook- und Scanner-Token, den privaten Schlüssel für Push-Mitteilungen, den
+Schlüssel der Zwei-Faktor-Geheimnisse und das Sitzungsgeheimnis. Ein
+unverschlüsseltes Backup lässt genau diese Einträge weg; alles andere steht
+darin im Klartext.
 
 **Nicht enthalten:** die PDF-Originale. Die Tabelle `post_files` ist nur ein
 Abrufcache und wird per `--exclude-table-data` bewusst ohne Inhalt gesichert.
@@ -495,7 +498,11 @@ Ein vollständiger Wiederaufbau in der Reihenfolge, in der er funktioniert:
 3. **Dateiablage verbinden** – ein verschlüsselter Dump bringt die Zugangsdaten
    mit, bei OneDrive kann je nach Alter des Backups eine neue Anmeldung nötig
    sein. Nach einem unverschlüsselten Dump werden Dateiablage und KI-Schlüssel
-   neu eingetragen.
+   neu eingetragen. Codes aus der Authenticator-App gelten dann nicht mehr:
+   Wer einen zweiten Faktor eingerichtet hatte, meldet sich mit einem
+   Wiederherstellungscode an und richtet ihn unter **Persönlich** neu ein; für
+   den Administrator gibt es zusätzlich den
+   [Notschalter](sicherheit.md#notschalter-für-den-administrator).
 4. **Dokumente prüfen.** Sind die Originale in der Dateiablage unverändert vorhanden,
    ist man fertig.
 5. Wurden die Dokumente aus einem Backup in die Dateiablage zurückgespielt, sind ihre

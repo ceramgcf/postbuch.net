@@ -72,7 +72,8 @@ Urkunden.
 - Push-Benachrichtigungen für neue Dokumente, Fehler, Duplikate, Fristen und
   Wiedervorlagen.
 - Mehrere Personen im Haushalt mit Voll- oder Lesezugriff; ein Lesezugriff
-  lässt sich auf die eigenen Dokumente beschränken.
+  lässt sich auf die eigenen Dokumente beschränken. Optional mit
+  Zwei-Faktor-Anmeldung per Authenticator-App, auf Wunsch für alle Pflicht.
 - Etikettendruck fürs Papieroriginal (Niimbot D110).
 - MCP-Server: postbuch.net als Datenquelle für Claude Desktop, ChatGPT und
   andere Tools.
@@ -191,9 +192,9 @@ Damit du weißt, worauf du dich einlässt:
   Dokumenten bleibt die Qualität lokaler Modelle derzeit hinter Cloud-Modellen
   zurück.
 - **Im Heimnetz betreiben, nicht offen im Internet.** postbuch.net verarbeitet
-  Gesundheits- und Finanzdaten, hat aber keine Zwei-Faktor-Anmeldung und ist
-  nicht für den offenen Betrieb gehärtet. Von unterwegs ist ein VPN der
-  passende Weg (siehe oben).
+  Gesundheits- und Finanzdaten und ist nicht für den offenen Betrieb gehärtet,
+  auch nicht mit Zwei-Faktor-Anmeldung. Von unterwegs ist ein VPN der passende
+  Weg (siehe oben).
 - **Die Ablage-Verbindung reicht weit.** Bei OneDrive arbeiten neue
   Verbindungen nur im eigenen App-Ordner; ältere mit Vollzugriff lassen sich
   unter `Einstellungen → Dateiablage` darauf umstellen. Ein Nextcloud-App-Passwort gilt

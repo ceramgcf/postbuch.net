@@ -64,7 +64,9 @@ Claude Desktop auf deinem Laptop im selben Heimnetz reicht die LAN-Adresse.
 > erreichbare Adresse, dafür aber einen eigens abgesicherten Weg (z. B.
 > Reverse-Proxy mit zusätzlicher Zugriffskontrolle) statt eines einfach
 > weitergeleiteten Ports – mit allen Konsequenzen, siehe
-> [Sicherheit](sicherheit.md).
+> [Sicherheit](sicherheit.md). Ein MCP-Token allein genügt für den Zugriff:
+> Die [Zwei-Faktor-Anmeldung](sicherheit.md#zwei-faktor-anmeldung) schützt nur
+> die Anmeldung an der Oberfläche.
 
 ### 2. Token erzeugen
 

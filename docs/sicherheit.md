@@ -74,7 +74,9 @@ noch die neue Person.
 Rollenwechsel, Änderung des Lesebereichs, Passwortänderung und Löschen einer Person **widerrufen in
 derselben Datenbanktransaktion** alle Web-Sitzungen und alle MCP-Token dieser
 Person. Wer ausgesperrt werden soll, ist damit sofort ausgesperrt – nicht erst
-nach Ablauf des Sitzungscookies.
+nach Ablauf des Sitzungscookies. Setzt der Administrator die
+[Zwei-Faktor-Anmeldung](#zwei-faktor-anmeldung) einer Person zurück, beendet
+das ebenfalls alle ihre Sitzungen und MCP-Token.
 
 Für den Administrator gibt es das Gegenstück: Jede Admin-Sitzung trägt einen
 Fingerabdruck des aktuellen `APP_PASSWORD`. Wird das Passwort in der `.env`
@@ -268,7 +270,7 @@ Vor dem allgemeinen Cookie-Session-Schutz liegen mehrere eigenständig
 abgesicherte Routen: `/api/health` für die Gesundheitsprüfung,
 `/api/public/scanner-port` für die Auskunft über Scanner-Port und Freigabe (ohne
 Token), `/api/auth`
-für Login und Sitzungsprüfung, `/api/onedrive-auth`
+für Login samt zweitem Faktor und Sitzungsprüfung, `/api/onedrive-auth`
 für den Microsoft-OAuth-Flow mit eigener State-Prüfung, `/api/webhooks/*` mit
 Token-Prüfung, `/api/mcp` mit Bearer-Token und `/api/internal/config` für den
 internen Docker-Netzverkehr. Die Seite `/setup/restore` ist während der
@@ -333,7 +335,8 @@ Admin-Passwort. Die Datei wird nie in ein Repository eingecheckt und gehört
 niemandem außer dem Server. Wer sie weitergibt, gibt die Instanz weg.
 
 **In der Datenbank** stehen alle übrigen Zugangsdaten: OAuth-Token der Dateiablage,
-WebDAV-App-Passwort, KI-Schlüssel. Die API gibt sie **nie** zurück – weder
+WebDAV-App-Passwort, KI-Schlüssel und der Schlüssel, mit dem die Geheimnisse
+der [Zwei-Faktor-Anmeldung](#zwei-faktor-anmeldung) verschlüsselt sind. Die API gibt sie **nie** zurück – weder
 Administratoren noch dem eigenen Frontend. Erkannt werden sie an Namensregeln,
 die sowohl beim Lesen als auch beim Schreiben greifen; die Oberfläche zeigt
 entsprechend nur, _ob_ ein Schlüssel hinterlegt ist. Welche Einstellungen über

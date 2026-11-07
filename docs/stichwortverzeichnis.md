@@ -408,7 +408,7 @@ ausführlichste Behandlung.
 - **Zurück-Taste (PWA)** – [Die Zurück-Taste im installierten Zustand](mobil-und-pwa.md#die-zurück-taste-im-installierten-zustand)
 - **Zurückgehalten (Periodenstatus)** – [Grundbegriffe](abrechnung-pkv-beihilfe.md#grundbegriffe) · [Zurückgehaltene Perioden](abrechnung-pkv-beihilfe.md#zurückgehaltene-perioden)
 - **Zwangssicherung (vor dem Wiederherstellen)** – [Wiederherstellen](backup-wiederherstellung.md#wiederherstellen) · [Aus einer lokalen Datei](backup-wiederherstellung.md#aus-einer-lokalen-datei)
-- **Zwei-Faktor-Anmeldung (2FA, TOTP)** – [Zwei-Faktor-Anmeldung](sicherheit.md#zwei-faktor-anmeldung) · [Für alle vorschreiben](sicherheit.md#zwei-faktor-anmeldung) · [Notschalter für den Administrator](sicherheit.md#notschalter-für-den-administrator)
+- **Zwei-Faktor-Anmeldung (2FA, TOTP)** – [Zwei-Faktor-Anmeldung](sicherheit.md#zwei-faktor-anmeldung) · [Für alle vorschreiben](sicherheit.md#zwei-faktor-anmeldung) · [Notschalter für den Administrator](sicherheit.md#notschalter-für-den-administrator) · [Code wird nicht angenommen](betrieb-troubleshooting.md#häufige-fehlerbilder) · [Nach einem Restore](backup-wiederherstellung.md#der-ernstfall)
 
 ---
 

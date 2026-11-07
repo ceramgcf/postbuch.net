@@ -279,6 +279,15 @@ gesperrt; die Meldung nennt die Wartezeit. Beim Administrator kommt eine
 zweite Möglichkeit dazu: Wurde `APP_PASSWORD` in der `.env` geändert, gilt nur
 noch das neue – und alte Admin-Sitzungen sind ungültig.
 
+**Der Code aus der Authenticator-App wird nicht angenommen.**
+Jeder Code gilt nur einmal und höchstens 30 Sekunden vor oder nach seinem
+Zeitfenster; geht die Uhr des Telefons falsch, passt keiner. Nach fünf falschen
+Codes ist der Zugang 15 Minuten gesperrt. Wurde zuvor ein unverschlüsseltes
+Backup eingespielt, gelten die Codes aus der App gar nicht mehr. In allen
+Fällen hilft ein Wiederherstellungscode; fehlt auch der, setzt der
+Administrator den Faktor zurück, für sich selbst über den
+[Notschalter](sicherheit.md#notschalter-für-den-administrator).
+
 **Ein Dokument ist in der Pipeline gescheitert.**
 ![Logs-Symbol](icons/scroll-text.svg) Logs → Jobs zeigt den Lauf mit Status *fehlgeschlagen* oder *unterbrochen* und
 daneben ![Wiederholen-Symbol](icons/refresh-cw.svg) **↺ Wiederholen**. Das startet dieselbe Datei erneut, ohne dass man sie

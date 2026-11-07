@@ -29,10 +29,11 @@ zeitweise abgeschalteter Server verliert nichts, holt aber Verpasstes nicht
 vollständig nach.
 
 **Kann ich postbuch.net aus dem Internet erreichbar machen?**
-Möglich ist es, empfohlen ist es nicht. Die Anwendung gehört ins eigene Netz
-oder hinter ein VPN. Wer sie trotzdem veröffentlicht, braucht zwingend HTTPS
-(dafür gibt es das Caddy-Profil) und ein starkes Admin-Passwort. Siehe
-[Sicherheit](sicherheit.md).
+Davon wird dringend abgeraten. Die Anwendung gehört ins eigene Netz oder hinter
+ein VPN. postbuch.net ist nicht für den offenen Betrieb gehärtet, und daran
+ändern weder HTTPS noch starke Passwörter noch die
+[Zwei-Faktor-Anmeldung](sicherheit.md#zwei-faktor-anmeldung) etwas. Siehe
+[Sicherheit](sicherheit.md#grenzen--was-postbuchnet-nicht-leistet).
 
 **Wie komme ich von unterwegs an meine Dokumente?**
 Über ein VPN ins Heimnetz, etwa mit WireGuard auf der FRITZ!Box oder mit
