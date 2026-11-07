@@ -23,6 +23,7 @@ import { erstelleStapelSpeicher, neuerSchluessel, stapelLaden } from '@/lib/kame
 import EckenEditor, { WerkzeugKnopf } from './EckenEditor';
 import KameraEinstellungen from './KameraEinstellungen';
 import SeitenUebersicht from './SeitenUebersicht';
+import { useDarstellung } from '@/hooks/useDarstellung';
 
 const SPEICHER = 'postbuch.kamerascan';
 const MODI = [
@@ -125,6 +126,7 @@ export default function KameraScan({
   offen, onSchliessen, onFertig, zielText = 'Hochladen', diagnose = false, onPostbuchQr, fotos = null,
   dauerhaft = false, einzelnErlaubt = false,
 }) {
+  const { istMobil } = useDarstellung();
   const [vorgaben, setVorgaben] = useState(leseVorgaben);
   const { modus, auto } = vorgaben;
   const [phase, setPhase] = useState('laden'); // laden | kamera | vorschau | uebersicht | ecken | senden
@@ -1145,15 +1147,15 @@ export default function KameraScan({
         }}
       />
 
-      <Dialog open={verwerfenFrage} onOpenChange={setVerwerfenFrage} size="sm">
+      <Dialog open={verwerfenFrage} onOpenChange={setVerwerfenFrage} size={dauerhaft ? 'lg' : 'sm'}>
         {dauerhaft ? (
           <>
             <DialogTitle>Scan schließen?</DialogTitle>
             <DialogDescription>
               {seiten.length === 1 ? 'Die Seite bleibt' : `Die ${seiten.length} Seiten bleiben`} bis zu 24 Stunden auf
-              diesem Gerät und {seiten.length === 1 ? 'lässt' : 'lassen'} sich über „Scannen“ fortsetzen.
+              diesem Gerät und {seiten.length === 1 ? 'lässt' : 'lassen'} sich {istMobil ? 'über „Scannen“' : 'auf der Seite „Importieren“'} fortsetzen.
             </DialogDescription>
-            <DialogFooter>
+            <DialogFooter className="sm:flex-wrap">
               <Button variant="outline" onClick={() => setVerwerfenFrage(false)}>Weiter scannen</Button>
               <Button variant="destructive" onClick={verwerfen}>Verwerfen</Button>
               <Button onClick={schliessen}>Für später behalten</Button>

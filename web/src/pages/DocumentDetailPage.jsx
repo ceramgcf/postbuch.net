@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useZurueckZiel } from '@/hooks/useBackButtonGuard';
 import { useParams, useOutletContext, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -25,6 +25,7 @@ import { useDarstellung } from '@/hooks/useDarstellung';
 import { SeitenLeiste, useKopfOhneTitel } from '@/hooks/useSeite';
 import { DokumentViewer } from '@/components/layout/DokumentViewer';
 import { FileText, ListChecks } from 'lucide-react';
+import { useMenueImBild } from '@/hooks/useMenueImBild';
 import { useAuth } from '@/hooks/useAuth';
 
 const routeLabels = {
@@ -228,6 +229,8 @@ export default function DocumentDetailPage() {
   const [pinGrund, setPinGrund] = useState('');
 
   const semanticSuggestions = useSemanticAktenSuggestions(postid, showAktenMenu);
+  const aktenMenuRef = useRef(null);
+  const aktenMenuOben = useMenueImBild(aktenMenuRef, showAktenMenu);
 
   useEffect(() => {
     if (data?.postbuch?.hatPdf || data?.postbuch?.onedrive_id) {
@@ -517,7 +520,7 @@ export default function DocumentDetailPage() {
                 Zu Akte hinzufügen
               </Button>
             {showAktenMenu && (
-              <div className="absolute right-0 top-full mt-1 z-50 w-72 rounded-md border bg-popover shadow-md overflow-hidden">
+              <div ref={aktenMenuRef} className={`absolute right-0 z-50 w-72 rounded-md border bg-popover shadow-md overflow-hidden ${aktenMenuOben ? 'bottom-full mb-1' : 'top-full mt-1'}`}>
                 {newAkteMode ? (
                   <div className="p-2">
                     <p className="px-1 py-0.5 text-xs font-semibold text-muted-foreground mb-1.5">Neue Akte anlegen</p>

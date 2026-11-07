@@ -173,8 +173,8 @@ Android; auf iPhone und iPad ist er ungetestet.
 ![Schließen-Symbol](icons/x.svg) oben links beendet den Scan. Sind schon
 Seiten aufgenommen, fragt postbuch.net nach: **Für später behalten** legt die
 Seiten auf diesem Gerät ab, **Verwerfen** löscht sie. Ein behaltener Scan
-übersteht auch das Schließen der App. Solange er offen ist, trägt der Knopf
-**Scannen** die Seitenzahl, und auf der Importseite steht oben
+übersteht auch das Schließen der App. Solange er offen ist, trägt in der
+Mobilansicht der Knopf **Scannen** die Seitenzahl, und auf der Importseite steht oben
 **Offener Scan** mit **Fortsetzen** und **Verwerfen**. Nach dem Hochladen ist
 der Scan erledigt; ein nicht fortgesetzter Scan verfällt nach 24 Stunden. Die
 Seiten liegen nur im Browser dieses Geräts, ein anderes Gerät sieht sie nicht.

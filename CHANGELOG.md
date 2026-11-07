@@ -19,6 +19,10 @@ angezeigt. Sie sind an Endnutzer gerichtet, nicht an Entwickler.
 
 ---
 
+## 2.14.1 – 2026-11-07
+
+- Optische Überläufe behoben.
+
 ## 2.14.0 – 2026-11-07
 
 - Neu: Optionale Zwei-Faktor-Anmeldung mit Authenticator-App und Wiederherstellungscodes. Der Admin kann sie für alle Zugänge vorschreiben und bei Geräteverlust zurücksetzen.
