@@ -16,6 +16,7 @@ import { loadDynamicSettings, getActiveBackendName, getFolders, getAblageEbenen,
 import { getAdapter } from '../lib/storage/index.js';
 import { getAktiveTaxonomie, getGesamteTaxonomie } from '../lib/taxonomie.js';
 import { appLog } from '../app-log.js';
+import { istBestaetigterDateiFehlt } from './storage-missing.js';
 
 /**
  * Systemordner-Definition. L-Ordner stammen aus der Taxonomie, D-Ordner werden
@@ -273,6 +274,46 @@ export async function entferneOrdnerSchluessel(backend, keys) {
       WHERE key = 'storage_folders' AND value ? $1::text`,
     [backend, keys],
   );
+}
+
+/**
+ * Liefert die Ordner-ID eines Systemordners (z. B. `_backup`) und legt ihn neu
+ * an, wenn er in der Ablage fehlt – etwa weil ihn jemand gelöscht oder
+ * verschoben hat. Der Ort ergibt sich aus den übrigen Systemordnern
+ * (ermittleWurzelPfad); ohne sie wird nichts geraten und der ursprüngliche
+ * Fehler weitergegeben. Nur ein bestätigtes 404 der Ablage gilt als „fehlt“;
+ * Netz- oder Anmeldefehler gehen unverändert durch.
+ *
+ * @param {string} key            Ordner-Schlüssel aus SYSTEM_FOLDERS, z. B. 'backup'
+ * @param {string} [backendName]  Backend; Default: das aktive
+ * @returns {Promise<string|null>} Ordner-ID oder null, wenn nicht konfiguriert
+ */
+export async function systemOrdnerSicherstellen(key, backendName) {
+  const def = SYSTEM_FOLDERS.find((d) => d.keys.includes(key));
+  if (!def) throw new Error(`Unbekannter Systemordner: ${key}`);
+  const settings = await loadDynamicSettings();
+  const backend = backendName || getActiveBackendName(settings);
+  const adapter = getAdapter(backend);
+  const id = def.keys.map((k) => getFolders(settings, backend)[k]).find(Boolean);
+  if (!id) return null;
+
+  try {
+    await adapter.listChildren(id);
+    return id;
+  } catch (err) {
+    if (!istBestaetigterDateiFehlt(err)) throw err;
+    const wurzel = await ermittleWurzelPfad(backend);
+    if (wurzel === null) throw err;
+
+    let elternId = (await adapter.getRoot()).id;
+    for (const seg of (wurzel === WURZEL_DIREKT ? '' : wurzel).split('/').filter(Boolean)) {
+      ({ id: elternId } = await adapter.findOrCreateFolder(elternId, seg, { strict: true }));
+    }
+    const { id: neu } = await adapter.findOrCreateFolder(elternId, def.folder, { strict: true });
+    await saveFolderIds(backend, Object.fromEntries(def.keys.map((k) => [k, neu])));
+    appLog('WARN', 'storage', `Der Ordner ${def.folder} fehlte in der Ablage und wurde neu angelegt.`);
+    return neu;
+  }
 }
 
 // ── Ablageebenen ──────────────────────────────────────────────────────────────
@@ -543,6 +584,38 @@ export async function ensureAblageOrdner(settings, row, backendName, opts = {}) 
   }
   await saveFolderIds(backend, patch);
   return parentId;
+}
+
+/**
+ * Führt eine Dateioperation mit dem Zielordner eines Dokuments aus und heilt
+ * dabei eine veraltete Ordner-ID: Meldet die Operation „nicht gefunden“ (404),
+ * kann der gecachte Ordner von Hand gelöscht oder verschoben worden sein. Dann
+ * wird die Ordnerkette einmal erzwungen neu aufgelöst (und dabei bei Bedarf
+ * neu angelegt) und die Operation mit der neuen ID wiederholt. Bleibt die ID
+ * gleich, lag der Fehler woanders (etwa an der Quelldatei) und wird
+ * unverändert weitergereicht.
+ *
+ * @param {object} settings
+ * @param {object} row          wie bei ensureAblageOrdner()
+ * @param {string} [backendName]
+ * @param {(folderId: string) => Promise<any>} fn
+ */
+export async function mitAblageOrdner(settings, row, backendName, fn) {
+  const folderId = await ensureAblageOrdner(settings, row, backendName);
+  try {
+    return await fn(folderId);
+  } catch (err) {
+    if (err?.status !== 404) throw err;
+    let neu;
+    try {
+      neu = await ensureAblageOrdner(settings, row, backendName, { force: true });
+    } catch {
+      throw err;
+    }
+    if (!neu || neu === folderId) throw err;
+    appLog('WARN', 'storage', `Ablageordner ${row.lebensbereich}/${row.dokumentart} war nicht mehr vorhanden – neu aufgelöst (${folderId} → ${neu})`);
+    return fn(neu);
+  }
 }
 
 /** Liegt der Ordner eines Cache-Schlüssels in oder unter einem Personenordner des Menschen? */

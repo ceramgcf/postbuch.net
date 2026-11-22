@@ -47,6 +47,10 @@ OPT_SHA256=""               # --erwarte-sha256=   Pruefsumme des Tarballs
 OPT_INSTALL_DIR=""          # --install-dir=      abweichendes Zielverzeichnis
 OPT_FEED_BASE_URL=""        # --quelle=           Bezugsquelle dieser Instanz
 OPT_ZIELVERSION=""          # --zielversion=      genau diese Version installieren
+OPT_DEINSTALLIEREN=false    # --deinstallieren    direkt zur Deinstallation (install.ps1)
+OPT_WEB_PORT=""             # --web-port=         Host-Port der Weboberfläche (Standard 3420)
+OPT_HTTP_PORT=""            # --http-port=        Host-Port von Caddy für HTTP (Standard 80)
+OPT_HTTPS_PORT=""           # --https-port=       Host-Port von Caddy für HTTPS (Standard 443)
 # Die beiden folgenden Notausgaenge setzt der Update-Agent NIE. Sie sind fuer
 # den Admin an der Konsole gedacht, der weiss, warum er sie braucht — etwa nach
 # einem Schluesselverlust auf Herausgeberseite.
@@ -65,16 +69,58 @@ INSTALL_LOG_FILE=""
 installer_log_abschluss() {
     local status=$?
     trap - EXIT
+    # Fällt das Terminal weg, bekommt die ganze Prozessgruppe SIGHUP – auch das
+    # rm unten, das sonst mitten im Löschen abbricht. Ignorierte Signale erbt rm.
+    trap '' HUP INT TERM
+    # Eine Stage braucht nach dem Lauf niemand mehr (die Promotion kopiert sie).
+    # Endet der Lauf vorzeitig, etwa ohne Terminal mitten im Update, bliebe sie
+    # sonst als <Installation>.stage.XXXXXX liegen. Ohne Rückfrage: Das
+    # Terminal kann hier schon fehlen.
+    if [[ -n "${RELEASE_STAGE:-}" && -d "$RELEASE_STAGE" \
+          && "$RELEASE_STAGE" == "${INSTALL_DIR:-/nie}.stage."* ]]; then
+        rm -rf "$RELEASE_STAGE" 2>/dev/null || sudo -n rm -rf "$RELEASE_STAGE" 2>/dev/null || true
+    fi
+    # Nach einer Übergabe (an_neuen_installer_uebergeben) liegt dieses Skript
+    # samt geprüftem Archiv in einem privaten Ordner, den sonst niemand mehr
+    # wegräumt. Gelöscht wird nur, was der Marker als solchen ausweist.
+    if [[ "${POSTBUCH_UEBERGABE:-}" == 1 && "$(basename "$SCRIPT_DIR")" == postbuch-uebergabe.* \
+          && -f "$SCRIPT_DIR/.postbuch-uebergabe" ]]; then
+        rm -rf -- "$SCRIPT_DIR" 2>/dev/null || true
+    fi
     if [[ -n "$INSTALL_LOG_FILE" ]]; then
         printf '\n## Installer beendet: %s (Exit-Code %s)\n' \
             "$(date '+%Y-%m-%d %H:%M:%S %Z')" "$status"
-        printf '## Vollstaendiges Protokoll: %s\n' "$INSTALL_LOG_FILE"
+        printf '## Vollstaendiges Protokoll: %s\n' "$(log_anzeigepfad "$INSTALL_LOG_FILE")"
     fi
     exit "$status"
 }
 
+# Unter Windows liegt das Protokoll in der WSL-Instanz. Der Explorer erreicht
+# es über \\wsl.localhost\<Instanz>\…; diesen Pfad zeigt der Abschluss an.
+log_anzeigepfad() {
+    local p="$1"
+    if [[ -n "${WSL_DISTRO_NAME:-}" && "$p" == /* && "$p" != /mnt/[a-z]/* ]]; then
+        printf '\\\\wsl.localhost\\%s%s' "$WSL_DISTRO_NAME" "${p//\//\\}"
+    else
+        printf '%s' "$p"
+    fi
+}
+
 installer_log_starten() {
     local state_dir log_dir
+    # Übernommener Lauf: stdout läuft bereits durch das tee des abgebenden
+    # Installers in dessen Protokoll. Ein zweites tee schriebe alles doppelt.
+    if [[ "${POSTBUCH_UEBERGABE:-}" == 1 && -n "${POSTBUCH_UEBERGABE_LOG:-}" \
+          && -f "$POSTBUCH_UEBERGABE_LOG" && -w "$POSTBUCH_UEBERGABE_LOG" ]]; then
+        INSTALL_LOG_FILE="$POSTBUCH_UEBERGABE_LOG"
+        trap installer_log_abschluss EXIT
+        trap 'exit 129' HUP
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+        export BUILDKIT_PROGRESS=plain
+        printf '\n## Weiter mit dem Installer der neuen Version (%s)\n' "$0"
+        return 0
+    fi
     state_dir="${XDG_STATE_HOME:-$LAUFZEIT_HOME/.local/state}"
     log_dir="${POSTBUCH_INSTALL_LOG_DIR:-$state_dir/postbuch/logs}"
 
@@ -97,6 +143,10 @@ installer_log_starten() {
     # einem Support-Log landen.
     exec > >(tee -a "$INSTALL_LOG_FILE") 2>&1
     trap installer_log_abschluss EXIT
+    # Ohne eigene Handler meldete ein per Signal beendeter Lauf „Exit-Code 0“.
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     # Docker BuildKit gibt im plain-Modus jede Paketwarnung zeilenweise aus;
     # genau diese Information wird fuer die Diagnose einer Fremdinstallation
     # gebraucht. Das ist kein Shell-Debugging und gibt keine ENV-Werte aus.
@@ -179,6 +229,26 @@ safe_rm_rf() {
     fi
 }
 
+# data/lokalki.env ist env_file des Dienstes llm. Compose vor 2.24 kennt kein
+# optionales env_file und bricht schon beim Lesen der Compose-Datei ab, wenn
+# sie fehlt. Sie existiert deshalb immer, leer solange die lokale KI aus ist.
+# Der Build-Stage bekommt eine Kopie; release_stage_promoten entfernt sie
+# wieder, bevor der Stage übernommen wird.
+lokalki_env_bereitstellen() { # $1=Verzeichnis mit docker-compose.yml
+    local ziel="$1/data/lokalki.env" quelle="${INSTALL_DIR:-/nie}/data/lokalki.env"
+    local -a su=(sudo)
+    [[ -e "$ziel" ]] && return 0
+    # data/ gehört nach der ersten Einrichtung oft root (Postgres, Agent).
+    ${OPT_NON_INTERACTIVE:-false} && su=(sudo -n)
+    mkdir -p "$1/data" 2>/dev/null || "${su[@]}" mkdir -p "$1/data" 2>/dev/null || return 0
+    if [[ "$1" != "${INSTALL_DIR:-}" && -f "$quelle" ]]; then
+        cp "$quelle" "$ziel" 2>/dev/null || "${su[@]}" cp "$quelle" "$ziel" 2>/dev/null || true
+    else
+        { : > "$ziel"; } 2>/dev/null || "${su[@]}" install -m 644 /dev/null "$ziel" 2>/dev/null || true
+    fi
+    return 0
+}
+
 # Alle Docker-Einzelbefehle müssen dieselbe Rechteart benutzen wie Compose.
 # Sonst wird z. B. ein vorhandenes Caddy-Image bei fehlendem Docker-Gruppenrecht
 # als „nicht vorhanden" missverstanden und der teure xcaddy-Build wiederholt.
@@ -209,21 +279,32 @@ upsert_env_value() {
     fi
 }
 
+# Ein gefuehrter Lauf ohne erreichbares Terminal (Pipe, abgerissene SSH-Sitzung)
+# darf nicht weiterlaufen: Rueckfragen in Schleifen bekaemen nie eine Antwort und
+# schrieben das Protokoll endlos voll. kill auf $$ beendet den Lauf auch aus $(...).
+tty_weg() {
+    echo "" >&2
+    echo "  Keine Eingabe moeglich (kein Terminal mehr). Installer wird beendet." >&2
+    echo "  Fuer Laeufe ohne Rueckfragen: install.sh --non-interactive" >&2
+    kill -TERM "$$" 2>/dev/null
+    exit 1
+}
+
 prompt() {
     local msg="$1"
     local default="${2:-}"
     if [[ -n "$default" ]]; then
-        read -rp "  $msg [$default]: " val </dev/tty
+        read -rp "  $msg [$default]: " val </dev/tty || tty_weg
         echo "${val:-$default}"
     else
-        read -rp "  $msg: " val </dev/tty
+        read -rp "  $msg: " val </dev/tty || tty_weg
         echo "$val"
     fi
 }
 
 prompt_secret() {
     local msg="$1"
-    read -rsp "  $msg: " val </dev/tty
+    read -rsp "  $msg: " val </dev/tty || tty_weg
     echo "" >/dev/tty
     echo "$val"
 }
@@ -278,6 +359,65 @@ dns_a_oeffentlich() {
     return 0
 }
 
+ipv4_gueltig() {
+    local o='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+    [[ "$1" =~ ^$o\.$o\.$o\.$o$ ]]
+}
+
+# Traegt die IP-Adresse ueber die DuckDNS-API ein. Das Token geht nur ueber stdin
+# an curl und taucht so nicht in der Prozessliste auf. Rueckgabe 0 = angenommen.
+duckdns_ip_eintragen() { # $1 Domain (*.duckdns.org) $2 Token $3 IPv4
+    local antwort
+    [[ "$2" =~ ^[A-Za-z0-9._-]{8,256}$ ]] || return 1
+    antwort=$(printf 'url = "https://www.duckdns.org/update?domains=%s&token=%s&ip=%s"\n' \
+        "${1%.duckdns.org}" "$2" "$3" | curl -fsS --max-time 15 -K - 2>/dev/null) || return 1
+    [[ "$antwort" == OK* ]]
+}
+
+# Wartet bis zu einer Minute, bis das oeffentliche DNS die neue Adresse liefert.
+duckdns_ip_abwarten() { # $1 Domain $2 IPv4
+    local i
+    for i in $(seq 1 12); do
+        dns_a_oeffentlich "$1" 2>/dev/null | grep -qxF "$2" && return 0
+        sleep 5
+    done
+    return 1
+}
+
+# Fragt die Heimnetz-Adresse dieses Rechners ab (vorbelegt mit der ermittelten)
+# und traegt sie bei DuckDNS ein. Nutzt DUCKDNS_DOMAIN, DUCKDNS_API_TOKEN und
+# _LAN_IP des DuckDNS-Schritts. Rueckgabe 1 = Domain neu eingeben.
+duckdns_ip_abfragen_und_eintragen() {
+    local vorschlag="" ip wahl neu
+    ipv4_gueltig "$_LAN_IP" && vorschlag="$_LAN_IP"
+    while true; do
+        ip=$(prompt "IP-Adresse dieses Rechners im Heimnetz" "$vorschlag")
+        ip="${ip//[[:space:]]/}"
+        if ! ipv4_gueltig "$ip"; then
+            warn "'$ip' ist keine IPv4-Adresse (Beispiel: 192.168.178.20)."
+            continue
+        fi
+        vorschlag="$ip"
+        ipv4_privat "$ip" || warn "$ip ist keine Adresse aus dem Heimnetz. Ueber sie ist postbuch.net nur mit einer Portweiterleitung im Router erreichbar."
+        info "Trage $ip fuer $DUCKDNS_DOMAIN bei DuckDNS ein..."
+        if duckdns_ip_eintragen "$DUCKDNS_DOMAIN" "$DUCKDNS_API_TOKEN" "$ip"; then
+            _LAN_IP="$ip"
+            success "DuckDNS hat $ip fuer $DUCKDNS_DOMAIN angenommen."
+            duckdns_ip_abwarten "$DUCKDNS_DOMAIN" "$ip" \
+                || warn "Das oeffentliche DNS liefert die neue Adresse noch nicht. Die Pruefung gleich meldet das womoeglich; dann kurz warten und erneut pruefen."
+            return 0
+        fi
+        warn "DuckDNS hat die Adresse nicht angenommen. Meist passt das Token nicht, oder die Domain gehoert nicht zu diesem DuckDNS-Konto."
+        read -rp "  [w] erneut versuchen · [t] Token neu eingeben · [n] Domain neu eingeben · [f] ohne Eintrag fortfahren – Auswahl [w]: " wahl </dev/tty || tty_weg
+        case "${wahl,,}" in
+            t) neu=$(prompt_secret "DuckDNS API-Token"); [[ -n "$neu" ]] && DUCKDNS_API_TOKEN="$neu" ;;
+            n) return 1 ;;
+            f) return 0 ;;
+            *) ;;
+        esac
+    done
+}
+
 dns_a_lokal() {
     { timeout 6 getent ahostsv4 "$1" 2>/dev/null || true; } | awk '{print $1}' | sort -u
 }
@@ -311,7 +451,8 @@ automatisch eintraegt. postbuch.net braucht aber die Adresse im Heimnetz."
         panel "Domain zeigt auf eine andere Adresse" "$domain zeigt auf:      $(tr '\n' ' ' <<< "$oeffentlich")
 Dieser Server hat:     $(tr '\n' ' ' <<< "$host_ips")$hinweis
 
-So korrigierst du es: auf duckdns.org bei $domain die IP $_LAN_IP
+So korrigierst du es: die Domain neu eingeben und dabei die richtige
+IP-Adresse waehlen, oder auf duckdns.org bei $domain die IP $_LAN_IP
 eintragen und 'update ip' klicken. Die Aenderung ist meist nach
 spaetestens einer Minute sichtbar, dann hier erneut pruefen."
         return 1
@@ -591,7 +732,7 @@ Updates nicht erneut danach fragen."
         fi
         warn "Benutzername oder Passwort falsch (oder die Quelle ist nicht erreichbar)."
         local nochmal
-        read -rp "  Erneut versuchen? [J/n]: " nochmal </dev/tty
+        read -rp "  Erneut versuchen? [J/n]: " nochmal </dev/tty || tty_weg
         if [[ "$nochmal" =~ ^[nN] ]]; then
             POSTBUCH_FEED_AUTH=""; FEED_AUTH_B64=""
             return 1
@@ -644,7 +785,7 @@ Der Build dauert dadurch laenger, ist aber deutlich stabiler."
     echo ""
     local ans=""
     while [[ "$ans" != "j" && "$ans" != "J" && "$ans" != "n" && "$ans" != "N" ]]; do
-        read -rp "  Safe-Mode aktivieren? [J/n]: " ans </dev/tty
+        read -rp "  Safe-Mode aktivieren? [J/n]: " ans </dev/tty || tty_weg
         [[ -z "$ans" ]] && ans="j"
     done
     if [[ "$ans" == "j" || "$ans" == "J" ]]; then
@@ -771,11 +912,16 @@ build_mit_lebenszeichen() { # $1 = Bezeichnung, $2 = Sekunden, Rest = Build-Befe
     return "$status"
 }
 
+# Fester caddy-Tag wie in docker-compose.yml. Jede Aenderung an caddy/ zieht
+# ihn dort und hier hoch; sonst fehlt das Image erst beim Containerstart, und
+# Compose baut es dann mitten in der Startphase bei angehaltener Anwendung.
+CADDY_IMAGE=postbuch-caddy:local4
+
 # Der eingebaute Embedding-Dienst ist release-unabhaengig wie caddy: Das Image
 # haengt nur an embedding/ (Modell mit gepinnter Pruefsumme), nicht am App-Code.
 # Gebaut wird es nur bei aktivem Profil und nur, wenn es fehlt; jede Aenderung
 # in embedding/ zieht den Tag in docker-compose.yml und hier hoch.
-EMBEDDING_IMAGE=postbuch-embedding:local2
+EMBEDDING_IMAGE=postbuch-embedding:local6
 
 embedding_image_bauen() {
     embedding_profil_aktiv || return 0
@@ -797,6 +943,55 @@ embedding_image_bauen() {
         fi
     done
     return 1
+}
+
+# ── Image-Tags nach einem abgebrochenen Update-Build ─────────────────────────
+# Compose legt jeden fertig gebauten Dienst sofort unter dem Tag ab, den auch
+# der laufende Stack nutzt. Bricht der Build erst bei einem späteren Dienst ab,
+# laufen die Container weiter mit dem alten Image, der Tag zeigt aber schon auf
+# den neuen Code. Jedes spätere `up -d` ohne Build (Host-Aufträge wie Port-,
+# Netzwerk- oder Ablagewechsel) startete ihn gegen den alten Quellbaum. Deshalb
+# bekommen die Images der laufenden Container vor dem Build ein Sicherungs-Tag
+# und nach einem Abbruch ihren alten Tag zurück. Über die Image-ID allein geht
+# das nicht: Der containerd-Image-Speicher (Standard ab Docker 29) löscht ein
+# Image samt ID, sobald sein letzter Tag umgehängt ist.
+UPDATE_IMAGE_STAND=()
+update_images_merken() {   # $@ = Dienste, die gleich gebaut werden
+    UPDATE_IMAGE_STAND=()
+    local svc name id repo
+    for svc in "$@"; do
+        read -r name id < <(docker_runtime inspect "postbuch-$svc" \
+            --format '{{.Config.Image}} {{.Image}}' 2>/dev/null) || continue
+        [[ "$name" =~ ^[A-Za-z0-9._/:-]+$ && "$id" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
+        repo="$name"
+        [[ "${repo##*/}" == *:* ]] && repo="${repo%:*}"
+        docker_runtime tag "$id" "$repo:vor-update" >/dev/null 2>&1 || continue
+        UPDATE_IMAGE_STAND+=("$name $repo:vor-update")
+    done
+    return 0
+}
+
+update_images_zuruecklegen() {
+    local eintrag
+    for eintrag in "${UPDATE_IMAGE_STAND[@]}"; do
+        if docker_runtime tag "${eintrag#* }" "${eintrag%% *}" >/dev/null 2>&1; then
+            docker_runtime rmi "${eintrag#* }" >/dev/null 2>&1 || true
+        else
+            warn "Image-Tag ${eintrag%% *} konnte nicht zurückgesetzt werden."
+        fi
+    done
+    UPDATE_IMAGE_STAND=()
+    return 0
+}
+
+# Nach dem Containerwechsel braucht niemand die Sicherungs-Tags mehr.
+update_images_vergessen() {
+    local eintrag
+    for eintrag in "${UPDATE_IMAGE_STAND[@]}"; do
+        docker_runtime rmi "${eintrag#* }" >/dev/null 2>&1 || true
+    done
+    UPDATE_IMAGE_STAND=()
+    return 0
 }
 
 # Im Safe-Mode darf der Embedding-Dienst waehrend der Builds kein Modell in den
@@ -842,7 +1037,7 @@ compose_build_intern() {
     # am App-Code) und der xcaddy-Build dauert auf schwacher Hardware ~20 Min.
     # Daher nur bauen, wenn das Image noch fehlt – sonst wiederverwenden.
     if $with_caddy; then
-        if docker_runtime image inspect postbuch-caddy:local3 >/dev/null 2>&1; then
+        if docker_runtime image inspect "$CADDY_IMAGE" >/dev/null 2>&1; then
             info "caddy-Image vorhanden – Build uebersprungen."
         else
             # Eigener Retry (statt im Code-Service-Loop unten): xcaddy laedt sehr
@@ -1069,6 +1264,7 @@ postgres_umzug_modus() {
     fi
     docker_headless_pruefen || return 1
     cd "$INSTALL_DIR"
+    lokalki_env_bereitstellen "$INSTALL_DIR"
     export COMPOSE_PROJECT_NAME="$(basename "$INSTALL_DIR")"
     echo "postbuch.net: Datenbank auf PostgreSQL 18 umziehen"
     echo "  Verzeichnis: $INSTALL_DIR"
@@ -1181,6 +1377,7 @@ postgres_image_modus() {
     fi
     docker_headless_pruefen || return 1
     cd "$INSTALL_DIR"
+    lokalki_env_bereitstellen "$INSTALL_DIR"
     export COMPOSE_PROJECT_NAME="$(basename "$INSTALL_DIR")"
     if ! postgres_image_pruefen; then
         echo "  PostgreSQL-Image ist aktuell – nichts zu tun."
@@ -1217,6 +1414,7 @@ postgres_image_modus() {
 }
 
 compose_recreate() {
+    cuda_bestand_absichern || return 1
     # Erst die aktiven Dienste bestimmen: Der Umzug stoppt die Code-Container.
     profil_zustand_sichern
     aktive_code_services
@@ -1295,6 +1493,8 @@ compose_up_build() {
 # vorherigen `compose down`: Hier muss PostgreSQL absichtlich mit gestartet
 # werden. Reguläre Updates und restart.sh verwenden dagegen --no-deps.
 compose_up_build_all() {
+    cuda_bestand_absichern || return 1
+    wsl_loopback_dienst_einrichten
     profil_zustand_sichern
     aktive_code_services
     local with_caddy=false
@@ -1315,7 +1515,12 @@ compose_up_build_all() {
     fi
     info "Starte vollständigen Stack..."
     docker_mit_netzwerk_retry "Vollstaendiger Stack-Start" \
-        $DOCKER_COMPOSE "${profile_args[@]}" up -d --force-recreate "${services[@]}"
+        $DOCKER_COMPOSE "${profile_args[@]}" up -d --force-recreate "${services[@]}" || return 1
+    # Ohne DuckDNS gibt es keinen TLS-Endpunkt. Ein Caddy-Container aus einer
+    # früheren Konfiguration liefe sonst mit leerem Caddyfile weiter.
+    if ! $with_caddy; then
+        $DOCKER_COMPOSE --profile caddy rm -sf caddy >/dev/null 2>&1 || true
+    fi
 }
 
 # ── restart.sh generieren ────────────────────────────────────────────────────
@@ -1342,9 +1547,9 @@ if [[ ",\$COMPOSE_PROFILES_WERT," == *,scanner,* ]]; then
 fi
 # caddy nur einmalig bauen (release-unabhaengig, teurer xcaddy-Build);
 # vorhandenes Image umtaggen statt neu zu bauen
-if [[ -n "\$DUCKDNS_TOKEN" ]] && ! docker image inspect postbuch-caddy:local3 >/dev/null 2>&1; then
+if [[ -n "\$DUCKDNS_TOKEN" ]] && ! docker image inspect $CADDY_IMAGE >/dev/null 2>&1; then
     for caddy_versuch in 1 2 3; do
-        echo "Baue caddy (gepinntes Image local3)..."
+        echo "Baue caddy (gepinntes Image $CADDY_IMAGE)..."
         docker compose "\${PROFILE_ARGS[@]}" build caddy && break
         if [[ "\$caddy_versuch" -lt 3 ]]; then
             caddy_pause=\$((caddy_versuch * 5))
@@ -1415,9 +1620,9 @@ if [[ ",$COMPOSE_PROFILES_WERT," == *,scanner,* ]]; then
 fi
 # caddy nur einmalig bauen (release-unabhaengig, teurer xcaddy-Build);
 # vorhandenes Image umtaggen statt neu zu bauen
-if [[ -n "$DUCKDNS_TOKEN" ]] && ! docker image inspect postbuch-caddy:local3 >/dev/null 2>&1; then
+if [[ -n "$DUCKDNS_TOKEN" ]] && ! docker image inspect @CADDY_IMAGE@ >/dev/null 2>&1; then
     for caddy_versuch in 1 2 3; do
-        echo "Baue caddy (gepinntes Image local3)..."
+        echo "Baue caddy (gepinntes Image @CADDY_IMAGE@)..."
         docker compose "${PROFILE_ARGS[@]}" build caddy && break
         if [[ "$caddy_versuch" -lt 3 ]]; then
             caddy_pause=$((caddy_versuch * 5))
@@ -1456,7 +1661,7 @@ $EMBEDDING_AKTIV && docker compose --profile embedding up -d --no-deps embedding
 echo ""
 echo "Fertig! postbuch.net läuft wieder."
 RESTARTEOF
-        sed -i "s|@EMBEDDING_IMAGE@|$EMBEDDING_IMAGE|" "$RESTART_SCRIPT" || return 1
+        sed -i "s|@EMBEDDING_IMAGE@|$EMBEDDING_IMAGE|; s|@CADDY_IMAGE@|$CADDY_IMAGE|" "$RESTART_SCRIPT" || return 1
     fi
     chmod +x "$RESTART_SCRIPT"
     if [[ $(id -u) -eq 0 ]]; then
@@ -1782,7 +1987,7 @@ do_rollback() {
 
     local SEL=""
     while true; do
-        read -rp "  Welches Backup? [1-${#backup_dirs[@]}] (Abbruch: Enter): " SEL </dev/tty
+        read -rp "  Welches Backup? [1-${#backup_dirs[@]}] (Abbruch: Enter): " SEL </dev/tty || tty_weg
         if [[ -z "$SEL" ]]; then
             echo "  Abgebrochen."
             return 0
@@ -1929,7 +2134,7 @@ do_rollback() {
     warn "Diese Aktion kann nicht rückgängig gemacht werden!"
     echo ""
     local CONFIRM=""
-    read -rp "  Zur Bestätigung 'ROLLBACK' eingeben (Abbruch: Enter): " CONFIRM </dev/tty
+    read -rp "  Zur Bestätigung 'ROLLBACK' eingeben (Abbruch: Enter): " CONFIRM </dev/tty || tty_weg
     if [[ "$CONFIRM" != "ROLLBACK" ]]; then
         echo ""
         echo "  Abgebrochen."
@@ -1940,6 +2145,7 @@ do_rollback() {
     echo ""
     info "Stoppe Docker-Stack..."
     cd "$INSTALL_DIR"
+    lokalki_env_bereitstellen "$INSTALL_DIR"
     $DC down 2>/dev/null || true
 
     if $PG_WECHSEL; then
@@ -2084,6 +2290,17 @@ stack_profile_args_ermitteln() {
         duckdns_token=$(grep '^DUCKDNS_API_TOKEN=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d'=' -f2- || true)
     fi
     [[ -n "$duckdns_token" ]] && STACK_PROFILE_ARGS=(--profile caddy)
+    # Ein --profile auf der Kommandozeile ersetzt COMPOSE_PROFILES aus der
+    # .env. Die dort eingeschalteten Module (Scanner, Embedding, lokale KI)
+    # müssen deshalb ausdrücklich mitgegeben werden, sonst blieben sie beim
+    # Anhalten und Neustarten außen vor.
+    if (( ${#STACK_PROFILE_ARGS[@]} )) && [[ -f "$INSTALL_DIR/.env" ]]; then
+        local profile p
+        profile=$(grep '^COMPOSE_PROFILES=' "$INSTALL_DIR/.env" 2>/dev/null | tail -n1 | cut -d'=' -f2- | tr -d "\"'" || true)
+        for p in ${profile//,/ }; do
+            [[ "$p" =~ ^[A-Za-z0-9_-]+$ && "$p" != caddy ]] && STACK_PROFILE_ARGS+=(--profile "$p")
+        done
+    fi
     return 0
 }
 
@@ -2124,6 +2341,7 @@ stack_steuerung_menu() {
     # compose_up_build_all/docker_runtime nutzen die globale Variable DOCKER_COMPOSE.
     DOCKER_COMPOSE="$DC"
     cd "$INSTALL_DIR"
+    lokalki_env_bereitstellen "$INSTALL_DIR"
     stack_profile_args_ermitteln
 
     while true; do
@@ -2145,23 +2363,27 @@ stack_steuerung_menu() {
         echo "    [0]  Zurück"
         echo ""
         local WAHL=""
-        read -rp "  Auswahl [0-4]: " WAHL </dev/tty
+        read -rp "  Auswahl [0-4]: " WAHL </dev/tty || tty_weg
         echo ""
         case "$WAHL" in
             1)
+                cuda_bestand_absichern || return 1
+                stack_profile_args_ermitteln
                 info "Starte den gesamten Docker-Stack..."
                 # Vorhandene Container nur starten, nie ersetzen: PostgreSQL
                 # wechselt Image und Datenbestand nur über install.sh-Updates.
                 $DC "${STACK_PROFILE_ARGS[@]}" up -d --no-recreate
                 ;;
             2)
+                cuda_bestand_absichern || return 1
+                stack_profile_args_ermitteln
                 info "Starte den gesamten Docker-Stack neu..."
                 $DC "${STACK_PROFILE_ARGS[@]}" restart
                 ;;
             3)
                 warn "Der Stack wird angehalten – die Web-Oberfläche ist danach nicht erreichbar."
                 local BESTAETIGUNG=""
-                read -rp "  Zur Bestätigung 'STOP' eingeben (Abbruch: Enter): " BESTAETIGUNG </dev/tty
+                read -rp "  Zur Bestätigung 'STOP' eingeben (Abbruch: Enter): " BESTAETIGUNG </dev/tty || tty_weg
                 if [[ "$BESTAETIGUNG" == "STOP" ]]; then
                     info "Halte den gesamten Docker-Stack an..."
                     $DC "${STACK_PROFILE_ARGS[@]}" stop
@@ -2209,6 +2431,7 @@ change_admin_password() {
     echo ""
     info "Starte app-Container neu, damit das neue Passwort greift..."
     cd "$INSTALL_DIR"
+    lokalki_env_bereitstellen "$INSTALL_DIR"
     $DC up -d --no-deps --force-recreate app
 
     hr
@@ -2216,6 +2439,142 @@ change_admin_password() {
     success "Adminpasswort geändert."
     echo ""
     hr
+    echo ""
+}
+
+# Caddyfile der Installation: „an“ = DuckDNS-TLS, „aus“ = kein TLS-Endpunkt.
+# Die Ports kommen zur Laufzeit aus CADDY_HTTP_PORT/CADDY_HTTPS_PORT. Die
+# Weiterleitung von HTTP steht ausdrücklich da: Caddys eigene lässt einen
+# abweichenden HTTPS-Port weg, weil https_port nur den internen Port meint.
+caddyfile_schreiben() { # $1 an|aus
+    mkdir -p "$INSTALL_DIR/caddy"
+    if [[ "$1" == an ]]; then
+        cat > "$INSTALL_DIR/caddy/Caddyfile" <<'CADDYEOF'
+{
+    http_port {$CADDY_HTTP_PORT:80}
+    https_port {$CADDY_HTTPS_PORT:443}
+}
+{env.DUCKDNS_DOMAIN} {
+    tls {
+        dns duckdns {env.DUCKDNS_API_TOKEN}
+        resolvers 8.8.8.8 1.1.1.1
+    }
+    reverse_proxy web:80
+}
+http://{env.DUCKDNS_DOMAIN} {
+    redir https://{host}:{$CADDY_HTTPS_PORT:443}{uri} 308
+}
+CADDYEOF
+    else
+        cat > "$INSTALL_DIR/caddy/Caddyfile" <<'CADDYEOF'
+# Kein DuckDNS konfiguriert – kein TLS-Endpunkt aktiv.
+# postbuch.net ist über http://localhost:<WEB_PORT aus der .env> erreichbar.
+# Trage DUCKDNS_API_TOKEN und DUCKDNS_DOMAIN in die .env ein und starte neu,
+# um automatisches HTTPS zu aktivieren.
+CADDYEOF
+    fi
+    chmod 600 "$INSTALL_DIR/caddy/Caddyfile"
+}
+
+# Stellt die Ports einer bestehenden Installation um: .env, Caddyfile, die
+# Basisadresse (wenn sie den bisherigen Port enthält) und die betroffenen
+# Container. Ohne Schalter fragt es jeden Port mit dem bisherigen Wert ab.
+ports_umstellen() {
+    local env="$INSTALL_DIR/.env" mit_caddy=false alt_web alt_http alt_https url neu_url=""
+    grep -q '^DUCKDNS_API_TOKEN=.' "$env" 2>/dev/null && mit_caddy=true
+    alt_web=$(web_port)
+    alt_http=$(env_port CADDY_HTTP_PORT 80)
+    alt_https=$(env_port CADDY_HTTPS_PORT 443)
+    WEB_PORT_WAHL="${OPT_WEB_PORT:-$alt_web}"
+    HTTP_PORT_WAHL="${OPT_HTTP_PORT:-$alt_http}"
+    HTTPS_PORT_WAHL="${OPT_HTTPS_PORT:-$alt_https}"
+
+    hr
+    echo ""
+    echo "  PORTS ÄNDERN"
+    echo ""
+    if [[ -z "$OPT_WEB_PORT$OPT_HTTP_PORT$OPT_HTTPS_PORT" ]] && ! $OPT_NON_INTERACTIVE; then
+        local eingabe
+        while true; do
+            eingabe=$(prompt "Port der Weboberfläche" "$WEB_PORT_WAHL")
+            port_gueltig "$eingabe" && break
+            warn "Bitte eine Zahl von 1 bis 65535 eingeben."
+        done
+        WEB_PORT_WAHL="$eingabe"
+        if $mit_caddy; then
+            while true; do
+                eingabe=$(prompt "Port für HTTPS" "$HTTPS_PORT_WAHL")
+                port_gueltig "$eingabe" && break
+                warn "Bitte eine Zahl von 1 bis 65535 eingeben."
+            done
+            HTTPS_PORT_WAHL="$eingabe"
+            while true; do
+                eingabe=$(prompt "Port für HTTP (leitet auf HTTPS weiter)" "$HTTP_PORT_WAHL")
+                port_gueltig "$eingabe" && break
+                warn "Bitte eine Zahl von 1 bis 65535 eingeben."
+            done
+            HTTP_PORT_WAHL="$eingabe"
+        fi
+    fi
+    if $mit_caddy; then
+        waehle_port HTTPS_PORT_WAHL "HTTPS" --https-port 8443
+        waehle_port HTTP_PORT_WAHL "HTTP" --http-port 8080 "$HTTPS_PORT_WAHL"
+        waehle_port WEB_PORT_WAHL "die Weboberfläche" --web-port 3421 "$HTTPS_PORT_WAHL" "$HTTP_PORT_WAHL"
+    else
+        waehle_port WEB_PORT_WAHL "die Weboberfläche" --web-port 3421
+    fi
+    if [[ "$WEB_PORT_WAHL" == "$alt_web" && "$HTTP_PORT_WAHL" == "$alt_http" && "$HTTPS_PORT_WAHL" == "$alt_https" ]]; then
+        info "Die Ports bleiben unverändert."
+        return 0
+    fi
+
+    upsert_env_value "$env" WEB_PORT "$WEB_PORT_WAHL"
+    upsert_env_value "$env" CADDY_HTTP_PORT "$HTTP_PORT_WAHL"
+    upsert_env_value "$env" CADDY_HTTPS_PORT "$HTTPS_PORT_WAHL"
+
+    # Die Basisadresse folgt dem Port nur, wenn sie ihn selbst trägt: eine
+    # eigene Adresse (Reverse-Proxy, anderer Name) bleibt unangetastet.
+    url=$(grep '^APP_BASE_URL=' "$env" | tail -n1 | cut -d= -f2- || true)
+    if [[ "$url" =~ ^http://([A-Za-z0-9.-]+):${alt_web}/?$ ]]; then
+        neu_url="http://${BASH_REMATCH[1]}:$WEB_PORT_WAHL"
+    elif $mit_caddy && [[ "$url" =~ ^https://([A-Za-z0-9.-]+)(:${alt_https})?/?$ ]]; then
+        [[ "$alt_https" == 443 || -n "${BASH_REMATCH[2]}" ]] \
+            && neu_url="https://${BASH_REMATCH[1]}$(port_suffix "$HTTPS_PORT_WAHL" 443)"
+    fi
+
+    local DC="docker compose"
+    docker info &>/dev/null 2>&1 || DC="sudo docker compose"
+    DOCKER_COMPOSE="$DC"
+    cd "$INSTALL_DIR"
+    lokalki_env_bereitstellen "$INSTALL_DIR"
+    if [[ -n "$neu_url" && "$neu_url" != "$url" ]]; then
+        upsert_env_value "$env" APP_BASE_URL "$neu_url"
+        grep -q '^ONEDRIVE_REDIRECT_URI=' "$env" \
+            && upsert_env_value "$env" ONEDRIVE_REDIRECT_URI "$neu_url/api/onedrive-auth/callback"
+        local db_user db_name
+        db_user=$(grep '^POSTGRES_USER=' "$env" | tail -n1 | cut -d= -f2- || true)
+        db_name=$(grep '^POSTGRES_DB=' "$env" | tail -n1 | cut -d= -f2- || true)
+        $DC exec -T postgres psql -U "${db_user:-postbuch}" -d "${db_name:-postbuch}" -v ON_ERROR_STOP=1 -q \
+            -c "INSERT INTO postbuch._settings (key,value) VALUES ('app_host',to_jsonb('$neu_url'::text)) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,updated_at=now()" \
+            </dev/null >/dev/null || warn "Basisadresse in der Datenbank nicht umgestellt – bitte in den Einstellungen prüfen."
+        info "Basisadresse: $neu_url"
+    fi
+    $mit_caddy && caddyfile_schreiben an
+
+    info "Starte die betroffenen Container neu..."
+    $DC up -d --no-deps --force-recreate app web
+    if $mit_caddy; then
+        $DC --profile caddy up -d --no-deps --force-recreate caddy
+    fi
+    echo ""
+    success "Ports umgestellt: Weboberfläche $WEB_PORT_WAHL$($mit_caddy && echo ", HTTP $HTTP_PORT_WAHL, HTTPS $HTTPS_PORT_WAHL")."
+    echo "  Zugriff von diesem Gerät:   http://localhost:$WEB_PORT_WAHL"
+    [[ -n "$neu_url" ]] && echo "  Deine Adresse:              $neu_url"
+    if ist_wsl 2>/dev/null; then
+        echo ""
+        echo "  Windows: Die Freigabe für andere Geräte im Heimnetz passt der Installationsbefehl"
+        echo "  in PowerShell an – gestartet von dort geschieht das gleich im Anschluss."
+    fi
     echo ""
 }
 
@@ -2228,9 +2587,144 @@ ask_restore_backup() {
     echo "  └────────────────────────────────────────────────────────────────────┘" >&2
     local answer=""
     while [[ "$answer" != "j" && "$answer" != "J" && "$answer" != "n" && "$answer" != "N" ]]; do
-        read -rp "  Backup einspielen? [j/n]: " answer </dev/tty
+        read -rp "  Backup einspielen? [j/n]: " answer </dev/tty || tty_weg
     done
     [[ "$answer" == "j" || "$answer" == "J" ]] && echo "true" || echo "false"
+}
+
+# Markierung für den Setup-Restore. Stammt die Sicherung aus einem
+# weiterverwendeten Ablageordner, steht ihr Pfad relativ zum Ordner darin;
+# /setup/restore bietet sie dann direkt zum Einspielen an.
+restore_markierung_schreiben() {
+    local datei="$INSTALL_DIR/data/scan_buffer/.setup_restore_pending" rel=""
+    if [[ -n "$LOKAL_ABLAGE_SICHERUNG" && -n "$LOKAL_ABLAGE_DIR" \
+          && "$LOKAL_ABLAGE_SICHERUNG" == "${LOKAL_ABLAGE_DIR%/}/"* ]]; then
+        rel="${LOKAL_ABLAGE_SICHERUNG#"${LOKAL_ABLAGE_DIR%/}/"}"
+    fi
+    if [[ -n "$rel" ]]; then
+        printf 'sicherung=%s\n' "$rel" > "$datei"
+    else
+        : > "$datei"
+    fi
+}
+
+# ── Sicherung gleich im Installer einspielen ──────────────────────────────────
+# Benutzt dieselben Endpunkte wie die Seite /setup/restore (Adminpasswort aus
+# der .env, Backup-Passwort per verdeckter Eingabe). Passwörter gehen nur über
+# eine curl-Konfiguration auf stdin, nie über die Befehlszeile. Rückgabe 0 =
+# eingespielt, 1 = der Browser übernimmt (leere Eingabe, Fehler, kein Terminal).
+url_kodieren() {
+    local s="$1" i c aus=""
+    local LC_ALL=C
+    for ((i = 0; i < ${#s}; i++)); do
+        c="${s:i:1}"
+        case "$c" in
+            [A-Za-z0-9.~_-]) aus+="$c" ;;
+            *) aus+=$(printf '%%%02X' "'$c") ;;
+        esac
+    done
+    printf '%s' "$aus"
+}
+
+curl_cfg_wert() { # Wert für eine curl-Konfigurationszeile in Anführungszeichen
+    local v="${1//\\/\\\\}"
+    printf '"%s"' "${v//\"/\\\"}"
+}
+
+json_feld() { # $1 JSON-Text $2 Feldname (nur einfache Werte)
+    printf '%s' "$1" | sed -n "s/.*\"$2\":\(\"\([^\"]*\)\"\|\([a-z0-9.]*\)\).*/\2\3/p" | head -n1
+}
+
+restore_im_installer() {
+    local flag="$INSTALL_DIR/data/scan_buffer/.setup_restore_pending"
+    [[ -f "$flag" ]] || return 1
+    [[ -r /dev/tty ]] || return 1
+    local basis="http://localhost:$(web_port)" admin_pw vorschlag="" pfad="" ziel antwort code fehler
+    local bpw="" verschluesselt=false tmp
+    admin_pw=$(grep -m1 '^APP_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
+    admin_pw="${admin_pw#\'}"; admin_pw="${admin_pw%\'}"
+    [[ -n "$admin_pw" ]] || return 1
+
+    echo ""
+    if vorschlag=$(curl -sf --max-time 20 "$basis/setup/restore/vorschlag" 2>/dev/null) && [[ -n "$vorschlag" ]]; then
+        echo "  Gefundene Sicherung: $(json_feld "$vorschlag" name)"
+        echo "  Stand: $(json_feld "$vorschlag" geaendertAm | sed 's/T/ /; s/\..*//') (UTC)"
+        local wahl
+        wahl=$(prompt "Diese Sicherung einspielen? (n = andere Datei angeben) [J/n]" "J")
+        [[ "${wahl,,}" == n* ]] && vorschlag=""
+    fi
+    if [[ -n "$vorschlag" ]]; then
+        ziel="$basis/setup/restore/vorschlag"
+        [[ "$(json_feld "$vorschlag" verschluesselt)" == true ]] && verschluesselt=true
+    else
+        echo "  Die Sicherung kann gleich hier eingespielt werden."
+        echo "  Pfad zur Datei (.pgdump.gz), unter Windows z. B. C:\\Users\\…\\postbuch_….pgdump.gz."
+        while true; do
+            pfad=$(prompt "Pfad (leer = später im Browser hochladen)" "")
+            [[ -z "$pfad" ]] && return 1
+            if ist_wsl 2>/dev/null && [[ "$pfad" =~ ^[A-Za-z]:\\ ]]; then
+                pfad=$(wslpath -u "$pfad" 2>/dev/null || printf '%s' "$pfad")
+            fi
+            pfad="${pfad%\"}"; pfad="${pfad#\"}"
+            [[ -f "$pfad" && -r "$pfad" ]] && break
+            warn "Datei nicht gefunden oder nicht lesbar: $pfad"
+        done
+        ziel="$basis/setup/restore"
+        [[ "$(od -An -tx1 -N2 "$pfad" 2>/dev/null | tr -d ' \n')" != 1f8b ]] && verschluesselt=true
+    fi
+
+    tmp=$(mktemp) || return 1
+    # Beliebig viele Versuche; abbrechen lässt sich mit einer leeren Eingabe.
+    # Die Bremse gegen Durchprobieren sitzt im Server (429).
+    while true; do
+        if $verschluesselt; then
+            bpw=$(prompt_secret "Backup-Passwort (leer = später im Browser)")
+            [[ -z "$bpw" ]] && { rm -f "$tmp"; return 1; }
+        fi
+        info "Spiele die Sicherung ein, das dauert je nach Größe bis zu einigen Minuten ..."
+        code=$( {
+            printf 'header = %s\n' "$(curl_cfg_wert "X-Admin-Password: $admin_pw")"
+            # Als if, nicht als &&: Ohne Passwort endete der Block sonst mit 1,
+            # und pipefail machte aus einer erfolgreichen 200 ein „HTTP 000“.
+            if [[ -n "$bpw" ]]; then
+                printf 'header = %s\n' "$(curl_cfg_wert "X-Backup-Passwort: $(url_kodieren "$bpw")")"
+            fi
+          } | if [[ -n "$pfad" ]]; then
+                curl -s --max-time 1800 -K - -o "$tmp" -w '%{http_code}' -X POST \
+                    -H 'Content-Type: application/octet-stream' \
+                    -H "X-Filename: $(url_kodieren "$(basename "$pfad")")" \
+                    --data-binary "@$pfad" "$ziel"
+              else
+                curl -s --max-time 1800 -K - -o "$tmp" -w '%{http_code}' -X POST "$ziel"
+              fi ) || code=000
+        antwort=$(cat "$tmp" 2>/dev/null)
+        fehler=$(json_feld "$antwort" error)
+        case "$code:$(json_feld "$antwort" code)" in
+            200:*)
+                rm -f "$tmp"
+                info "Sicherung eingespielt. postbuch.net startet neu ..."
+                local i=0
+                sleep 3
+                while (( i < 180 )); do
+                    curl -sf --max-time 5 "$basis/api/health" >/dev/null 2>&1 && break
+                    sleep 3; i=$((i + 3))
+                done
+                success "Die Sicherung ist eingespielt. Anmelden mit deinem Adminpasswort."
+                return 0 ;;
+            409:PASSWORT_ERFORDERLICH)
+                verschluesselt=true; continue ;;
+            401:BACKUP_PASSWORT_FALSCH)
+                warn "${fehler:-Backup-Passwort ist falsch.}"
+                continue ;;
+            429:*)
+                warn "${fehler:-Zu viele Versuche.} Kurz warten, dann erneut eingeben."
+                continue ;;
+            *)
+                warn "Einspielen hier nicht möglich (${fehler:-HTTP $code}). Weiter im Browser."
+                rm -f "$tmp"
+                return 1 ;;
+        esac
+    done
 }
 
 # ── Warten bis App bereit, dann Restore-URL anzeigen ──────────────────────────
@@ -2240,17 +2734,23 @@ wait_and_show_restore_url() {
     info "Warte auf App-Start..."
     local i=0
     while [[ $i -lt 120 ]]; do
-        if curl -sf "http://localhost:3420/api/health" > /dev/null 2>&1; then
+        if curl -sf "http://localhost:$(web_port)/api/health" > /dev/null 2>&1; then
             break
         fi
         sleep 2
         i=$((i + 2))
     done
+    if restore_im_installer; then
+        echo ""
+        return 0
+    fi
     echo ""
-    if [[ -n "$lan_ip" ]]; then
-        printf "  ${C_BOLD}${C_CYAN}➜  Backup einspielen:${C_RESET}  http://$lan_ip:3420/setup/restore\n"
+    # Unter Windows öffnet install.ps1 die Seite gleich im Browser; dort gilt
+    # localhost. Ein Server ohne Bildschirm braucht die Heimnetz-Adresse.
+    if [[ -n "$lan_ip" ]] && ! ist_wsl 2>/dev/null && ! web_nur_lokal; then
+        printf "  ${C_BOLD}${C_CYAN}➜  Backup einspielen:${C_RESET}  http://$lan_ip:$(web_port)/setup/restore\n"
     else
-        printf "  ${C_BOLD}${C_CYAN}➜  Backup einspielen:${C_RESET}  http://localhost:3420/setup/restore\n"
+        printf "  ${C_BOLD}${C_CYAN}➜  Backup einspielen:${C_RESET}  http://localhost:$(web_port)/setup/restore\n"
     fi
     # Die Domain kommt zusaetzlich, nicht anstelle der lokalen Adresse: Das
     # Zertifikat ueber DuckDNS steht direkt nach dem Start evtl. noch nicht.
@@ -2258,8 +2758,607 @@ wait_and_show_restore_url() {
         printf "  ${C_BOLD}${C_CYAN}➜  Ueber deine Domain:${C_RESET}   $basis_url/setup/restore\n"
     fi
     echo ""
-    echo "  Öffne den Link im Browser. Das Script beendet sich jetzt."
-    echo "  Die Seite führt dich durch den Backup-Upload."
+    if ist_wsl 2>/dev/null; then
+        echo "  Die Seite öffnet sich gleich im Browser und führt durch das Einspielen."
+    else
+        echo "  Öffne den Link im Browser. Das Script beendet sich jetzt."
+        echo "  Die Seite führt dich durch den Backup-Upload."
+    fi
+    if [[ -n "$LOKAL_ABLAGE_SICHERUNG" ]]; then
+        local datei="$LOKAL_ABLAGE_SICHERUNG"
+        ist_wsl && [[ "$datei" == /mnt/[a-z]/* ]] && datei=$(wslpath -w "$datei" 2>/dev/null || printf '%s' "$datei")
+        echo ""
+        echo "  Die Seite bietet die Sicherung aus deinem Ablageordner direkt an:"
+        echo "  $datei"
+    fi
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# KOMPLETT LOKAL (Ablage und KI auf diesem Rechner)
+# ══════════════════════════════════════════════════════════════════════════════
+# Die Prüfungen (Pfadregeln, GPU-Erkennung, Modellstufen) kommen aus
+# scripts/postbuch-hostconfig.sh – derselben Bibliothek, die der Host-Agent
+# später für Umzüge und das Einschalten der lokalen KI benutzt. So gelten im
+# Installer und in der Oberfläche dieselben Regeln.
+LOKAL_ABLAGE=false
+LOKAL_KI=false
+LOKAL_CUDA_ZUSTIMMUNG=""
+LOKAL_ABLAGE_DIR=""
+LOKAL_ABLAGE_ANZEIGE=""
+LOKAL_ABLAGE_SICHERUNG=""   # Sicherung aus einer weiterverwendeten Ablage
+LOKAL_ABLAGE_HOCHLADEN=false # weiterverwendete Ablage, Sicherung kommt per Upload
+
+lokal_bibliothek() {
+    [[ "${DOCKER_COMPOSE:-}" == sudo\ * ]] && DOCKER_ART=sudo
+    declare -F hostconfig_ablage_syntax >/dev/null && return 0
+    [[ -r "$INSTALL_DIR/scripts/postbuch-hostconfig.sh" ]] || return 1
+    # shellcheck source=../scripts/postbuch-hostconfig.sh
+    source "$INSTALL_DIR/scripts/postbuch-hostconfig.sh"
+}
+
+ist_wsl() { hostconfig_ist_wsl; }
+
+# Frühere Installationen konnten das CUDA-Image ohne Zustimmungsvermerk nutzen.
+# Modell und Einstellungen bleiben für das Wiedereinschalten erhalten.
+cuda_bestand_absichern() {
+    lokal_bibliothek || return 0
+    declare -F hostconfig_cuda_konfiguriert >/dev/null || return 0
+    hostconfig_cuda_konfiguriert "$INSTALL_DIR" || return 0
+    hostconfig_cuda_akzeptiert "$INSTALL_DIR" && return 0
+    local cf profile
+    cf=":$(hostconfig_env_lesen "$INSTALL_DIR/.env" COMPOSE_FILE):"
+    profile=",$(hostconfig_profile_lesen "$INSTALL_DIR/.env"),"
+    $DOCKER_COMPOSE --profile lokalki stop llm || return 1
+    profile="${profile/,lokalki,/,}"
+    profile="${profile#,}"; profile="${profile%,}"
+    upsert_env_value "$INSTALL_DIR/.env" COMPOSE_PROFILES "$profile" || return 1
+    cf="${cf/:docker-compose.gpu.yml:/:}"
+    cf="${cf#:}"; cf="${cf%:}"
+    upsert_env_value "$INSTALL_DIR/.env" COMPOSE_FILE "$cf" || return 1
+    warn "CUDA wartet auf Zustimmung. Wähle im Installer „NVIDIA-Grafikkarte einrichten“."
+}
+
+cuda_zustimmung_einholen() {
+    local antwort
+    panel "NVIDIA CUDA für die lokale KI" "Für die Grafikkarte lädt postbuch.net ein llama.cpp-Image mit NVIDIA CUDA 12.8.1.
+Für Download und Nutzung gelten die Bedingungen von NVIDIA:
+  https://developer.download.nvidia.com/licenses/NVIDIA_Deep_Learning_Container_License.pdf
+  https://docs.nvidia.com/cuda/archive/12.8.1/eula/index.html
+Mit ‚ja‘ akzeptierst du diese Bedingungen und erlaubst den Download und die
+Nutzung von CUDA. Bei Bedarf installiert postbuch.net das NVIDIA Container Toolkit."
+    antwort=$(prompt "NVIDIA-Bedingungen akzeptieren und CUDA nutzen? 'ja' eingeben" "nein")
+    [[ "${antwort,,}" == ja ]]
+}
+
+# Adresse dieses Rechners im Heimnetz oder nichts. Unter WSL nur im
+# gespiegelten Netz (install.ps1 stellt es ein): Im NAT-Modus wäre die erste
+# Adresse die interne der WSL-VM, die kein anderes Gerät erreicht.
+heimnetz_ip() {
+    if ist_wsl 2>/dev/null && [[ "$(wslinfo --networking-mode 2>/dev/null)" != mirrored ]]; then
+        return 0
+    fi
+    hostname -I 2>/dev/null | awk '{print $1}'
+}
+
+# ── Ports ────────────────────────────────────────────────────────────────────
+# Drei Host-Ports gehören zu einer Instanz: Weboberfläche (WEB_PORT) und, mit
+# DuckDNS, Caddy für HTTP und HTTPS (CADDY_HTTP_PORT, CADDY_HTTPS_PORT). Jede
+# freie, paarweise verschiedene Kombination ist zulässig.
+WEB_PORT_WAHL=3420
+HTTP_PORT_WAHL=80
+HTTPS_PORT_WAHL=443
+
+port_gueltig() { [[ "$1" =~ ^[0-9]{1,5}$ ]] && (( 10#$1 >= 1 && 10#$1 <= 65535 )); }
+
+# Wert aus der .env der Installation, sonst der Standard.
+env_port() { # $1 Schlüssel $2 Standard
+    local v
+    v=$(grep "^$1=" "$INSTALL_DIR/.env" 2>/dev/null | tail -n1 | cut -d= -f2- || true)
+    if port_gueltig "$v"; then echo "$v"; else echo "$2"; fi
+}
+web_port() { env_port WEB_PORT 3420; }
+
+# 0, wenn die Weboberfläche nur an diesen Rechner gebunden ist („nur noch über
+# HTTPS erreichbar“). Dann gibt es keine Heimnetz-Adresse auf dem Web-Port.
+web_nur_lokal() {
+    [[ -f "$INSTALL_DIR/.env" ]] || return 1
+    grep -Eq "^WEB_BIND=[\"']?127\.0\.0\.1[\"']?[[:space:]]*$" "$INSTALL_DIR/.env"
+}
+
+# Sicherheitsnetz für „nur über HTTPS“: Antwortet die HTTPS-Adresse am Ende
+# der Installation nicht (Zertifikat nicht geholt, Port belegt, DuckDNS
+# falsch), wäre die Oberfläche im Heimnetz gar nicht erreichbar. Dann öffnet
+# der Installer Port 3420 wieder und sagt das. Geprüft wird über den Rechner
+# selbst (--resolve), damit Router-Eigenheiten wie DNS-Rebind-Schutz das
+# Ergebnis nicht verfälschen; das Zertifikat muss gültig sein.
+https_zugang_absichern() {
+    web_nur_lokal || return 0
+    local url domain port i=0
+    url=$(grep '^APP_BASE_URL=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d'=' -f2- | tr -d "\"'")
+    [[ "$url" == https://* ]] || return 0
+    domain=${url#https://}; domain=${domain%%/*}; domain=${domain%%:*}
+    port=$(env_port CADDY_HTTPS_PORT 443)
+    info "Pruefe, ob https://$domain antwortet (bis zu drei Minuten) ..."
+    while (( i < 180 )); do
+        if curl -s -o /dev/null --max-time 10 --resolve "$domain:$port:127.0.0.1" \
+            "https://$domain:$port/" 2>/dev/null; then
+            success "HTTPS antwortet. Die Oberflaeche bleibt nur ueber https://$domain erreichbar."
+            return 0
+        fi
+        sleep 5
+        i=$((i + 15))
+    done
+    warn "https://$domain antwortet nicht. Die Oberflaeche wird wieder im Heimnetz geoeffnet."
+    if lokal_bibliothek && ( cd "$INSTALL_DIR" && hostconfig_env_setzen "$INSTALL_DIR/.env" WEB_BIND '' \
+        && hostconfig_web_neu_erstellen ) >/dev/null 2>&1; then
+        rm -f -- "$INSTALL_DIR/.env.hostconfig.bak"
+        info "Sobald HTTPS laeuft, laesst es sich unter Einstellungen → Allgemein → Erreichbarkeit wieder schliessen."
+    else
+        warn "Wiederoeffnen fehlgeschlagen. Notausgang: $INSTALL_DIR/scripts/zugang-heimnetz-oeffnen.sh"
+    fi
+}
+
+# „:8443“ für einen abweichenden Port, leer für den Standard des Schemas.
+port_suffix() { [[ "$1" == "$2" ]] || echo ":$1"; }
+
+# 0, wenn ein fremder Prozess auf dem Port lauscht. Ports, die der eigene Stack
+# schon veröffentlicht, gelten als frei: eine Neuinstallation über eine
+# laufende Instanz gibt sie beim Neustart selbst frei.
+port_belegt() { # $1 Port
+    local p="$1" hex
+    if docker_runtime ps --format '{{.Names}} {{.Ports}}' 2>/dev/null \
+        | grep -E '^postbuch-(web|caddy) ' | grep -qF ":$p->"; then
+        return 1
+    fi
+    if command -v ss >/dev/null 2>&1; then
+        [[ -n "$(ss -Hltnu "sport = :$p" 2>/dev/null)" ]]
+        return
+    fi
+    hex=$(printf ':%04X' "$p")
+    awk -v h="$hex" '$2 ~ h"$" && ($4 == "0A" || $4 == "07") { f = 1 } END { exit !f }' \
+        /proc/net/tcp /proc/net/tcp6 /proc/net/udp /proc/net/udp6 2>/dev/null
+}
+
+# Nächster freier Port ab $1, der keinem der übrigen Argumente gleicht.
+freier_port() { # $1 Start, $2… vergebene Ports
+    local p="$1"; shift
+    while (( p <= 65535 )); do
+        if ! port_belegt "$p" && [[ " $* " != *" $p "* ]]; then echo "$p"; return 0; fi
+        p=$((p + 1))
+    done
+    return 1
+}
+
+# Wählt einen Port für $1 (Variablenname): Vorgabe prüfen, bei Belegung oder
+# Doppelung nachfragen. Ohne Rückfragen endet der Lauf mit einem Hinweis auf
+# den Schalter.
+waehle_port() { # $1 Variable $2 Zweck $3 Schalter $4 Startwert für Vorschläge, $5… übrige Ports
+    local var="$1" zweck="$2" schalter="$3" start="$4"; shift 4
+    local p="${!var}" grund vorschlag
+    while true; do
+        grund=""
+        if [[ " $* " == *" $p "* ]]; then
+            grund="ist schon für einen anderen Dienst dieser Installation vorgesehen"
+        elif port_belegt "$p"; then
+            grund="ist auf diesem Rechner schon belegt"
+        fi
+        [[ -z "$grund" ]] && break
+        vorschlag=$(freier_port "$start" "$@") || vorschlag=""
+        if $OPT_NON_INTERACTIVE; then
+            error "Port $p ($zweck) $grund. Anderen Port mit $schalter=<n> angeben${vorschlag:+, z. B. $schalter=$vorschlag}."
+        fi
+        warn "Port $p ($zweck) $grund."
+        p=$(prompt "Anderer Port für $zweck" "$vorschlag")
+        port_gueltig "$p" || { warn "Bitte eine Zahl von 1 bis 65535 eingeben."; p="${!var}"; }
+    done
+    printf -v "$var" '%s' "$p"
+}
+
+# Legt die Ports einer neuen Installation fest: Schalter, sonst Standard; mit
+# Caddy ($1 = true) auch HTTP und HTTPS.
+ports_festlegen() { # $1 true|false
+    WEB_PORT_WAHL="${OPT_WEB_PORT:-3420}"
+    HTTP_PORT_WAHL="${OPT_HTTP_PORT:-80}"
+    HTTPS_PORT_WAHL="${OPT_HTTPS_PORT:-443}"
+    if [[ "$1" == true ]]; then
+        waehle_port HTTPS_PORT_WAHL "HTTPS" --https-port 8443
+        waehle_port HTTP_PORT_WAHL "HTTP" --http-port 8080 "$HTTPS_PORT_WAHL"
+        waehle_port WEB_PORT_WAHL "die Weboberfläche" --web-port 3421 "$HTTPS_PORT_WAHL" "$HTTP_PORT_WAHL"
+        info "Ports: Weboberfläche $WEB_PORT_WAHL, HTTP $HTTP_PORT_WAHL, HTTPS $HTTPS_PORT_WAHL"
+    else
+        waehle_port WEB_PORT_WAHL "die Weboberfläche" --web-port 3421
+        info "Port der Weboberfläche: $WEB_PORT_WAHL"
+    fi
+}
+
+# Unter WSL im gespiegelten Netz kommen Aufrufe von http://localhost:<WEB_PORT> am
+# Windows-PC mit Absender 127.0.0.1 an. Docker leitet sie per DNAT an den
+# Container weiter, dessen Antwort ginge an seinen eigenen Loopback. Wie Docker
+# selbst ohne Userland-Proxy maskiert der Dienst Verkehr mit lokaler
+# Absenderadresse zu den Docker-Brücken und erlaubt dort route_localnet, damit
+# die zurückübersetzte Antwort an 127.0.0.1 nicht als ungültig verworfen wird
+# (auch für Brücken, die später entstehen: default). Als Dienst, weil WSL
+# Regeln und Kernel-Einstellungen bei jedem Start verliert.
+WSL_LOOPBACK_DIENST=/etc/systemd/system/postbuch-wsl-loopback.service
+wsl_loopback_dienst_einrichten() {
+    ist_wsl 2>/dev/null || return 0
+    command -v systemctl >/dev/null 2>&1 || return 0
+    local SUDO="" ipt
+    [[ $(id -u) -ne 0 ]] && SUDO="sudo"
+    ipt=$(command -v iptables) || { warn "iptables fehlt – Zugriff über localhost am PC ggf. eingeschränkt."; return 0; }
+    local regel="POSTROUTING -o br-+ -m addrtype --src-type LOCAL -j MASQUERADE"
+    local inhalt="[Unit]
+Description=postbuch.net: Zugriff über localhost am Windows-PC (WSL, gespiegeltes Netz)
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'sysctl -qw net.ipv4.conf.default.route_localnet=1; echo 1 | tee /proc/sys/net/ipv4/conf/br-*/route_localnet >/dev/null 2>&1; $ipt -t nat -C $regel 2>/dev/null || $ipt -t nat -I $regel'
+ExecStop=-/bin/sh -c 'sysctl -qw net.ipv4.conf.default.route_localnet=0; $ipt -t nat -D $regel'
+
+[Install]
+WantedBy=docker.service"
+    if [[ "$($SUDO cat "$WSL_LOOPBACK_DIENST" 2>/dev/null)" != "$inhalt" ]]; then
+        printf '%s\n' "$inhalt" | $SUDO tee "$WSL_LOOPBACK_DIENST" >/dev/null
+        $SUDO systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+    $SUDO systemctl enable postbuch-wsl-loopback.service >/dev/null 2>&1 || true
+    $SUDO systemctl restart postbuch-wsl-loopback.service >/dev/null 2>&1 \
+        || warn "Regel für den Zugriff über localhost am PC ließ sich nicht setzen."
+}
+
+wsl_loopback_dienst_entfernen() {
+    [[ -f "$WSL_LOOPBACK_DIENST" ]] || return 0
+    local SUDO=""
+    [[ $(id -u) -ne 0 ]] && SUDO="sudo"
+    $SUDO systemctl disable --now postbuch-wsl-loopback.service >/dev/null 2>&1 || true
+    $SUDO rm -f "$WSL_LOOPBACK_DIENST"
+    $SUDO systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
+# install.ps1 ermittelt den Ordner unter Windows und reicht ihn per WSLENV
+# als Datenwert weiter. wslpath ist ein Linux-Werkzeug und braucht kein Interop.
+windows_dokumente_ordner() {
+    local win="${POSTBUCH_WINDOWS_DOKUMENTE:-}"
+    [[ "$win" =~ ^[A-Za-z]:\\ ]] || return 1
+    wslpath -u "$win" 2>/dev/null
+}
+
+# Freier Platz in Bytes am (nächsten vorhandenen) Ort eines Pfades.
+freier_platz_bytes() {
+    local p="$1"
+    while [[ ! -d "$p" && "$p" != / ]]; do p=$(dirname -- "$p"); done
+    df -PB1 -- "$p" 2>/dev/null | awk 'NR==2 {print $4}'
+}
+
+nvidia_toolkit_installieren() {
+    command -v apt-get >/dev/null 2>&1 || { warn "Automatisch geht das nur mit apt. Anleitung: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html"; return 1; }
+    local SUDO=""
+    [[ $(id -u) -ne 0 ]] && SUDO="sudo"
+    info "Installiere das NVIDIA Container Toolkit aus dem signierten Paket-Repository von NVIDIA..."
+    $SUDO apt-get update && $SUDO apt-get install -y --no-install-recommends ca-certificates curl gnupg2 || return 1
+    curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+        | $SUDO gpg --batch --yes --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg || return 1
+    curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+        | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+        | $SUDO tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null || return 1
+    $SUDO apt-get update && $SUDO apt-get install -y nvidia-container-toolkit || return 1
+    $SUDO nvidia-ctk runtime configure --runtime=docker || return 1
+    $SUDO systemctl restart docker || return 1
+    success "NVIDIA Container Toolkit eingerichtet."
+}
+
+cuda_nachruesten() {
+    local gpu
+    if ! lokal_bibliothek || ! declare -F hostconfig_cuda_akzeptiert >/dev/null; then
+        error "Aktualisiere zuerst postbuch.net."
+    fi
+    if ! hostconfig_docker info >/dev/null 2>&1 && [[ "$(id -u)" != 0 ]]; then
+        DOCKER_ART=sudo
+    fi
+    gpu=$(hostconfig_gpu_erkennen) || error "Keine NVIDIA-Grafikkarte erkannt."
+    if ! hostconfig_cuda_akzeptiert "$INSTALL_DIR"; then
+        cuda_zustimmung_einholen || return 0
+        if ! upsert_env_value "$INSTALL_DIR/.env" POSTBUCH_CUDA_ZUSTIMMUNG "$HOSTCONFIG_CUDA_LIZENZ"; then
+            error "Die CUDA-Zustimmung konnte nicht gespeichert werden."
+        fi
+    fi
+    if [[ "${gpu##*|}" != true ]]; then
+        nvidia_toolkit_installieren || error "Das NVIDIA Container Toolkit konnte nicht eingerichtet werden."
+    fi
+    success "CUDA ist freigegeben. Schalte die lokale KI unter Einstellungen → Stack ein."
+    info "Läuft die lokale KI bereits auf dem Prozessor, schalte sie dort aus und wieder ein."
+}
+
+# Liegt ein (Linux-)Pfad in einem OneDrive-Ordner („OneDrive“ bzw.
+# „OneDrive - <Organisation>“)? Dann synchronisiert Windows ihn in die Cloud.
+ist_onedrive_pfad() {
+    [[ "$1/" =~ /OneDrive(\ -\ [^/]+)?/ ]]
+}
+
+# Neueste Sicherung (.pgdump.gz) einer früheren Ablage: automatische direkt in
+# `_backup`, selbst ausgelöste in `_backup/user` (auch die vor einer
+# Deinstallation) – direkt im Ablageordner oder unter einem Wurzelordner
+# darin (z. B. „postbuch“). Die Dateinamen tragen einen sortierbaren Zeitstempel.
+lokal_ablage_neueste_sicherung() {
+    local d="$1" f name beste="" bester=""
+    for f in "$d"/_backup/postbuch_*.pgdump.gz "$d"/_backup/user/postbuch_*.pgdump.gz \
+             "$d"/*/_backup/postbuch_*.pgdump.gz "$d"/*/_backup/user/postbuch_*.pgdump.gz; do
+        [[ -f "$f" && ! -L "$f" ]] || continue
+        name=$(basename -- "$f")
+        [[ "$name" > "$bester" ]] && { bester="$name"; beste="$f"; }
+    done
+    printf '%s' "$beste"
+}
+
+# Erster freier Name „<eingabe> 1“, „<eingabe> 2“, … neben einem belegten
+# Ordner (frei = nicht vorhanden oder leer). Ausgabe in der Schreibweise der Eingabe.
+lokal_ablage_freier_name() {
+    local eingabe="$1" pfad="$2" n=1
+    eingabe="${eingabe%[/\\]}"; pfad="${pfad%/}"
+    while [[ -L "$pfad $n" ]] || [[ -e "$pfad $n" && -n "$(ls -A -- "$pfad $n" 2>/dev/null)" ]]; do
+        n=$((n + 1))
+    done
+    printf '%s %s' "$eingabe" "$n"
+}
+
+# Fragt den Ablageordner ab, prüft ihn mit den Regeln des Host-Agenten und legt
+# ihn an. Setzt LOKAL_ABLAGE_DIR (Linux-Pfad) und LOKAL_ABLAGE_ANZEIGE.
+lokal_ablage_dialog() {
+    local vorschlag profil="" eingabe pfad neu ausweich="" sicherung antwort schreibprobe
+    LOKAL_ABLAGE_SICHERUNG=""
+    LOKAL_ABLAGE_HOCHLADEN=false
+    # Nie im Installationsverzeichnis: Eine Deinstallation löscht es ganz.
+    # Vorschlag im Benutzerverzeichnis des Besitzers der Installation (wie die Regel).
+    vorschlag=$(getent passwd "$(stat -c %U -- "$INSTALL_DIR" 2>/dev/null)" 2>/dev/null | cut -d: -f6)
+    if [[ "$vorschlag" == /?* && "$vorschlag" != /root ]]; then
+        vorschlag="$vorschlag/postbuch.net-Ablage"
+    else
+        vorschlag=""
+    fi
+    # Unter WSL nur Windows-Ordner; ohne erkannten Dokumente-Ordner kein Vorschlag.
+    ist_wsl && vorschlag=""
+    if ist_wsl && profil=$(windows_dokumente_ordner); then
+        vorschlag="$(wslpath -w "$profil" 2>/dev/null)\\postbuch.net"
+        if ist_onedrive_pfad "$profil"; then
+            # Gleichwertiger Ort außerhalb von OneDrive: das Benutzerprofil darüber.
+            ausweich=$(wslpath -w "$(printf '%s/' "$profil" | sed -E 's#/OneDrive( - [^/]+)?/.*##')" 2>/dev/null)
+            [[ -n "$ausweich" ]] && ausweich="$ausweich\\postbuch.net"
+        fi
+    fi
+    echo ""
+    echo "  Die Originale liegen als normale Dateien in einem Ordner auf diesem Rechner."
+    ist_wsl && echo "  Ein Windows-Ordner (z. B. C:\\Users\\name\\…) ist im Explorer direkt sichtbar."
+    echo "  Vorgeschlagen ist der Ordner unten; jeder andere geeignete Ordner geht genauso."
+    if [[ -n "$profil" ]] && ist_onedrive_pfad "$profil"; then
+        # shellcheck disable=SC1111  # deutsche Anführungszeichen
+        panel "Dokumente liegt in OneDrive" "Dein Ordner „Dokumente“ wird mit OneDrive synchronisiert. Die Ablage
+landet dann ebenfalls in der Microsoft-Cloud. Soll sie nur auf diesem
+Rechner liegen, gib einen Ordner außerhalb von OneDrive an$( [[ -n "$ausweich" ]] && printf ',\nzum Beispiel %s' "$ausweich")."
+    fi
+    while true; do
+        eingabe=$(prompt "Ablageordner" "$vorschlag")
+        eingabe=$(printf '%s' "$eingabe" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        if ! pfad=$(hostconfig_ablage_pfad_lesen "$(printf '%s' "$eingabe" | base64 -w0)"); then
+            warn "Ungültiger Pfad. Erlaubt sind absolute Pfade ohne \$ # \" ' \` und ohne versteckte Ordner."
+            continue
+        fi
+        if ! hostconfig_ablage_erlaubt "$pfad" "$INSTALL_DIR" "$INSTALL_DIR/data/modelle"; then
+            if ist_wsl; then
+                warn "Dieser Ort ist nicht erlaubt. Geeignet sind Windows-Ordner unter C:\\Users\\<name> oder auf einem weiteren Laufwerk – ein Ordner in der Linux-Umgebung würde bei einer Deinstallation mitgelöscht."
+            else
+                warn "Dieser Ort ist nicht erlaubt. Geeignet sind Ordner im eigenen Benutzerverzeichnis oder auf einem weiteren Laufwerk, nicht aber im Installationsverzeichnis."
+            fi
+            continue
+        fi
+        if ist_wsl && ! mountpoint -q -- "${pfad:0:6}"; then
+            warn "Das Windows-Laufwerk von $eingabe ist nicht eingebunden. Wähle einen Ordner auf einem verfügbaren Laufwerk."
+            continue
+        fi
+        if [[ -e "$pfad" && ( ! -d "$pfad" || -L "$pfad" ) ]]; then
+            warn "$eingabe ist kein Ordner."; continue
+        fi
+        if [[ -d "$pfad" ]] && [[ -n "$(ls -A -- "$pfad" 2>/dev/null)" ]]; then
+            # Eine frühere Ablage (z. B. nach einer Deinstallation) lässt sich
+            # nur zusammen mit ihrer Datenbank weiterverwenden: Die Ablage führt
+            # ein Verzeichnis ihrer Dateien in der Datenbank. Deshalb mit der
+            # neuesten Sicherung daraus – sonst ein neuer Ordner daneben.
+            sicherung=$(lokal_ablage_neueste_sicherung "$pfad")
+            antwort=""
+            if [[ -n "$sicherung" ]]; then
+                echo ""
+                echo "  In $eingabe liegt eine frühere postbuch.net-Ablage."
+                echo "  Neueste Sicherung darin: $(basename -- "$sicherung")"
+                antwort=$(prompt "Diesen Ordner weiterverwenden und die neueste Sicherung daraus einspielen? [J/n]" "J")
+                if [[ "${antwort,,}" != n* ]]; then
+                    LOKAL_ABLAGE_SICHERUNG="$sicherung"
+                else
+                    sicherung=""
+                fi
+            fi
+            # Ohne Sicherung darin: weiterverwenden geht nur zusammen mit einer
+            # Sicherung derselben Ablage von anderswo (Upload im Browser).
+            if [[ -z "$sicherung" && -z "$antwort" ]]; then
+                echo ""
+                echo "  In $eingabe liegen schon Dateien, aber keine postbuch.net-Sicherung."
+                echo "  1) Neuen Ordner daneben anlegen"
+                echo "  2) Diesen Ordner weiterverwenden – nach dem Start spiele ich im Browser"
+                echo "     eine Sicherung ein, die zu dieser Ablage gehört"
+                antwort=$(prompt "Auswahl [1/2]" "1")
+                [[ "$antwort" == 2 ]] && { LOKAL_ABLAGE_HOCHLADEN=true; sicherung="hochladen"; }
+            fi
+            if [[ -z "$sicherung" ]]; then
+                vorschlag=$(lokal_ablage_freier_name "$eingabe" "$pfad")
+                warn "$eingabe ist nicht leer. Vorgeschlagen ist ein neuer Ordner daneben."
+                echo "  Den alten Ordner bitte bei Bedarf selbst bereinigen – postbuch.net löscht ihn nicht."
+                continue
+            fi
+        fi
+        neu=""
+        [[ -e "$pfad" ]] || neu="$pfad"
+        [[ -n "$neu" ]] && while [[ ! -e "$(dirname -- "$neu")" ]]; do neu=$(dirname -- "$neu"); done
+        # Nichts durch eine Verknüpfung hindurch anlegen.
+        if ! hostconfig_ablage_kanonisch "$( [[ -n "$neu" ]] && dirname -- "$neu" || printf '%s' "$pfad")"; then
+            warn "$eingabe enthält eine Verknüpfung. Bitte den echten Ordner angeben."; continue
+        fi
+        if ! mkdir -p -- "$pfad" 2>/dev/null; then
+            warn "$eingabe lässt sich nicht anlegen."; continue
+        fi
+        if ! hostconfig_ablage_kanonisch "$pfad"; then
+            warn "$eingabe enthält eine Verknüpfung. Bitte den echten Ordner angeben."; continue
+        fi
+        if ! schreibprobe=$(mktemp -- "$pfad/.postbuch-schreibprobe.XXXXXX" 2>/dev/null) ||
+           ! rm -- "$schreibprobe" 2>/dev/null; then
+            warn "In $eingabe kann postbuch.net nicht schreiben. Bitte einen anderen Ordner wählen."; continue
+        fi
+        # Als root angelegte Ordner gehören dem Besitzer der Installation –
+        # ohne Verknüpfungen zu folgen, falls jemand zwischendurch eine einschiebt.
+        if [[ -n "$neu" && $(id -u) -eq 0 && -n "${INSTALL_BESITZER:-}" ]]; then
+            find -P "$neu" -xdev -exec chown -h "$INSTALL_BESITZER" -- {} + 2>/dev/null || true
+        fi
+        break
+    done
+    ist_onedrive_pfad "$pfad" && warn "Dieser Ordner liegt in OneDrive und wird in die Cloud synchronisiert."
+    LOKAL_ABLAGE_DIR="$pfad"
+    LOKAL_ABLAGE_ANZEIGE="$pfad"
+    ist_wsl && [[ "$pfad" == /mnt/[a-z]/* ]] && LOKAL_ABLAGE_ANZEIGE=$(wslpath -w "$pfad" 2>/dev/null || printf '%s' "$pfad")
+    success "Ablage: $LOKAL_ABLAGE_ANZEIGE"
+    panel "Sicherung" "Originale und automatische Sicherung liegen auf derselben Platte.
+Fällt sie aus, sind beide weg. Kopiere den Ablageordner regelmäßig auf ein
+anderes Laufwerk oder richte im Assistenten eine externe Sicherung ein."
+}
+
+# Prüft Grafikkarte, Stufe und Platz. Setzt LOKAL_KI=true nur, wenn die lokale
+# KI eingerichtet werden kann und eine langsame Stufe ausdrücklich bestätigt ist.
+lokal_ki_dialog() {
+    local gpu vram="" name="" bereit=false antwort bedarf=0 d frei
+    if ! hostconfig_lokalki_manifest "$INSTALL_DIR"; then
+        warn "Das Modellverzeichnis dieses Releases ist nicht lesbar – lokale KI wird übersprungen."
+        return 0
+    fi
+    if gpu=$(hostconfig_gpu_erkennen); then
+        vram="${gpu%%|*}"; name="${gpu#*|}"; name="${name%|*}"; bereit="${gpu##*|}"
+        info "Grafikkarte: $name ($(( vram / 1024 )) GB)"
+        if hostconfig_cuda_akzeptiert "$INSTALL_DIR" || cuda_zustimmung_einholen; then
+            LOKAL_CUDA_ZUSTIMMUNG="$HOSTCONFIG_CUDA_LIZENZ"
+            if [[ "$bereit" != true ]] && nvidia_toolkit_installieren; then
+                gpu=$(hostconfig_gpu_erkennen) && bereit="${gpu##*|}"
+            fi
+            [[ "$bereit" == true ]] || warn "Ohne Toolkit läuft die lokale KI nur auf dem Prozessor."
+        else
+            bereit=false
+        fi
+    else
+        info "Keine NVIDIA-Grafikkarte erkannt."
+    fi
+    [[ "$bereit" == true ]] || vram=""
+    hostconfig_lokalki_stufe "$vram" || { warn "Keine passende Stufe für die lokale KI."; return 0; }
+
+    while IFS='|' read -r _ _ _ d _; do (( bedarf += d )); done < <(hostconfig_lokalki_stufe_dateien)
+    frei=$(freier_platz_bytes "$INSTALL_DIR/data/modelle")
+    # Nach dem Modell müssen noch 5 GB frei bleiben (HOSTCONFIG_LOKALKI_RESERVE_BYTES).
+    if [[ "$frei" =~ ^[0-9]+$ ]] && (( frei < bedarf + HOSTCONFIG_LOKALKI_RESERVE_BYTES )); then
+        warn "Zu wenig freier Platz für das Modell: nötig sind rund $(( bedarf / 1024 ** 3 + 1 )) GB plus 5 GB Reserve, frei $(( frei / 1024 ** 3 )) GB. Lokale KI wird nicht eingerichtet."
+        return 0
+    fi
+
+    # Arbeitsspeicher + nutzbarer Grafikspeicher mindestens 24 GB – sonst lädt
+    # das Modell nicht oder legt den Rechner lahm. Keine Rückfrage, kein Übergehen.
+    local ram=0 rc=0
+    ram=$(hostconfig_ram_mib) || ram=0
+    hostconfig_lokalki_speicher_pruefen "$vram" || rc=$?
+    # 5 = zu wenig; 1 = nicht ermittelbar, dann nicht sperren.
+    if (( rc == 5 )); then
+        panel "Lokale KI nicht möglich" "$( [[ -n "$vram" ]] && echo "Arbeitsspeicher und Grafikspeicher ergeben" || echo "Der Arbeitsspeicher beträgt") rund $(( (ram + ${vram:-0} + 512) / 1024 )) GB.
+Die lokale KI braucht zusammen mindestens 24 GB.$(ist_wsl && printf '\n%s' "Unter Windows zählt der Speicher, den WSL bekommt (Standard: die Hälfte des RAM).
+Reicht der ganze PC, bietet der Windows-Installer an, WSL mehr zu geben:
+den Installer erneut ausführen (oder in den Apps postbuch.net Server → Ändern).")
+
+Die KI richtest du stattdessen im Assistenten per API-Schlüssel ein."
+        return 0
+    fi
+
+    local extrem=false
+    [[ -z "$vram" ]] || (( vram < HOSTCONFIG_LOKALKI_FLOTT_VRAM_MIB )) && extrem=true
+    if $extrem || [[ "$LK_SCHICHTEN" == auto ]]; then
+        $extrem && printf "\n  ${C_RED:-}${C_BOLD}⚠ ACHTUNG: Ohne mindestens 8 GB nutzbaren Grafikspeicher läuft die lokale KI extrem langsam.${C_RESET}\n" >&2
+        panel "$($extrem && echo "Lokale KI wird extrem langsam" || echo "Lokale KI wird langsamer")" "$( [[ "$LK_GPU" == nein ]] && echo "Ohne nutzbare NVIDIA-Grafikkarte rechnet das Modell nur auf dem Prozessor." || echo "Die Grafikkarte fasst das Modell nicht ganz; ein Teil läuft im Arbeitsspeicher.")
+Ein Dokument dauert dann $($extrem && echo "viele Minuten" || echo "deutlich länger") statt weniger Sekunden.
+Benötigt werden rund $(( LK_RAM / 1024 )) GB Arbeitsspeicher.
+
+Alternative: eine Cloud-KI per API-Schlüssel im Einrichtungsassistenten.
+Das lässt sich später jederzeit in den Einstellungen umstellen."
+        antwort=$(prompt "Trotzdem lokale KI einrichten? Zum Bestätigen 'ja' eingeben" "nein")
+        [[ "${antwort,,}" == ja ]] || { info "Keine lokale KI – die KI richtest du im Assistenten ein."; return 0; }
+    fi
+    LOKAL_KI=true
+    success "Lokale KI: $LK_MODELL, Stufe $LK_STUFE (Download rund $(( bedarf / 1024 ** 3 + 1 )) GB nach dem Start)"
+}
+
+# Eingangsfrage der Erstinstallation. Unter Windows (WSL) ist „komplett lokal“
+# die Empfehlung, unter Linux die klassische Einrichtung im Assistenten.
+betriebsart_dialog() {
+    lokal_bibliothek || { warn "Bibliothek für die lokale Einrichtung fehlt – klassische Einrichtung."; return 0; }
+    local standard=2 wahl
+    if ist_wsl; then
+        standard=1
+        # Laufwerke unter /mnt sind Windows-Dateisysteme; PostgreSQL braucht ext4.
+        [[ "$INSTALL_DIR" == /mnt/* ]] && error "Unter WSL muss postbuch.net im Linux-Dateisystem liegen (z. B. ~/postbuch), nicht unter $INSTALL_DIR."
+    fi
+    echo ""
+    hr
+    echo ""
+    printf "  ${C_BOLD}${C_CYAN}SCHRITT: Betriebsart${C_RESET}\n"
+    panel "Komplett lokal oder mit Cloud-Diensten?" "1) Komplett lokal: Die Originale liegen in einem Ordner auf diesem Rechner,
+   die KI läuft hier (Modell rund 9 GB, am besten mit NVIDIA-Grafikkarte).
+   Kein Cloud-Konto nötig.
+2) Klassisch: Ablage (OneDrive, Nextcloud, …) und KI (API-Schlüssel) wählst du
+   nach dem ersten Login im Einrichtungsassistenten.
+
+Beides lässt sich später in den Einstellungen ändern, ohne neu zu installieren."
+    while true; do
+        wahl=$(prompt "Betriebsart [1/2]" "$standard")
+        [[ "$wahl" == 1 || "$wahl" == 2 ]] && break
+    done
+    [[ "$wahl" == 1 ]] || return 0
+    lokal_ablage_dialog
+    LOKAL_ABLAGE=true
+    lokal_ki_dialog
+}
+
+# Nach dem Stackstart: Einschalten der lokalen KI als Auftrag an den Host-Agenten.
+# Er lädt das Modell (Prüfsummen fest im Release), schreibt die Startwerte und
+# startet den Dienst; den Fortschritt zeigt der Reiter Stack.
+# Die lokale KI richtet der Host-Agent ein. Scheitert seine Einrichtung, bleibt
+# die KI dem Assistenten überlassen – sonst stünden alle Modellklassen auf
+# einem Dienst, den niemand startet.
+lokalki_agent_pflicht() {
+    $LOKAL_KI || return 0
+    agent_systemd_bereit && return 0
+    LOKAL_KI=false
+    sed -i '/^POSTBUCH_KI=/d' "$INSTALL_DIR/.env" 2>/dev/null || true
+    warn "Der Host-Agent läuft nicht, deshalb wird die lokale KI jetzt nicht eingerichtet. Die KI richtest du im Assistenten ein; die lokale KI lässt sich nach einem erneuten Installer-Lauf („Update“) unter Einstellungen → Stack einschalten."
+}
+
+lokalki_auftrag_einreihen() {
+    $LOKAL_KI || return 0
+    if ! agent_systemd_bereit; then
+        warn "Der Host-Agent läuft nicht, deshalb kann die lokale KI nicht eingerichtet werden. Später: Installer erneut ausführen („Update“), dann Einstellungen → Stack."
+        return 0
+    fi
+    local dir="$INSTALL_DIR/data/update" tmp SUDO=""
+    [[ $(id -u) -ne 0 ]] && SUDO="sudo"
+    $SUDO mkdir -p "$dir" || return 0
+    tmp=$($SUDO mktemp "$dir/anforderung.kv.XXXXXX") || return 0
+    printf 'protokoll=2\ntyp=module\nnonce=%s\nangefordertAm=%s\nangefordertVon=installer\nwert=lokalki:an\n' \
+        "$(openssl rand -hex 16)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" | $SUDO tee "$tmp" >/dev/null
+    $SUDO chmod 600 "$tmp" && $SUDO mv -f "$tmp" "$dir/anforderung.kv" || { $SUDO rm -f "$tmp"; return 0; }
+    $SUDO systemctl start --no-block postbuch-update-agent.service 2>/dev/null || true
+    success "Lokale KI angefordert: Das Modell wird jetzt im Hintergrund geladen."
+    echo "  Fortschritt: Einstellungen → Stack. Bis das Modell bereit ist, warten neue"
+    echo "  Dokumente in der Warteschlange."
 }
 
 # ── Geführter Setup-Dialog (Prompts + Dateien schreiben) ──────────────────────
@@ -2278,7 +3377,7 @@ run_setup_dialog() {
         echo ""
         echo "  Dieser Name wird in der Web-Oberflaeche angezeigt (z.B. in Login, Sidebar, Exporten)."
         while [[ -z "$INSTANCE_NAME" ]]; do
-            INSTANCE_NAME=$(prompt "Gewuenschter Instanzname" "Postbuch")
+            INSTANCE_NAME=$(prompt "Gewünschter Instanzname" "Postbuch")
             INSTANCE_NAME=$(echo "$INSTANCE_NAME" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
             if [[ -z "$INSTANCE_NAME" ]]; then
                 warn "Instanzname darf nicht leer sein."
@@ -2290,8 +3389,27 @@ run_setup_dialog() {
     POSTGRES_PASSWORD=$(openssl rand -hex 16)
     SESSION_SECRET=$(openssl rand -hex 32)
 
+    # Ablage, KI, OneDrive und Scanner werden nach dem ersten Login im
+    # Web-Assistenten eingerichtet. Die leeren Werte bleiben ausschließlich als
+    # Kompatibilität für Headless-/Restore- und Bestandsinstallationen bestehen.
+    # Die Betriebsart gilt auch für eine Wiederherstellung: Sie legt fest,
+    # welche Dienste dieser Rechner startet, das Backup nur die Daten.
+    STORAGE_BACKEND=""
+    POSTBUCH_KI=""
+    if lokal_bibliothek && hostconfig_cuda_akzeptiert "$INSTALL_DIR"; then
+        LOKAL_CUDA_ZUSTIMMUNG="$HOSTCONFIG_CUDA_LIZENZ"
+    fi
+    betriebsart_dialog
+    $LOKAL_ABLAGE && STORAGE_BACKEND="lokal"
+    $LOKAL_KI && POSTBUCH_KI="lokal"
+
     # ── Backup einspielen? ────────────────────────────────────────────────────
-    RESTORE_BACKUP=$(ask_restore_backup)
+    # Eine weiterverwendete Ablage bringt ihre Datenbank als Sicherung mit.
+    if [[ -n "$LOKAL_ABLAGE_SICHERUNG" ]] || $LOKAL_ABLAGE_HOCHLADEN; then
+        RESTORE_BACKUP="true"
+    else
+        RESTORE_BACKUP=$(ask_restore_backup)
+    fi
 
     # ── Admin-Passwort ────────────────────────────────────────────────────────
     APP_PASSWORD=""
@@ -2311,10 +3429,6 @@ run_setup_dialog() {
         APP_PASSWORD=$(prompt_password "Admin-Passwort wählen")
     fi
 
-    # Ablage, KI, OneDrive und Scanner werden nach dem ersten Login im
-    # Web-Assistenten eingerichtet. Die leeren Werte bleiben ausschließlich als
-    # Kompatibilität für Headless-/Restore- und Bestandsinstallationen bestehen.
-    STORAGE_BACKEND=""
     OPENAI_API_KEY=""
     ANTHROPIC_API_KEY=""
     LLM_EMPFEHLUNGEN_ABO=""
@@ -2327,41 +3441,41 @@ run_setup_dialog() {
     printf "  ${C_BOLD}${C_CYAN}SCHRITT: DuckDNS + automatisches HTTPS (fuer PWA und Push erforderlich)${C_RESET}\n"
     echo ""
     local _LAN_IP
-    _LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
-    if [[ -z "$_LAN_IP" ]]; then
+    _LAN_IP="$(heimnetz_ip)"
+    if [[ -z "$_LAN_IP" ]] && ! ist_wsl; then
         _LAN_IP="$(ip -4 addr show scope global 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | head -n1 || true)"
+    fi
+    if [[ -z "$_LAN_IP" ]] && ist_wsl; then
+        _LAN_IP="(unbekannt – das Netz von WSL ist nicht gespiegelt)"
+        warn "Andere Geräte im Heimnetz erreichen postbuch.net erst, wenn das WSL-Netz gespiegelt ist (networkingMode=mirrored, setzt install.ps1)."
     fi
     local _HTTPS_GRUND="• Ohne HTTPS gehen dein Admin-Passwort und deine Sitzung unverschluesselt
   durchs Netz. Jeder, der im selben WLAN mitliest, kann sie uebernehmen.
 • Push-Benachrichtigungen auf dem Handy brauchen HTTPS."
     panel "DuckDNS und HTTPS" "Warum sich dieser Schritt lohnt:
 • postbuch.net ist danach unter einer gleichbleibenden Adresse mit HTTPS erreichbar,
-  z. B. https://musterpostbuch.duckdns.org — auch wenn sich die IP-Adresse dieses
-  Servers in deinem Heimnetzwerk mal aendert.
+  z. B. https://musterpostbuch.duckdns.org.
 $_HTTPS_GRUND
 • Eine dauerhaft installierte PWA auf anderen Geraeten und Push brauchen diese HTTPS-Adresse.
-
-Die IP-Adresse dieses Raspberry Pi in deinem Heimnetzwerk lautet: $_LAN_IP
-Diese Adresse brauchst du gleich bei DuckDNS — merke sie dir kurz oder lass dieses
-Fenster offen.
 
 So gehst du vor:
 1. Öffne https://www.duckdns.org in einem Browser und melde dich an (z. B. mit
    deinem Google- oder GitHub-Konto).
 2. Trage oben auf der Seite unter 'sub domain' einen frei waehlbaren Namen ein und
    klicke auf 'add domain', z. B. musterpostbuch (daraus wird musterpostbuch.duckdns.org).
-3. In der Zeile deiner neuen Subdomain steht ein Eingabefeld 'ip' bzw. 'current ip'.
-   Dort steht meist automatisch die falsche Adresse (deine oeffentliche Internet-Adresse).
-   Loesche sie und trage stattdessen die IP-Adresse dieses Raspberry Pi ein: $_LAN_IP
-   Klicke danach auf 'update ip'.
-4. Kopiere oben auf der Seite dein persoenliches DuckDNS-Token (langer Zeichencode).
-   Das wird gleich hier im Installer abgefragt.
+   Die Adresse, die DuckDNS dabei eintraegt, musst du nicht aendern.
+3. Kopiere oben auf der Seite dein persoenliches DuckDNS-Token (langer Zeichencode).
+4. Trage hier unten Token und Domain ein und bestaetige die IP-Adresse dieses
+   Rechners im Heimnetz. Der Installer traegt sie selbst bei DuckDNS ein; postbuch.net
+   erzeugt dann automatisch ein gueltiges TLS-Zertifikat fuer diese Domain.
 5. Falls dein Router einen sogenannten DNS-Rebind-Schutz hat, muss die DuckDNS-Domain
-   dort als Ausnahme eingetragen werden — sonst blockiert der Router den Zugriff, weil
+   dort als Ausnahme eingetragen werden – sonst blockiert der Router den Zugriff, weil
    die oeffentliche Domain auf eine private Adresse zeigt.
    Fritz!Box: http://fritz.box → Netzwerk → Netzwerkeinstellungen → DNS-Rebind-Schutz.
-6. Trage danach hier unten Token und Domain ein. postbuch.net erzeugt dann automatisch
-   ein gueltiges TLS-Zertifikat fuer diese Domain."
+
+Bekommt dieser Rechner spaeter eine neue IP-Adresse im Heimnetz, traegt postbuch.net
+sie selbst bei DuckDNS nach. Wer eine feste IP vergeben hat, kann das in den
+Einstellungen unter Allgemein → Erreichbarkeit abschalten."
 
     DUCKDNS_API_TOKEN=""
     DUCKDNS_DOMAIN=""
@@ -2381,12 +3495,16 @@ So gehst du vor:
                 continue
             fi
             info "Verwende Domain: $DUCKDNS_DOMAIN"
+            if [[ "$DUCKDNS_DOMAIN" == *.duckdns.org ]] && ! duckdns_ip_abfragen_und_eintragen; then
+                DUCKDNS_DOMAIN=""
+                continue
+            fi
             while true; do
                 _dns_status=0
                 duckdns_aufloesung_pruefen "$DUCKDNS_DOMAIN" || _dns_status=$?
                 [[ $_dns_status -eq 1 ]] || break
                 echo ""
-                read -rp "  [w] erneut pruefen · [n] Domain neu eingeben · [f] trotzdem fortfahren – Auswahl [w]: " _dns_wahl </dev/tty
+                read -rp "  [w] erneut pruefen · [n] Domain neu eingeben · [f] trotzdem fortfahren – Auswahl [w]: " _dns_wahl </dev/tty || tty_weg
                 case "${_dns_wahl,,}" in
                     n) DUCKDNS_DOMAIN=""; break ;;
                     f) _dns_status=3; break ;;
@@ -2399,24 +3517,28 @@ So gehst du vor:
         local _dns_merkliste=""
         if [[ $_dns_status -ne 0 ]]; then
             _dns_merkliste="• Bei DuckDNS steht bei $DUCKDNS_DOMAIN als IP-Adresse: $_LAN_IP
-  (falls nicht: auf duckdns.org korrigieren und 'update ip' klicken).
+  (falls nicht: auf duckdns.org eintragen und 'update ip' klicken).
 • Falls dein Router DNS-Rebind-Schutz hat, ist $DUCKDNS_DOMAIN dort als Ausnahme eingetragen.
 "
         fi
         panel "DuckDNS-Pruefung" "${_dns_merkliste}• Caddy nutzt das DuckDNS-Token automatisch fuer die DNS-01-Challenge und holt das TLS-Zertifikat."
-        APP_BASE_URL="https://$DUCKDNS_DOMAIN"
-        ONEDRIVE_REDIRECT_URI="https://$DUCKDNS_DOMAIN/api/onedrive-auth/callback"
-    else
-        APP_BASE_URL="http://localhost:3420"
-        ONEDRIVE_REDIRECT_URI="http://localhost:3420/api/onedrive-auth/callback"
     fi
 
-    # Ohne Caddy ist Port 3420 der einzige Zugang und bleibt offen. Mit Caddy
+    if [[ -n "$DUCKDNS_API_TOKEN" ]]; then
+        ports_festlegen true
+        APP_BASE_URL="https://$DUCKDNS_DOMAIN$(port_suffix "$HTTPS_PORT_WAHL" 443)"
+    else
+        ports_festlegen false
+        APP_BASE_URL="http://localhost:$WEB_PORT_WAHL"
+    fi
+    ONEDRIVE_REDIRECT_URI="$APP_BASE_URL/api/onedrive-auth/callback"
+
+    # Ohne Caddy ist der Web-Port der einzige Zugang und bleibt offen. Mit Caddy
     # kann die Oberfläche auf die HTTPS-Adresse beschränkt werden.
     WEB_BIND=""
     if [[ -n "$DUCKDNS_API_TOKEN" ]]; then
         echo ""
-        info "Die Weboberfläche ist im Heimnetz zusätzlich über http://<IP>:3420 erreichbar."
+        info "Die Weboberfläche ist im Heimnetz zusätzlich über http://<IP>:$WEB_PORT_WAHL erreichbar."
         local _web_wahl
         _web_wahl=$(prompt "Nur noch über https://$DUCKDNS_DOMAIN erreichbar machen? [j/N]" "N")
         [[ "${_web_wahl,,}" == j* ]] && WEB_BIND="127.0.0.1"
@@ -2456,6 +3578,7 @@ APP_ADMIN_USERNAME=admin
 INSTANCE_NAME=$INSTANCE_NAME
 # Neue Installationen nutzen den eingebauten Embedding-Dienst.
 COMPOSE_PROFILES=embedding
+POSTBUCH_CUDA_ZUSTIMMUNG=$LOKAL_CUDA_ZUSTIMMUNG
 
 # ── LLM: Dokumentenanalyse ────────────────────────────────────────
 # Leer = keine Cloud-KI. Weitere Provider (Ollama, LM Studio, OpenRouter,
@@ -2496,6 +3619,25 @@ EOF
 # aktive Ablage nur ueber Einstellungen -> Ablage umgeschaltet; ein Aendern
 # dieser Zeile bleibt dort wirkungslos.
 STORAGE_BACKEND=$STORAGE_BACKEND
+EOF
+    fi
+
+    if [[ "$STORAGE_BACKEND" == "lokal" ]]; then
+        cat >> "$ENV_FILE" <<EOF
+# Ordner der lokalen Ablage. Ändern nur über Einstellungen → Ablage → Ordner ändern
+# (zieht die Dateien um); ein Ändern dieser Zeilen allein findet die Dateien nicht.
+POSTBUCH_ABLAGE_DIR=$LOKAL_ABLAGE_DIR
+POSTBUCH_ABLAGE_ANZEIGE=$LOKAL_ABLAGE_ANZEIGE
+EOF
+    fi
+
+    if [[ -n "$POSTBUCH_KI" ]]; then
+        cat >> "$ENV_FILE" <<EOF
+
+# ── KI ─────────────────────────────────────────────────────────────
+# Erstinstallation: alle Sprachmodell-Aufgaben auf die lokale KI. Wirkt nur
+# gegen eine leere Datenbank; danach gelten die Einstellungen → KI.
+POSTBUCH_KI=$POSTBUCH_KI
 EOF
     fi
 
@@ -2553,7 +3695,10 @@ EOF
     cat >> "$ENV_FILE" <<EOF
 
 # ── Ports ──────────────────────────────────────────────────────────
-WEB_PORT=3420
+WEB_PORT=$WEB_PORT_WAHL
+# Caddy (nur mit DuckDNS): HTTP leitet auf HTTPS weiter.
+CADDY_HTTP_PORT=$HTTP_PORT_WAHL
+CADDY_HTTPS_PORT=$HTTPS_PORT_WAHL
 # Leer = alle Schnittstellen; 127.0.0.1 = nur über Caddy (HTTPS).
 WEB_BIND=$WEB_BIND
 POSTGRES_HOST_PORT=5433
@@ -2570,23 +3715,10 @@ EOF
     # Docker kann Caddyfile als Verzeichnis anlegen (bind-mount ohne vorhandene Datei) – bereinigen
     [[ -d "$INSTALL_DIR/caddy/Caddyfile" ]] && safe_rm_rf "$INSTALL_DIR/caddy/Caddyfile"
     if [[ -n "$DUCKDNS_API_TOKEN" ]]; then
-        cat > "$INSTALL_DIR/caddy/Caddyfile" <<'CADDYEOF'
-{env.DUCKDNS_DOMAIN} {
-    tls {
-        dns duckdns {env.DUCKDNS_API_TOKEN}
-        resolvers 8.8.8.8 1.1.1.1
-    }
-    reverse_proxy web:80
-}
-CADDYEOF
+        caddyfile_schreiben an
         success "Caddyfile mit DuckDNS-TLS geschrieben."
     else
-        cat > "$INSTALL_DIR/caddy/Caddyfile" <<'CADDYEOF'
-# Kein DuckDNS konfiguriert – kein TLS-Endpunkt aktiv.
-# postbuch.net ist über http://localhost:3420 erreichbar.
-# Trage DUCKDNS_API_TOKEN und DUCKDNS_DOMAIN in die .env ein und starte neu,
-# um automatisches HTTPS zu aktivieren.
-CADDYEOF
+        caddyfile_schreiben aus
         success "Caddyfile (ohne TLS) geschrieben."
     fi
     chmod 600 "$INSTALL_DIR/caddy/Caddyfile"
@@ -2637,6 +3769,16 @@ Optionen:
                             aus ihrer .env.
   --zielversion=<x.y.z>     Genau diese Version installieren (auch eine
                             Vorabversion); ohne Angabe die neueste stabile
+  --web-port=<n>            Port der Weboberfläche (Standard 3420)
+  --http-port=<n>           Port für HTTP mit DuckDNS (Standard 80, leitet
+                            auf HTTPS weiter)
+  --https-port=<n>          Port für HTTPS mit DuckDNS (Standard 443)
+                            Ist ein Port belegt, fragt der Installer nach
+                            einem anderen. Bei einer bestehenden Installation
+                            stellen die Schalter die Ports um.
+  --deinstallieren          Ohne Auswahlmenü direkt zur Deinstallation (mit
+                            Rückfrage). Exit 2 = abgebrochen, 4 = keine
+                            Installation gefunden
   -h, --help                Diese Hilfe
 
 Notausgaenge (nur bewusst benutzen, der Update-Agent setzt sie nie):
@@ -2661,6 +3803,10 @@ parse_args() {
             --install-dir=*)     OPT_INSTALL_DIR="${1#*=}" ;;
             --quelle=*)          OPT_FEED_BASE_URL="${1#*=}" ;;
             --zielversion=*)     OPT_ZIELVERSION="${1#*=}" ;;
+            --deinstallieren)    OPT_DEINSTALLIEREN=true ;;
+            --web-port=*)        OPT_WEB_PORT="${1#*=}" ;;
+            --http-port=*)       OPT_HTTP_PORT="${1#*=}" ;;
+            --https-port=*)      OPT_HTTPS_PORT="${1#*=}" ;;
             --ohne-signatur-fortfahren) OPT_OHNE_SIGNATUR=true ;;
             --erlaube-rueckschritt)     OPT_ERLAUBE_RUECKSCHRITT=true ;;
             -h|--help)           usage; exit 0 ;;
@@ -2673,6 +3819,13 @@ parse_args() {
         echo "FEHLER: --zielversion muss die Form x.y.z haben." >&2
         exit 2
     fi
+    local _p
+    for _p in "$OPT_WEB_PORT" "$OPT_HTTP_PORT" "$OPT_HTTPS_PORT"; do
+        if [[ -n "$_p" ]] && ! port_gueltig "$_p"; then
+            echo "FEHLER: Ports muessen ganze Zahlen von 1 bis 65535 sein (erhalten: $_p)." >&2
+            exit 2
+        fi
+    done
     if [[ -n "$OPT_SHA256" && ! "$OPT_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
         echo "FEHLER: --erwarte-sha256 ist keine 64-stellige Hex-Pruefsumme." >&2
         exit 2
@@ -2836,34 +3989,37 @@ manifest_holen() {
     local roh v
     roh=$(feed_curl -fsS --max-time 20 "$MANIFEST_URL" 2>/dev/null | tr -d ' \t\n\r') || return 1
     [[ -n "$roh" ]] || return 1
+    MANIFEST_ROH="$roh"
     # --zielversion: das Manifest muss genau diese Version nennen. Bei einer
     # flachen Quelle gibt es nur das neueste Manifest; ist dort inzwischen
     # etwas anderes veröffentlicht, wird nicht stillschweigend gewechselt.
     if [[ -n "$OPT_ZIELVERSION" ]]; then
-        v=$(printf '%s' "$roh" | grep -o '"version":"[0-9]\+\.[0-9]\+\.[0-9]\+"' \
-            | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' | head -n1)
+        v=$(hole_manifest_version || true)
         if [[ "$v" != "$OPT_ZIELVERSION" ]]; then
+            MANIFEST_ROH=""
             echo "FEHLER: Angefordert war Version $OPT_ZIELVERSION, das Manifest nennt ${v:-keine Version}." >&2
             return 1
         fi
     fi
-    MANIFEST_ROH="$roh"
 }
 
+# Version und Pruefsumme werden mit denselben Lesefunktionen geholt, aus denen
+# signatur_kanonische_bytes() die signierten Bytes baut. Eine zweite Lesart des
+# Manifests koennte einen anderen Wert liefern als den, den die Signatur deckt.
 hole_erwartete_sha256() {
     manifest_holen || return 1
-    printf '%s' "$MANIFEST_ROH" \
-        | grep -o '"tarball":{"sha256":"[0-9a-f]\{64\}"' \
-        | grep -o '[0-9a-f]\{64\}' \
-        | head -n1
+    local sha
+    sha=$(manifest_unterfeld tarball sha256 || true)
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf '%s\n' "$sha"
 }
 
 hole_manifest_version() {
     manifest_holen || return 1
-    printf '%s' "$MANIFEST_ROH" \
-        | grep -o '"version":"[0-9]\+\.[0-9]\+\.[0-9]\+"' \
-        | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+' \
-        | head -n1
+    local v
+    v=$(manifest_feld version || true)
+    [[ "$v" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){2}$ ]] || return 1
+    printf '%s\n' "$v"
 }
 
 # Setzt RELEASE_URL auf den versionierten Dateinamen.
@@ -3513,6 +4669,9 @@ release_persistente_besitzer_wiederherstellen() { # $1=Ziel $2=uid:gid
 
 release_stage_promoten() {   # $1 = Stage, $2 = Installationsverzeichnis
     local stage="$1" ziel="$2" env_tmp caddy_tmp="" besitzer zielmodus
+    # data/ gehört nie zum Release; im Stage liegt höchstens die Build-Kopie
+    # der lokalki.env (lokalki_env_bereitstellen).
+    safe_rm_rf "$stage/data" || return 1
     besitzer=$(installations_besitzer_bestimmen "$ziel") || return 1
     zielmodus=$(stat -c '%a' "$ziel") || return 1
     env_tmp=$(mktemp) || return 1
@@ -3612,6 +4771,89 @@ docker_headless_pruefen() {
 # neue Rechte verschaffen.
 AGENT_LIB="/usr/local/lib/postbuch"
 AGENT_CONF="/etc/postbuch-update-agent.conf"
+
+# ── Sperre gegen den Host-Agenten ────────────────────────────────────────────
+# Installer und Agent dürfen nie gleichzeitig am Stack arbeiten (Befund
+# 2026-11-20: Ein Update von Hand hob VERSION, eine Sekunde später tauschte der
+# Agent das PostgreSQL-Image, beide ersetzten dieselben Container). Jeder Agent
+# seit 2.10 nimmt bei jedem Takt `flock -n` auf $AGENT_LIB/state/agent.lock und
+# endet sofort, wenn die Sperre belegt ist. Der Installer hält dieselbe Sperre
+# für seine ganze Laufzeit.
+#
+# Gehalten wird sie von einem Hilfsprozess (`flock … sh`), der wartet, solange
+# dieser Installer lebt (kill -0 auf $$). `exec` behält die Prozessnummer, die
+# Übergabe an den neuen Installer behält die Sperre also ohne Zutun; der neue
+# erkennt das an POSTBUCH_SPERRE_PID == $$. Endet der Installer (auch per kill),
+# ist die Sperre spätestens nach einer Sekunde frei.
+# Bewusst keine Pipe oder fd: sudo mit use_pty reicht EOF nicht verlässlich
+# durch, und jedes Kind (docker compose, Hintergrundschleifen) erbte den fd.
+# Das Statusverzeichnis gehört root (700): ohne root über sudo.
+#
+# Schnittstelle, die nie inkompatibel geändert werden darf: Pfad der Sperrdatei
+# und `flock` darauf (siehe AUSLIEFERUNG-RELEASE.md, „Feste Schnittstellen“).
+vom_agenten_gestartet() {
+    # Der Agent hält die Sperre schon, ein zweites flock würde auf ihn warten.
+    # Alte Agenten setzen keine Variable; deshalb zusätzlich die Elternkette.
+    [[ "${POSTBUCH_AGENT_SPERRE:-}" == 1 ]] && return 0
+    local pid="$PPID" n=0 befehl
+    while [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 1 && "$n" -lt 25 ]]; do
+        befehl=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null) || break
+        [[ "$befehl" == *postbuch-update-agent* ]] && return 0
+        pid=$(awk '/^PPid:/ {print $2; exit}' "/proc/$pid/status" 2>/dev/null)
+        n=$((n + 1))
+    done
+    return 1
+}
+
+agent_sperre_nehmen() {
+    local sperre="$AGENT_LIB/state/agent.lock" okdir sudo_cmd="" helfer_pid warte=0 max=1800
+    [[ "${AGENT_SPERRE_AKTIV:-false}" == true ]] && return 0
+    if [[ "${POSTBUCH_SPERRE_PID:-}" == "$$" ]]; then
+        AGENT_SPERRE_AKTIV=true          # nach der Übergabe: Sperre läuft weiter
+        return 0
+    fi
+    vom_agenten_gestartet && return 0
+    # Ohne Agent (Erstinstallation, kein Update-Dienst) gibt es nichts zu sperren.
+    [[ -d "$AGENT_LIB/state" ]] || return 0
+    command -v flock &>/dev/null || return 0
+    if [[ $(id -u) -ne 0 ]]; then
+        command -v sudo &>/dev/null || { warn "Ohne sudo kann der Update-Dienst nicht angehalten werden."; return 0; }
+        if ! sudo -n true 2>/dev/null; then
+            if $OPT_NON_INTERACTIVE; then
+                warn "Ohne sudo kann der Update-Dienst nicht angehalten werden."
+                return 0
+            fi
+            info "Der Update-Dienst wird für diesen Lauf angehalten (sudo):"
+            sudo -v || { warn "Ohne sudo kann der Update-Dienst nicht angehalten werden."; return 0; }
+        fi
+        sudo_cmd="sudo -n"
+    fi
+    # Eigenes Verzeichnis statt Datei in /tmp: fs.protected_regular verbietet
+    # root das Schreiben in fremde Dateien in /tmp.
+    okdir=$(mktemp -d) || return 0
+    # shellcheck disable=SC2016
+    $sudo_cmd flock -w "$max" "$sperre" sh -c \
+        'echo ok > "$1/ok"; while kill -0 "$2" 2>/dev/null; do sleep 1; done' \
+        sh "$okdir" "$$" </dev/null >/dev/null 2>&1 &
+    helfer_pid=$!
+    while [[ ! -e "$okdir/ok" ]]; do
+        if ! kill -0 "$helfer_pid" 2>/dev/null; then
+            rm -rf "$okdir"
+            if (( warte + 5 < max )); then
+                warn "Der Update-Dienst konnte nicht angehalten werden. Es geht trotzdem weiter."
+                return 0
+            fi
+            echo "FEHLER: Der Update-Dienst arbeitet seit $((max / 60)) Minuten (etwa ein Update oder ein Download aus der Oberfläche). Bitte später erneut starten." >&2
+            exit 1
+        fi
+        (( warte % 30 == 1 )) && info "Der Update-Dienst arbeitet gerade (etwa ein Update aus der Oberfläche). Warte, bis er fertig ist ..."
+        sleep 1
+        warte=$((warte + 1))
+    done
+    rm -rf "$okdir" 2>/dev/null || $sudo_cmd rm -rf "$okdir" 2>/dev/null || true
+    AGENT_SPERRE_AKTIV=true
+    export POSTBUCH_SPERRE_PID=$$
+}
 
 agent_systemd_bereit() {
     command -v systemctl &>/dev/null \
@@ -3766,10 +5008,13 @@ sudo_keepalive_starten() {
     trap 'kill "$SUDO_KEEPALIVE_PID" 2>/dev/null; installer_log_abschluss' EXIT
 }
 
-# Fragt nach dem Update-Agenten — AUSSCHLIESSLICH im interaktiven Lauf.
-# Im nicht-interaktiven Pfad wird ein Agent nie neu aktiviert: ein Update darf
-# sich nicht selbst neue Rechte verschaffen.
-frage_agent_an() {
+# Richtet den Host-Agenten ein bzw. rüstet ihn still nach – ohne Rückfrage:
+# Über ihn steuert die Oberfläche Ports, Ablage, Dienste, DuckDNS und Updates.
+# AUSSCHLIESSLICH im interaktiven Lauf: Im nicht-interaktiven Pfad wird ein
+# Agent nie neu aktiviert, ein Update darf sich nicht selbst neue Rechte
+# verschaffen. Ob die App nach neuen Versionen sucht, ist davon unabhängig
+# (täglicher Feed-Job, in der Oberfläche umschaltbar).
+agent_einrichten() {
     $OPT_NON_INTERACTIVE && return 0
     # Der gefuehrte Installer liest seine Antworten bewusst aus /dev/tty.
     # Daher nicht nur stdin pruefen, sondern den tatsaechlich verwendeten
@@ -3780,39 +5025,24 @@ frage_agent_an() {
     fi
 
     if [[ -f "$AGENT_CONF" ]] && agent_systemd_bereit; then
-        info "Update-Agent ist bereits eingerichtet."
-        return 0
+        # Der Agent bedient genau ein Installationsverzeichnis. Zeigt er auf
+        # ein anderes (frühere Installation an anderem Ort), blieben Aufträge
+        # dieser Instanz – etwa das Laden der lokalen KI – für immer liegen.
+        local agent_ziel
+        agent_ziel=$(grep '^POSTBUCH_INSTALL_DIR=' "$AGENT_CONF" 2>/dev/null | tail -n1 | cut -d'=' -f2- || true)
+        if [[ -z "$agent_ziel" || "$agent_ziel" == "$INSTALL_DIR" ]]; then
+            info "Host-Agent ist bereits eingerichtet."
+            return 0
+        fi
+        warn "Der Host-Agent gehört noch zu einer anderen Installation ($agent_ziel) und wird auf diese umgestellt."
+    elif [[ -f "$AGENT_CONF" ]]; then
+        warn "Vorhandener Host-Agent ist nicht als aktiver systemd-Timer eingerichtet und wird jetzt repariert."
     fi
-    if [[ -f "$AGENT_CONF" ]]; then
-        warn "Vorhandener Update-Agent ist nicht als aktiver systemd-Timer eingerichtet und wird jetzt repariert."
-    fi
 
-    panel "Updates aus der Web-Oberfläche" "postbuch.net kann anzeigen, wenn eine neue Version vorliegt. Wenn du möchtest,
-richtet der Installer zusätzlich einen kleinen Dienst auf diesem Server ein,
-der ein Update auf Knopfdruck aus der Oberfläche ausführt.
-
-Was er tut:
-• prüft einmal pro Minute, ob in der Oberfläche ein Update angefordert wurde
-• legt vorher automatisch ein Backup inkl. Datenbank an
-• prüft die Prüfsumme des Downloads, bevor irgendetwas ersetzt wird
-
-Zum Einrichten des Systemdienstes wird jetzt einmalig sudo benötigt. Die
-Abfrage erfolgt bewusst vor einem möglicherweise langen Container-Build.
-
-Ohne diesen Dienst funktioniert alles wie bisher — du siehst dann nur den
-Hinweis auf eine neue Version und führst das Update selbst auf dem Server aus."
-
-    echo ""
-    local ans=""
-    while [[ "$ans" != "j" && "$ans" != "J" && "$ans" != "n" && "$ans" != "N" ]]; do
-        read -rp "  Update-Dienst einrichten? [J/n]: " ans </dev/tty
-        [[ -z "$ans" ]] && ans="j"
-    done
-    if [[ "$ans" == "j" || "$ans" == "J" ]]; then
-        install_update_agent normal || warn "Update-Dienst konnte nicht eingerichtet werden – kein Problem, Updates gehen weiter von Hand."
-    else
-        info "Kein Update-Dienst – Updates bleiben Handarbeit auf dem Server."
-    fi
+    info "Richte den Host-Agenten ein. Über ihn steuert die Oberfläche Ports, Ablage,"
+    info "Dienste, HTTPS und Updates; dafür wird jetzt einmalig sudo benötigt."
+    install_update_agent normal \
+        || warn "Host-Agent konnte nicht eingerichtet werden. Einstellungen, die den Rechner betreffen, und Updates aus der Oberfläche gehen erst nach einem erneuten Installer-Lauf."
 }
 
 # Prueft das App-interne Backup-Feature (_settings.backup.enabled, DB/Ablage-
@@ -3844,7 +5074,7 @@ backup_feature_status_pruefen() {
 und Daten bei einem Ausfall unwiederbringlich verloren."
 
     # Ohne TTY (z.B. versehentlich per Pipe/CI) nur der Hinweis oben, kein
-    # Aktivierungsangebot — dieselbe Absicherung wie in frage_agent_an().
+    # Aktivierungsangebot — dieselbe Absicherung wie in agent_einrichten().
     $OPT_NON_INTERACTIVE && return 0
     if ! { : </dev/tty; } 2>/dev/null; then
         return 0
@@ -3853,7 +5083,7 @@ und Daten bei einem Ausfall unwiederbringlich verloren."
     echo ""
     local ans=""
     while [[ "$ans" != "j" && "$ans" != "J" && "$ans" != "n" && "$ans" != "N" ]]; do
-        read -rp "  Backup jetzt aktivieren (taeglich 04:00 Uhr, Ablage wie bisher konfiguriert)? [J/n]: " ans </dev/tty
+        read -rp "  Backup jetzt aktivieren (taeglich 04:00 Uhr, Ablage wie bisher konfiguriert)? [J/n]: " ans </dev/tty || tty_weg
         [[ -z "$ans" ]] && ans="j"
     done
     if [[ "$ans" == "n" || "$ans" == "N" ]]; then
@@ -3901,6 +5131,70 @@ remove_update_agent() {
 # Die Pruefsumme wird VOR dem Backup geprueft, damit ein kaputter Download nicht
 # einmal ein Backup ausloest; das Backup wiederum liegt VOR dem Entpacken, damit
 # es immer einen Rueckweg gibt.
+# ── Übergabe an den Installer der neuen Version ──────────────────────────────
+# Sobald das Archiv heruntergeladen und gegen das signierte Manifest geprüft
+# ist, übernimmt der Installer aus genau diesem Archiv. Bauen, Umschalten und
+# Agent-Refresh gehören zur neuen Compose-Datei; der alte Installer kennt deren
+# Voraussetzungen nicht (etwa neue Pflichtdateien).
+#
+# Mechanik ohne eigene Schnittstelle: Neuer Installer und geprüftes Archiv
+# liegen in einem privaten Ordner nebeneinander. Dort findet der neue Lauf das
+# Archiv als LOCAL_TARBALL, lädt nichts nach und prüft Manifest, Signatur
+# (gegen denselben lokalen Vertrauensanker) und Prüfsumme selbst noch einmal.
+# Er bekommt dieselben Argumente plus --update, Installationsverzeichnis,
+# Prüfsumme und Version; stdout, das Protokoll und der Exitcode für den
+# Host-Agenten bleiben dank exec dieselben.
+#
+# Kehrt zurück (und der bisherige Installer macht weiter), wenn nicht
+# übergeben wird: bereits übernommen, Rückschritt, Version unklar, identischer
+# Installer, Lauf ohne Signatur oder ein nicht lesbarer neuer Installer.
+an_neuen_installer_uebergeben() {   # $1 = geprüftes Archiv
+    local archiv="$1" ziel aktuell lower ordner neu
+    [[ "${POSTBUCH_UEBERGABE:-}" == 1 ]] && return 0
+    $OPT_OHNE_SIGNATUR && return 0
+    [[ -n "$ERWARTETE_SHA" ]] || return 0
+    ziel=$(manifest_feld version)
+    aktuell=""
+    [[ -f "$INSTALL_DIR/VERSION" ]] && aktuell=$(tr -d '[:space:]' < "$INSTALL_DIR/VERSION")
+    [[ "$ziel" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){2}$ && "$aktuell" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){2}$ ]] || return 0
+    # Ein Rückschritt bleibt beim laufenden Installer: Ein älterer Installer
+    # kennt womöglich nicht alle Argumente dieses Laufs.
+    lower=$(printf '%s\n%s\n' "$ziel" "$aktuell" | sort -V | head -n1)
+    [[ "$lower" == "$aktuell" ]] || return 0
+
+    ordner=$(mktemp -d "${TMPDIR:-/tmp}/postbuch-uebergabe.XXXXXX") || return 0
+    chmod 700 "$ordner"
+    neu="$ordner/install.sh"
+    if ! tar -xzOf "$archiv" postbuch-unified/deploy-pages/install.sh > "$neu" 2>/dev/null \
+          || [[ ! -s "$neu" ]] || ! bash -n "$neu" 2>/dev/null; then
+        rm -rf -- "$ordner"
+        echo "  Hinweis: Der Installer im Archiv ist nicht lesbar – das Update läuft mit diesem Installer weiter."
+        return 0
+    fi
+    if [[ -f "$0" ]] && cmp -s "$neu" "$0"; then
+        rm -rf -- "$ordner"
+        return 0
+    fi
+    # Ein selbst abgelegtes lokales Archiv bleibt, wo es ist; ein Download
+    # wandert in den Ordner und wird mit ihm aufgeräumt.
+    if [[ "$archiv" == "$LOCAL_TARBALL" ]]; then
+        cp -f "$archiv" "$ordner/postbuch-latest.tar.gz" || { rm -rf -- "$ordner"; return 0; }
+    else
+        mv -f "$archiv" "$ordner/postbuch-latest.tar.gz" || { rm -rf -- "$ordner"; return 0; }
+    fi
+    : > "$ordner/.postbuch-uebergabe"
+
+    local args=("${INSTALLER_ARGS[@]}" --update "--install-dir=$INSTALL_DIR"
+                "--erwarte-sha256=$ERWARTETE_SHA" "--zielversion=$ziel")
+    echo "  Übergabe an den Installer von Version $ziel ..."
+    export POSTBUCH_UEBERGABE=1 POSTBUCH_UEBERGABE_LOG="$INSTALL_LOG_FILE"
+    export POSTBUCH_FEED_BASE_URL POSTBUCH_FEED_AUTH
+    exec "${BASH:-bash}" "$neu" "${args[@]}"
+    # exec kehrt nur bei einem Fehler zurück; dann fehlt das Archiv am alten Ort.
+    echo "FEHLER: Der neue Installer konnte nicht gestartet werden. Es wurde nichts verändert." >&2
+    exit 1
+}
+
 headless_update() {
     INSTALL_DIR="${OPT_INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 
@@ -3977,6 +5271,8 @@ headless_update() {
         return 1
     fi
 
+    an_neuen_installer_uebergeben "$TARBALL"
+
     local NEW_VERSION="(unbekannt)" CURRENT_VERSION="(unbekannt)"
     [[ -f "$INSTALL_DIR/VERSION" ]] && CURRENT_VERSION=$(tr -d '[:space:]' < "$INSTALL_DIR/VERSION")
     phase extract
@@ -4027,18 +5323,25 @@ headless_update() {
     # ── build im Stage; alter Quellbaum und laufender Stack bleiben intakt ─
     phase build
     cd "$RELEASE_STAGE"
+    lokalki_env_bereitstellen "$RELEASE_STAGE"
     export COMPOSE_PROJECT_NAME="$(basename "$INSTALL_DIR")"
     update_build_services_bestimmen "$INSTALL_DIR" "$RELEASE_STAGE"
     echo "  Baue Container – das kann auf schwacher Hardware lange dauern..."
     if [[ -n "$UPD_DUCK" ]]; then
+        update_images_merken caddy "${UPDATE_BUILD_SERVICES[@]}"
         if ! compose_build caddy "${UPDATE_BUILD_SERVICES[@]}"; then
+            update_images_zuruecklegen
             safe_rm_rf "$RELEASE_STAGE"
+            [[ "$TARBALL" != "$LOCAL_TARBALL" ]] && rm -f "$TARBALL"
             error "Build fehlgeschlagen. Alter Quellbaum und laufender Stack bleiben unveraendert."
             return 1
         fi
     else
+        update_images_merken "${UPDATE_BUILD_SERVICES[@]}"
         if ! compose_build "${UPDATE_BUILD_SERVICES[@]}"; then
+            update_images_zuruecklegen
             safe_rm_rf "$RELEASE_STAGE"
+            [[ "$TARBALL" != "$LOCAL_TARBALL" ]] && rm -f "$TARBALL"
             error "Build fehlgeschlagen. Alter Quellbaum und laufender Stack bleiben unveraendert."
             return 1
         fi
@@ -4047,6 +5350,7 @@ headless_update() {
     # Erst nach erfolgreichem Build den verwalteten Quellbaum exakt ersetzen.
     phase extract
     cd "$INSTALL_DIR"
+    lokalki_env_bereitstellen "$INSTALL_DIR"
     if ! release_stage_promoten "$RELEASE_STAGE" "$INSTALL_DIR"; then
         warn "Promotion fehlgeschlagen – stelle den Quellcode aus der Sicherung wieder her."
         source_aus_backup_wiederherstellen "$BACKUP_RESULT" || true
@@ -4080,6 +5384,7 @@ headless_update() {
     else
         compose_recreate || return 1
     fi
+    update_images_vergessen
 
     # `compose_recreate` meldet nur, dass Container gestartet wurden – nicht,
     # dass die Schema-Migration im Entrypoint durchgelaufen ist. Erst dieser
@@ -4089,7 +5394,7 @@ headless_update() {
         echo "FEHLER: Die App antwortet nach dem Update nicht auf /api/health." >&2
         echo "  Vermutlich ist die Schema-Migration oder der App-Start fehlgeschlagen." >&2
         echo "  Bitte 'docker compose logs app' pruefen. Es erfolgt kein automatischer" >&2
-        echo "  Rollback – auf dem Server interaktiv: 'install.sh --rollback'" >&2
+        echo "  Rollback – auf dem Server interaktiv: './deploy-pages/install.sh --rollback'" >&2
         echo "  (fragt vor einem DB-Restore gesondert nach)." >&2
         return 1
     fi
@@ -4098,7 +5403,7 @@ headless_update() {
     # Erst nach dem erfolgreichen Containerwechsel den persistenten Agenten
     # aktualisieren. Bei Build-Abbruch bleibt er passend zum Fallback-Quellbaum.
     if ! aktualisiere_vorhandenen_update_agent; then
-        echo "FEHLER: Anwendung aktualisiert, aber der Host-Agent nicht. Bitte Update-Dienst reparieren." >&2
+        echo "FEHLER: Anwendung aktualisiert, aber der Host-Agent nicht. Bitte den Installer erneut ausführen („Update“)." >&2
         return 1
     fi
 
@@ -4108,6 +5413,8 @@ headless_update() {
 }
 
 # ── Argumente auswerten, nicht-interaktive Pfade zuerst ──────────────────────
+# Für an_neuen_installer_uebergeben: dieselben Argumente weiterreichen.
+INSTALLER_ARGS=("$@")
 parse_args "$@"
 installer_log_starten
 
@@ -4120,27 +5427,31 @@ if $OPT_ROLLBACK; then
         echo "FEHLER: --rollback ist nur interaktiv moeglich." >&2
         exit 2
     fi
+    agent_sperre_nehmen
     do_rollback
     exit 0
 fi
 
 if $OPT_POSTGRES_UMZUG; then
+    agent_sperre_nehmen
     postgres_umzug_modus
     exit $?
 fi
 
 if $OPT_POSTGRES_IMAGE; then
+    agent_sperre_nehmen
     postgres_image_modus
     exit $?
 fi
 
 if $OPT_UPDATE && $OPT_NON_INTERACTIVE; then
+    agent_sperre_nehmen
     headless_update
     exit $?
 fi
 
 # ── Banner ─────────────────────────────────────────────────────────────────────
-clear
+clear 2>/dev/null || true   # ohne TERM (z. B. ssh ohne pty) kein Abbruch
 hr
 echo ""
 printf "  ${C_BOLD}${C_CYAN}POSTBUCH.NET${C_RESET}\n"
@@ -4151,7 +5462,16 @@ hr
 INSTALL_DIR="$DEFAULT_INSTALL_DIR"
 MODE="install"
 
-if [[ -f "$INSTALL_DIR/docker-compose.yml" ]]; then
+if $OPT_DEINSTALLIEREN; then
+    if [[ ! -f "$INSTALL_DIR/docker-compose.yml" ]]; then
+        echo ""
+        echo "  Keine Installation gefunden – nichts zu deinstallieren."
+        echo ""
+        exit 4
+    fi
+    MODE="uninstall"
+    agent_sperre_nehmen
+elif [[ -f "$INSTALL_DIR/docker-compose.yml" ]]; then
     echo ""
     echo "  Bestehende Installation gefunden: $INSTALL_DIR"
     echo "  (ermittelt über: $INSTALL_DIR_QUELLE)"
@@ -4165,19 +5485,38 @@ if [[ -f "$INSTALL_DIR/docker-compose.yml" ]]; then
     echo "    [5]  Stack steuern       – Start / Restart / Stop, Autostart beim Boot"
 
     HAS_BACKUPS=false
-    VALID_ACTIONS="12345"
+    VALID_ACTIONS="12357"
     if ls "$INSTALL_DIR/backups"/backup_* &>/dev/null 2>&1; then
         HAS_BACKUPS=true
         echo "    [6]  Update rückgängig machen – auf ein gesichertes Backup zurückrollen"
-        VALID_ACTIONS="123456"
+        VALID_ACTIONS="1234567"
+    else
+        VALID_ACTIONS="123457"
+    fi
+    echo "    [7]  Ports ändern        – Weboberfläche, HTTP und HTTPS"
+    if grep -q '^HOSTCONFIG_CUDA_LIZENZ=' "$INSTALL_DIR/scripts/postbuch-hostconfig.sh" 2>/dev/null; then
+        echo "    [8]  NVIDIA-Grafikkarte einrichten"
+        VALID_ACTIONS+=8
     fi
 
     echo ""
     ACTION=""
+    # Port-Schalter gegen eine bestehende Installation stellen direkt um.
+    [[ -n "$OPT_WEB_PORT$OPT_HTTP_PORT$OPT_HTTPS_PORT" ]] && ACTION=7
+    # --update (etwa nach einer Übergabe) wählt das Update ohne Menü.
+    [[ -z "$ACTION" ]] && $OPT_UPDATE && ACTION=1
     while ! [[ "$ACTION" =~ ^[$VALID_ACTIONS]$ ]]; do
-        read -rp "  Auswahl [$VALID_ACTIONS]: " ACTION </dev/tty
+        read -rp "  Auswahl [$VALID_ACTIONS]: " ACTION </dev/tty || tty_weg
     done
-    if [[ "$ACTION" == "6" ]]; then
+    # Alles außer dem Adminpasswort fasst Stack, Dateien oder Ports an.
+    [[ "$ACTION" == "4" ]] || agent_sperre_nehmen
+    if [[ "$ACTION" == "8" ]]; then
+        cuda_nachruesten
+        exit 0
+    elif [[ "$ACTION" == "7" ]]; then
+        ports_umstellen
+        exit 0
+    elif [[ "$ACTION" == "6" ]]; then
         do_rollback
         exit 0
     elif [[ "$ACTION" == "5" ]]; then
@@ -4228,7 +5567,7 @@ if [[ "$MODE" == "install" ]]; then
     echo "  Dieser Name wird in der Web-Oberflaeche angezeigt (z.B. in Login, Sidebar, Exporten)."
 
     while [[ -z "$INSTANCE_NAME" ]]; do
-        INSTANCE_NAME=$(prompt "Gewuenschter Instanzname" "$INSTANCE_DEFAULT")
+        INSTANCE_NAME=$(prompt "Gewünschter Instanzname" "$INSTANCE_DEFAULT")
         INSTANCE_NAME=$(echo "$INSTANCE_NAME" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         if [[ -z "$INSTANCE_NAME" ]]; then
             warn "Instanzname darf nicht leer sein."
@@ -4312,12 +5651,23 @@ if ! command -v docker &>/dev/null; then
     echo ""
     if command -v apt-get &>/dev/null; then
         sudo apt-get update
-        if ! sudo apt-get install -y docker.io docker-compose-plugin; then
-            if ! sudo apt-get install -y docker.io docker-compose-v2; then
-                sudo apt-get install -y docker.io docker-compose \
-                    || error "Docker konnte nicht aus dem System-Repository installiert werden."
-            fi
-        fi
+        # Das Compose-Paket heißt je nach Distribution anders (Debian 13:
+        # docker-compose). Zuerst nur vorhandene probieren – sonst stehen bei jeder
+        # Erstinstallation Fehlerzeilen „Unable to locate package“ in der Ausgabe.
+        # Ohne Pipe: Unter pipefail ließe ein früh endendes grep -q apt-cache an
+        # SIGPIPE scheitern, und kein Paket gälte als vorhanden.
+        compose_pakete=()
+        for p in docker-compose-plugin docker-compose-v2 docker-compose; do
+            policy=$(LC_ALL=C apt-cache policy "$p" 2>/dev/null) || policy=""
+            [[ "$policy" =~ Candidate:\ [^\(] ]] && compose_pakete+=("$p")
+        done
+        # Erkennung ohne Ergebnis: alle Namen der Reihe nach wie früher.
+        (( ${#compose_pakete[@]} )) || compose_pakete=(docker-compose-plugin docker-compose-v2 docker-compose)
+        docker_ok=false
+        for p in "${compose_pakete[@]}"; do
+            if sudo apt-get install -y docker.io "$p"; then docker_ok=true; break; fi
+        done
+        $docker_ok || error "Docker konnte nicht aus dem System-Repository installiert werden."
     elif command -v dnf &>/dev/null; then
         sudo dnf install -y docker docker-compose-plugin \
             || error "Docker konnte nicht aus dem System-Repository installiert werden."
@@ -4363,34 +5713,119 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 # DEINSTALLATION
 # ══════════════════════════════════════════════════════════════════════════════
+
+# Ordner der lokalen Dateiablage (absolut), falls er existiert und nicht leer
+# ist; sonst nichts. Werte in .env stehen ohne Anführungszeichen (wie beim
+# Host-Agenten).
+deinstall_ablage_ermitteln() {   # $1 = Installationsverzeichnis (absolut)
+    local roh
+    roh=$(grep -m1 '^POSTBUCH_ABLAGE_DIR=' "$1/.env" 2>/dev/null | cut -d= -f2-)
+    [[ -z "$roh" ]] && roh=./data/ablage
+    [[ "$roh" == ./* ]] && roh="$1/${roh#./}"
+    roh=$(realpath -m -- "$roh" 2>/dev/null) || return 0
+    [[ -d "$roh" && ! -L "$roh" && -n "$(ls -A -- "$roh" 2>/dev/null)" ]] && printf '%s' "$roh"
+    return 0
+}
+
+# Ziel für eine Ablage, die im Installationsverzeichnis liegt: daneben,
+# nie über einen vorhandenen Ordner.
+deinstall_ablage_ziel() {   # $1 = Installationsverzeichnis (absolut)
+    local basis ziel
+    basis="$(dirname -- "$1")/postbuch.net-Ablage"
+    ziel="$basis"
+    [[ -e "$ziel" ]] && ziel="$basis-$(date +%Y-%m-%d-%H%M%S)"
+    printf '%s' "$ziel"
+}
+
+# Pflichtsicherung der Datenbank vor dem Löschen, in die Dateiablage
+# (_backup/user). Scheitert sie, geht es nur nach ausdrücklicher Bestätigung
+# weiter. Rückgabe 1 = abgebrochen.
+deinstall_sicherung() {
+    local name antwort
+    info "Lege eine Sicherung der Datenbank in der Dateiablage an..."
+    # Der Stack kann gestoppt sein; die Sicherung braucht Datenbank und App.
+    $DOCKER_COMPOSE up -d --no-deps postgres app web >/dev/null 2>&1 || true
+    warte_auf_app_gesund 120 || true
+    local rc=0
+    name=$($DOCKER_COMPOSE exec -T app node src/cli/sicherung.js </dev/null 2>"$LAUFZEIT_HOME/.postbuch-sicherung.err") || rc=$?
+    if (( rc == 0 )); then
+        rm -f "$LAUFZEIT_HOME/.postbuch-sicherung.err"
+        success "Sicherung angelegt: _backup/user/$name"
+        return 0
+    fi
+    if (( rc == 3 )); then
+        # Ablage nie eingerichtet, kein Dokument: Es gibt nichts zu sichern.
+        rm -f "$LAUFZEIT_HOME/.postbuch-sicherung.err"
+        info "Keine Sicherung nötig: Es gibt noch keine Dokumente."
+        return 0
+    fi
+    warn "Die Sicherung ist fehlgeschlagen:"
+    sed 's/^/    /' "$LAUFZEIT_HOME/.postbuch-sicherung.err" 2>/dev/null | tail -n 5
+    rm -f "$LAUFZEIT_HOME/.postbuch-sicherung.err"
+    echo ""
+    echo "  Ohne Sicherung gehen Datenbank, Einstellungen und Zuordnungen verloren."
+    read -rp "  Trotzdem ohne Sicherung löschen? Dann 'OHNE SICHERUNG' eingeben: " antwort </dev/tty || tty_weg
+    [[ "$antwort" == "OHNE SICHERUNG" ]]
+}
+
 if [[ "$MODE" == "uninstall" ]]; then
     hr
     echo ""
     echo "  DEINSTALLATION"
     echo ""
+    INSTALL_DIR_ABS=$(cd "$INSTALL_DIR" && pwd)
+    # Ein Ordner auf diesem Rechner als Dateiablage enthält die Originale. Er
+    # bleibt immer erhalten, auch wenn er im Installationsverzeichnis liegt.
+    ABLAGE_BEHALTEN=$(deinstall_ablage_ermitteln "$INSTALL_DIR_ABS")
     echo "  Folgendes wird unwiderruflich gelöscht:"
     echo "    • Alle laufenden Container (postgres, app, web, scanner, cleaner, caddy)"
     echo "    • Alle Docker-Images der Builds"
     echo "    • Alle Volumes (inkl. Datenbank)"
     echo "    • Das gesamte Verzeichnis: $INSTALL_DIR"
+    if [[ -n "$ABLAGE_BEHALTEN" ]]; then
+        echo ""
+        echo "  Erhalten bleibt der Ablageordner mit allen Originalen:"
+        echo "    $ABLAGE_BEHALTEN"
+        [[ "$ABLAGE_BEHALTEN" == "$INSTALL_DIR_ABS"/* ]] && \
+            echo "    (wird vorher nach $(deinstall_ablage_ziel "$INSTALL_DIR_ABS") verschoben)"
+    fi
     echo ""
     warn "Diese Aktion kann nicht rückgängig gemacht werden!"
     echo ""
-    read -rp "  Zur Bestätigung 'LOESCHEN' eingeben: " CONFIRM </dev/tty
+    read -rp "  Zur Bestätigung 'LOESCHEN' eingeben: " CONFIRM </dev/tty || tty_weg
     if [[ "$CONFIRM" != "LOESCHEN" ]]; then
         echo ""
         echo "  Abgebrochen."
         echo ""
+        $OPT_DEINSTALLIEREN && exit 2
         exit 0
     fi
     echo ""
-    INSTALL_DIR_ABS=$(cd "$INSTALL_DIR" && pwd)
-    info "Stoppe und entferne Docker-Stack..."
     cd "$INSTALL_DIR"
-    $DOCKER_COMPOSE down --rmi all --volumes --remove-orphans 2>/dev/null || true
+    lokalki_env_bereitstellen "$INSTALL_DIR"
+    deinstall_sicherung || { echo ""; echo "  Abgebrochen."; echo ""; $OPT_DEINSTALLIEREN && exit 2; exit 0; }
+    info "Stoppe und entferne Docker-Stack..."
+    # Ohne --profile sieht `down` nur die Dienste der in COMPOSE_PROFILES
+    # eingeschalteten Profile. Ein abgeschaltetes Modul (z. B. Scanner) hätte
+    # sonst gestoppte Container und Images hinterlassen; --remove-orphans
+    # erfasst sie nicht, weil sie in der Compose-Datei stehen.
+    DEINSTALL_PROFILE_ARGS=()
+    while IFS= read -r p; do
+        [[ "$p" =~ ^[A-Za-z0-9_-]+$ ]] && DEINSTALL_PROFILE_ARGS+=(--profile "$p")
+    done < <($DOCKER_COMPOSE config --profiles 2>/dev/null || true)
+    $DOCKER_COMPOSE ${DEINSTALL_PROFILE_ARGS[@]+"${DEINSTALL_PROFILE_ARGS[@]}"} \
+        down --rmi all --volumes --remove-orphans 2>/dev/null || true
     cd "$LAUFZEIT_HOME"
+    if [[ "$ABLAGE_BEHALTEN" == "$INSTALL_DIR_ABS"/* ]]; then
+        ABLAGE_ZIEL=$(deinstall_ablage_ziel "$INSTALL_DIR_ABS")
+        mv -T -- "$ABLAGE_BEHALTEN" "$ABLAGE_ZIEL" \
+            || error "Der Ablageordner ließ sich nicht nach $ABLAGE_ZIEL verschieben. Es wurde nichts gelöscht; der Stack ist gestoppt."
+        ABLAGE_BEHALTEN="$ABLAGE_ZIEL"
+        success "Ablage verschoben: $ABLAGE_ZIEL"
+    fi
     info "Entferne Update-Dienst (falls eingerichtet)..."
     remove_update_agent
+    wsl_loopback_dienst_entfernen
     info "Entferne Installationsverzeichnis..."
 
     # Versuch: normales Entfernen
@@ -4416,6 +5851,14 @@ if [[ "$MODE" == "uninstall" ]]; then
     hr
     echo ""
     echo "  ✓ postbuch.net wurde vollständig entfernt."
+    # install.ps1 liest den Ort, bevor es die WSL-Instanz entfernt.
+    $OPT_DEINSTALLIEREN && [[ -n "$ABLAGE_BEHALTEN" ]] \
+        && printf '%s\n' "$ABLAGE_BEHALTEN" > "$LAUFZEIT_HOME/.postbuch-ablage-behalten"
+    if [[ -n "$ABLAGE_BEHALTEN" ]]; then
+        echo ""
+        echo "  Die Originale liegen weiterhin in $ABLAGE_BEHALTEN,"
+        echo "  die letzte Sicherung der Datenbank im Unterordner _backup/user."
+    fi
     echo ""
     hr
     echo ""
@@ -4452,6 +5895,7 @@ if [[ "$MODE" == "update" ]]; then
     # VOR jeder Aenderung am Installationsverzeichnis. Schlaegt sie fehl, bricht
     # der Lauf ab, ohne dass irgendetwas angefasst wurde.
     tarball_pruefen_oder_abbrechen "$TARBALL"
+    an_neuen_installer_uebergeben "$TARBALL"
 
     # ── Versionsvergleich ──────────────────────────────────────────────────────
     CURRENT_VERSION="(unbekannt)"
@@ -4478,7 +5922,8 @@ if [[ "$MODE" == "update" ]]; then
             printf "  Installiert:  ${C_AMBER}%s${C_RESET}\n" "$CURRENT_VERSION"
             printf "  Neu:          ${C_AMBER}%s${C_RESET}\n" "$NEW_VERSION"
             echo ""
-            warn "Gleiche Version! Du installierst ${C_BOLD}$NEW_VERSION${C_RESET} über die bereits laufende ${C_BOLD}$CURRENT_VERSION${C_RESET}."
+            # Gleiche Version = Reparatur (docs/betrieb-troubleshooting.md, „Update reparieren“).
+            info "Gleiche Version: $NEW_VERSION wird noch einmal eingespielt (Reparatur). Quellbaum, Container und Update-Dienst werden neu eingerichtet; .env, Datenbank und Dokumente bleiben."
         elif [[ "$LOWER" == "$NEW_VERSION" ]]; then
             printf "  Installiert:  ${C_GREEN}%s${C_RESET}\n" "$CURRENT_VERSION"
             printf "  Neu:          ${C_RED}%s${C_RESET}  ${C_DIM}(Downgrade!)${C_RESET}\n" "$NEW_VERSION"
@@ -4493,7 +5938,7 @@ if [[ "$MODE" == "update" ]]; then
     echo ""
     UPDATE_CONFIRM=""
     while [[ "$UPDATE_CONFIRM" != "j" && "$UPDATE_CONFIRM" != "J" && "$UPDATE_CONFIRM" != "n" && "$UPDATE_CONFIRM" != "N" ]]; do
-        read -rp "  Fortfahren mit Update? [j/n]: " UPDATE_CONFIRM </dev/tty
+        read -rp "  Fortfahren mit Update? [j/n]: " UPDATE_CONFIRM </dev/tty || tty_weg
     done
     if [[ "$UPDATE_CONFIRM" == "n" || "$UPDATE_CONFIRM" == "N" ]]; then
         echo ""
@@ -4505,7 +5950,7 @@ if [[ "$MODE" == "update" ]]; then
 
     # Neue Host-Rechte ausschließlich früh und sichtbar einrichten. So kann
     # nach einem langen Build kein überraschender sudo-Prompt mehr erscheinen.
-    frage_agent_an
+    agent_einrichten
 
     # Ist ein Update-Agent eingerichtet, braucht dessen Refresh nach dem Build
     # promptfreien Sudo (sudo -n). Jetzt, vor dem Build, einmalig auf Vorrat
@@ -4533,7 +5978,7 @@ if [[ "$MODE" == "update" ]]; then
                  "$CONTINUE_WITHOUT_BACKUP" != "J" && \
                  "$CONTINUE_WITHOUT_BACKUP" != "n" && \
                  "$CONTINUE_WITHOUT_BACKUP" != "N" ]]; do
-            read -rp "  Trotzdem fortfahren? [j/n]: " CONTINUE_WITHOUT_BACKUP </dev/tty
+            read -rp "  Trotzdem fortfahren? [j/n]: " CONTINUE_WITHOUT_BACKUP </dev/tty || tty_weg
         done
         if [[ "$CONTINUE_WITHOUT_BACKUP" == "n" || \
               "$CONTINUE_WITHOUT_BACKUP" == "N" ]]; then
@@ -4552,20 +5997,28 @@ if [[ "$MODE" == "update" ]]; then
     cp "$INSTALL_DIR/.env" "$RELEASE_STAGE/.env" || error "Konnte Konfiguration nicht in den Build-Stage kopieren."
     chmod 600 "$RELEASE_STAGE/.env"
     cd "$RELEASE_STAGE"
+    lokalki_env_bereitstellen "$RELEASE_STAGE"
     export COMPOSE_PROJECT_NAME="$(basename "$INSTALL_DIR")"
     update_build_services_bestimmen "$INSTALL_DIR" "$RELEASE_STAGE"
     if [[ -n "$UPDATE_DUCKDNS_TOKEN" ]]; then
+        update_images_merken caddy "${UPDATE_BUILD_SERVICES[@]}"
         if ! compose_build caddy "${UPDATE_BUILD_SERVICES[@]}"; then
+            update_images_zuruecklegen
             safe_rm_rf "$RELEASE_STAGE"
             [[ "$TARBALL" != "$LOCAL_TARBALL" ]] && rm -f "$TARBALL"
             error "Build fehlgeschlagen. Alter Quellbaum und laufender Stack bleiben unverändert."
         fi
-    elif ! compose_build "${UPDATE_BUILD_SERVICES[@]}"; then
-        safe_rm_rf "$RELEASE_STAGE"
-        [[ "$TARBALL" != "$LOCAL_TARBALL" ]] && rm -f "$TARBALL"
-        error "Build fehlgeschlagen. Alter Quellbaum und laufender Stack bleiben unverändert."
+    else
+        update_images_merken "${UPDATE_BUILD_SERVICES[@]}"
+        if ! compose_build "${UPDATE_BUILD_SERVICES[@]}"; then
+            update_images_zuruecklegen
+            safe_rm_rf "$RELEASE_STAGE"
+            [[ "$TARBALL" != "$LOCAL_TARBALL" ]] && rm -f "$TARBALL"
+            error "Build fehlgeschlagen. Alter Quellbaum und laufender Stack bleiben unverändert."
+        fi
     fi
     cd "$INSTALL_DIR"
+    lokalki_env_bereitstellen "$INSTALL_DIR"
 
     if ! release_stage_promoten "$RELEASE_STAGE" "$INSTALL_DIR"; then
         warn "Promotion fehlgeschlagen – stelle den Quellcode aus der Sicherung wieder her."
@@ -4581,20 +6034,10 @@ if [[ "$MODE" == "update" ]]; then
     # ── Caddyfile regenerieren (aus wiederhergestellter .env) ─────────────────
     mkdir -p "$INSTALL_DIR/caddy"
     if [[ -n "$UPDATE_DUCKDNS_TOKEN" ]]; then
-        cat > "$INSTALL_DIR/caddy/Caddyfile" <<'CADDYEOF'
-{env.DUCKDNS_DOMAIN} {
-    tls {
-        dns duckdns {env.DUCKDNS_API_TOKEN}
-        resolvers 8.8.8.8 1.1.1.1
-    }
-    reverse_proxy web:80
-}
-CADDYEOF
+        caddyfile_schreiben an
         success "Caddyfile mit DuckDNS-TLS geschrieben."
     else
-        cat > "$INSTALL_DIR/caddy/Caddyfile" <<'CADDYEOF'
-# Kein DuckDNS konfiguriert – kein TLS-Endpunkt aktiv.
-CADDYEOF
+        caddyfile_schreiben aus
         success "Caddyfile (ohne TLS) geschrieben."
     fi
     chmod 600 "$INSTALL_DIR/caddy/Caddyfile"
@@ -4611,18 +6054,20 @@ CADDYEOF
     info "Starte aktualisierten Stack..."
     echo ""
     cd "$INSTALL_DIR"
+    lokalki_env_bereitstellen "$INSTALL_DIR"
     recreate_ok=true
     if [[ -n "$UPDATE_DUCKDNS_TOKEN" ]]; then
         compose_recreate caddy || recreate_ok=false
     else
         compose_recreate || recreate_ok=false
     fi
+    $recreate_ok && update_images_vergessen
     $recreate_ok || error "Der Stack konnte nicht gestartet werden. Details stehen oberhalb."
 
     info "Warte, bis die App wieder antwortet..."
     if ! warte_auf_app_gesund; then
         echo "  Pruefe: docker compose logs app" >&2
-        echo "  Bei Bedarf: ./install.sh --rollback (fragt vor einem DB-Restore gesondert nach)" >&2
+        echo "  Bei Bedarf im Installationsordner: ./deploy-pages/install.sh --rollback (fragt vor einem DB-Restore gesondert nach)" >&2
         error "Die App antwortet nach dem Update nicht auf /api/health – vermutlich ist die Schema-Migration oder der App-Start fehlgeschlagen."
     fi
     postgres_umzug_aufraeumen
@@ -4631,16 +6076,16 @@ CADDYEOF
     # Aktualisierung mitgezogen. Der Dialog darunter richtet nur neue Agenten
     # ein; er darf einen bestehenden nicht mehr als unveränderlich behandeln.
     aktualisiere_vorhandenen_update_agent \
-        || warn "Anwendung aktualisiert, Host-Agent aber nicht. Bitte den Update-Dienst reparieren."
+        || warn "Anwendung aktualisiert, Host-Agent aber nicht. Bitte den Installer erneut ausführen („Update“)."
 
-    LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "")
+    LAN_IP=$(heimnetz_ip)
     hr
     echo ""
     echo "  ✓ postbuch.net wurde erfolgreich aktualisiert!"
     echo ""
-    echo "  Zugriff von diesem Gerät:   http://localhost:3420"
-    if [[ -n "$LAN_IP" ]]; then
-        echo "  Zugriff im Heimnetz:        http://$LAN_IP:3420"
+    echo "  Zugriff von diesem Gerät:   http://localhost:$(web_port)"
+    if [[ -n "$LAN_IP" ]] && ! web_nur_lokal; then
+        echo "  Zugriff im Heimnetz:        http://$LAN_IP:$(web_port)"
     fi
     CONFIGURED_URL=$(grep '^APP_BASE_URL=' "$INSTALL_DIR/.env" | cut -d'=' -f2- || true)
     if [[ "$CONFIGURED_URL" == https://* ]]; then
@@ -4671,7 +6116,7 @@ if [[ "$MODE" == "reinstall" ]]; then
     echo ""
     warn "Diese Aktion kann nicht rückgängig gemacht werden!"
     echo ""
-    read -rp "  Zur Bestätigung 'NEUSTART' eingeben: " CONFIRM </dev/tty
+    read -rp "  Zur Bestätigung 'NEUSTART' eingeben: " CONFIRM </dev/tty || tty_weg
     if [[ "$CONFIRM" != "NEUSTART" ]]; then
         echo ""
         echo "  Abgebrochen."
@@ -4716,7 +6161,7 @@ if [[ "$MODE" == "reinstall" ]]; then
     echo ""
     ENV_CHOICE=""
     while [[ "$ENV_CHOICE" != "1" && "$ENV_CHOICE" != "2" ]]; do
-        read -rp "  Auswahl [1/2]: " ENV_CHOICE </dev/tty
+        read -rp "  Auswahl [1/2]: " ENV_CHOICE </dev/tty || tty_weg
     done
 
     RESTORE_BACKUP="false"
@@ -4745,6 +6190,7 @@ if [[ "$MODE" == "reinstall" ]]; then
 
         info "Stoppe Docker-Stack..."
         cd "$INSTALL_DIR"
+        lokalki_env_bereitstellen "$INSTALL_DIR"
         $DOCKER_COMPOSE down
 
         info "Lösche Datenbank und Scan-Puffer..."
@@ -4757,7 +6203,7 @@ if [[ "$MODE" == "reinstall" ]]; then
 
         if [[ "$RESTORE_BACKUP" == "true" ]]; then
             mkdir -p "$INSTALL_DIR/data/scan_buffer"
-            touch "$INSTALL_DIR/data/scan_buffer/.setup_restore_pending"
+            restore_markierung_schreiben
             success "Setup-Restore-Modus aktiviert."
         else
             mkdir -p "$INSTALL_DIR/data/scan_buffer"
@@ -4775,31 +6221,41 @@ if [[ "$MODE" == "reinstall" ]]; then
 
     else
         # ── .env verwerfen + neu konfigurieren ────────────────────────────────
+        # Gelöscht wird erst, wenn die neue Konfiguration vollständig vorliegt:
+        # Wer im Dialog abbricht, behält Datenbank und bisherige .env. Gestoppt
+        # wird vorher, damit die Portprüfung die eigenen Ports nicht als belegt
+        # meldet.
         info "Stoppe Docker-Stack..."
         cd "$INSTALL_DIR"
+        lokalki_env_bereitstellen "$INSTALL_DIR"
         $DOCKER_COMPOSE down
-
-        info "Lösche Daten und Konfiguration..."
-        safe_rm_rf "$INSTALL_DIR/data/postgres"  || error "Konnte data/postgres nicht löschen. Bitte manuell: sudo rm -rf \"$INSTALL_DIR/data/postgres\""
-        for pg_alt in "$INSTALL_DIR"/data/postgres.pg*-*; do
-            [[ -e "$pg_alt" ]] || continue
-            safe_rm_rf "$pg_alt" || error "Konnte $pg_alt nicht löschen. Bitte manuell: sudo rm -rf \"$pg_alt\""
-        done
-        safe_rm_rf "$INSTALL_DIR/data/scan_buffer" || error "Konnte data/scan_buffer nicht löschen. Bitte manuell: sudo rm -rf \"$INSTALL_DIR/data/scan_buffer\""
-        rm -f "$INSTALL_DIR/.env"
 
         hr
         echo ""
         echo "  SETUP – Neue Konfiguration"
         echo ""
         info "Alle Werte werden neu eingegeben."
+        info "Gelöscht wird erst nach der letzten Frage. Brichst du vorher ab, bleibt die bisherige Installation erhalten; starten mit: cd \"$INSTALL_DIR\" && $DOCKER_COMPOSE up -d"
 
         INSTANCE_NAME=""
         run_setup_dialog
 
+        info "Lösche Datenbank und Scan-Puffer..."
+        safe_rm_rf "$INSTALL_DIR/data/postgres"  || error "Konnte data/postgres nicht löschen. Bitte manuell: sudo rm -rf \"$INSTALL_DIR/data/postgres\""
+        for pg_alt in "$INSTALL_DIR"/data/postgres.pg*-*; do
+            [[ -e "$pg_alt" ]] || continue
+            safe_rm_rf "$pg_alt" || error "Konnte $pg_alt nicht löschen. Bitte manuell: sudo rm -rf \"$pg_alt\""
+        done
+        safe_rm_rf "$INSTALL_DIR/data/scan_buffer" || error "Konnte data/scan_buffer nicht löschen. Bitte manuell: sudo rm -rf \"$INSTALL_DIR/data/scan_buffer\""
+        # Die neu geschriebene .env gehört wie bei der Erstinstallation dem
+        # Besitzer der Installation, nicht root.
+        release_persistente_besitzer_wiederherstellen "$INSTALL_DIR" \
+            "$(installations_besitzer_bestimmen "$INSTALL_DIR")" \
+            || error "Besitzrechte der Konfiguration konnten nicht gesetzt werden."
+
         if [[ "$RESTORE_BACKUP" == "true" ]]; then
             mkdir -p "$INSTALL_DIR/data/scan_buffer"
-            touch "$INSTALL_DIR/data/scan_buffer/.setup_restore_pending"
+            restore_markierung_schreiben
             success "Setup-Restore-Modus aktiviert."
         else
             mkdir -p "$INSTALL_DIR/data/scan_buffer"
@@ -4807,15 +6263,19 @@ if [[ "$MODE" == "reinstall" ]]; then
             success "Web-Einrichtungsassistent vorgemerkt."
         fi
 
+        agent_einrichten
+        lokalki_agent_pflicht
         info "Starte Stack..."
         if [[ -n "${DUCKDNS_API_TOKEN:-}" ]]; then
             compose_up_build_all caddy
         else
             compose_up_build_all
         fi
+        lokalki_auftrag_einreihen
     fi
 
-    LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "")
+    https_zugang_absichern
+    LAN_IP=$(heimnetz_ip)
     hr
     echo ""
     echo "  ✓ Clean-Neuinstallation abgeschlossen!"
@@ -4826,9 +6286,9 @@ if [[ "$MODE" == "reinstall" ]]; then
     if [[ "$CONFIGURED_URL" == https://* ]]; then
         echo "  Deine Domain:               $CONFIGURED_URL"
     fi
-    echo "  Zugriff von diesem Gerät:   http://localhost:3420"
-    if [[ -n "$LAN_IP" ]]; then
-        echo "  Zugriff im Heimnetz:        http://$LAN_IP:3420"
+    echo "  Zugriff von diesem Gerät:   http://localhost:$(web_port)"
+    if [[ -n "$LAN_IP" ]] && ! web_nur_lokal; then
+        echo "  Zugriff im Heimnetz:        http://$LAN_IP:$(web_port)"
     fi
 
     echo ""
@@ -4850,7 +6310,13 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 hr
 echo ""
-INSTALL_DIR=$(prompt "Installationsverzeichnis" "$DEFAULT_INSTALL_DIR")
+# Mit --install-dir steht das Ziel fest (install.ps1 gibt es unter Windows vor:
+# in der eigenen WSL-Instanz ist der Ort für niemanden von Belang).
+if [[ -n "$OPT_INSTALL_DIR" ]]; then
+    INSTALL_DIR="$OPT_INSTALL_DIR"
+else
+    INSTALL_DIR=$(prompt "Installationsverzeichnis" "$DEFAULT_INSTALL_DIR")
+fi
 if [[ "$INSTALL_DIR" != /* ]]; then
     INSTALL_DIR="$PWD/$INSTALL_DIR"
 fi
@@ -4916,7 +6382,7 @@ release_persistente_besitzer_wiederherstellen "$INSTALL_DIR" "$INSTALL_BESITZER"
 # ── Flag-Datei für Setup-Restore (vor Stack-Start) ───────────────────────────
 if [[ "$RESTORE_BACKUP" == "true" ]]; then
     mkdir -p "$INSTALL_DIR/data/scan_buffer"
-    touch "$INSTALL_DIR/data/scan_buffer/.setup_restore_pending"
+    restore_markierung_schreiben
     success "Setup-Restore-Modus aktiviert."
 else
     mkdir -p "$INSTALL_DIR/data/scan_buffer"
@@ -4932,17 +6398,20 @@ echo ""
 
 # Der Systemdienst wird vor dem teuren Build eingerichtet. Dadurch kommt eine
 # nötige sudo-Abfrage früh und mit Erklärung – niemals überraschend am Ende.
-frage_agent_an
+agent_einrichten
+lokalki_agent_pflicht
 
 cd "$INSTALL_DIR"
+lokalki_env_bereitstellen "$INSTALL_DIR"
 if [[ -n "${DUCKDNS_API_TOKEN:-}" ]]; then
     compose_up_build_all caddy
 else
     compose_up_build_all
 fi
+lokalki_auftrag_einreihen
 
 # ── Erfolg + nächste Schritte ─────────────────────────────────────────────────
-LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "")
+LAN_IP=$(heimnetz_ip)
 
 hr
 echo ""
@@ -4953,6 +6422,7 @@ echo "  Verwaltung:  $INSTALL_DIR/install.sh"
 echo "  Update, Rollback, Deinstallation, Adminpasswort, Stack-Steuerung."
 echo "  Alles ausser dem Update laeuft ohne Internetzugang."
 
+https_zugang_absichern
 CONFIGURED_URL=$(grep '^APP_BASE_URL=' "$INSTALL_DIR/.env" | cut -d'=' -f2- || true)
 
 # Die Zugriffsadressen stehen bewusst als letzter Block direkt über den
@@ -4962,9 +6432,9 @@ zeige_zugriffsadressen() {
     if [[ "$CONFIGURED_URL" == https://* ]]; then
         echo "  Deine Domain:               $CONFIGURED_URL"
     fi
-    echo "  Zugriff von diesem Gerät:   http://localhost:3420"
-    if [[ -n "$LAN_IP" ]]; then
-        echo "  Zugriff im Heimnetz:        http://$LAN_IP:3420"
+    echo "  Zugriff von diesem Gerät:   http://localhost:$(web_port)"
+    if [[ -n "$LAN_IP" ]] && ! web_nur_lokal; then
+        echo "  Zugriff im Heimnetz:        http://$LAN_IP:$(web_port)"
     fi
     if [[ -n "${DUCKDNS_API_TOKEN:-}" ]]; then
         echo ""
@@ -4985,7 +6455,13 @@ else
     echo "  Benutzername / Passwort: admin / [dein oben vergebenes Admin-Passwort]"
     echo ""
     echo "  Alles Weitere richtet der Assistent beim ersten Aufruf ein:"
-    echo "  Ablage, OneDrive/Nextcloud, KI und Embedding, Scanner, Push und Backup."
+    if $LOKAL_ABLAGE; then
+        echo "  Ablage: $LOKAL_ABLAGE_ANZEIGE"
+        $LOKAL_KI && echo "  KI: lokal (das Modell lädt im Hintergrund, Fortschritt unter Einstellungen → Stack)"
+        echo "  Im Assistenten folgen Scanner, Push und Backup$($LOKAL_KI || printf ', außerdem die KI')."
+    else
+        echo "  Ablage, OneDrive/Nextcloud, KI und Embedding, Scanner, Push und Backup."
+    fi
     echo ""
     echo "  Login:  admin / [dein Admin-Passwort]"
     zeige_zugriffsadressen

@@ -14,30 +14,35 @@
  */
 
 export const MODEL_CLASSES = [
-  { key: 'analyse', modus: 'einfach', settingKey: 'llm_model_analyse', label: 'Analysemodell',
-    desc: 'Analysiert jedes Dokument, egal wie lang oder schwierig' },
-  { key: 'preanalysis', modus: 'gestaffelt', settingKey: 'llm_model_preanalysis', label: 'Voranalyse',
+  // Einfache Modellwahl: nur diese beiden. Welche Aufgaben dahinter stecken,
+  // sagt `aufgabe` an den Klassen der Einzelwahl (Gegenstück im Backend).
+  { key: 'routine', modus: 'einfach', settingKey: 'llm_aufgabe_routine', label: 'Einfach & Routine',
+    desc: 'Prüfung der gelesenen Angaben, Ersatz bei einer gescheiterten Analyse, Recherche und Gesprächstitel im Büroassistenten, Vorschläge für Akten. Ein schnelles, günstiges Modell genügt.' },
+  { key: 'komplex', modus: 'einfach', settingKey: 'llm_aufgabe_komplex', label: 'Anspruchsvoll & Komplex',
+    desc: 'Analyse jedes Dokuments, Nachlese bei Unstimmigkeiten, Erstattungsbescheide und die Antworten des Büroassistenten. Hier lohnt ein starkes Modell.' },
+
+  { key: 'preanalysis', modus: 'gestaffelt', aufgabe: 'routine', settingKey: 'llm_model_preanalysis', label: 'Voranalyse',
     desc: 'Schwierigkeitseinschätzung – Kette: Voranalyse → Leicht → Letzter Fallback' },
-  { key: 'large', modus: 'gestaffelt', settingKey: 'llm_model_large', label: 'Langes Dokument',
+  { key: 'large', modus: 'gestaffelt', aufgabe: 'komplex', settingKey: 'llm_model_large', label: 'Langes Dokument',
     desc: 'Dokumente mit mehr als 10 Seiten' },
-  { key: 'leicht', modus: 'gestaffelt', settingKey: 'llm_model_leicht', label: 'Leicht',
+  { key: 'leicht', modus: 'gestaffelt', aufgabe: 'routine', settingKey: 'llm_model_leicht', label: 'Leicht',
     desc: 'Einfache Dokumente (difficulty ≤ 0.25)' },
-  { key: 'mittel', modus: 'gestaffelt', settingKey: 'llm_model_mittel', label: 'Mittel',
+  { key: 'mittel', modus: 'gestaffelt', aufgabe: 'komplex', settingKey: 'llm_model_mittel', label: 'Mittel',
     desc: 'Mittelschwere Dokumente (difficulty 0.25–0.5) – fällt auf Leicht zurück' },
-  { key: 'schwierig', modus: 'gestaffelt', settingKey: 'llm_model_schwierig', label: 'Schwierig',
+  { key: 'schwierig', modus: 'gestaffelt', aufgabe: 'komplex', settingKey: 'llm_model_schwierig', label: 'Schwierig',
     desc: 'Komplexe Dokumente (difficulty ≥ 0.5) – fällt auf Mittel → Leicht zurück' },
-  { key: 'fallback', settingKey: 'llm_model_fallback', label: 'Letzter Fallback',
+  { key: 'fallback', modus: 'gestaffelt', aufgabe: 'routine', settingKey: 'llm_model_fallback', label: 'Letzter Fallback',
     desc: 'Notfallmodell am Ende jeder Kette, wenn alle anderen Modelle fehlschlagen' },
-  { key: 'nachlese', settingKey: 'llm_model_nachlese', label: 'Nachlese',
+  { key: 'nachlese', modus: 'gestaffelt', aufgabe: 'komplex', settingKey: 'llm_model_nachlese', label: 'Nachlese',
     desc: 'Starkes Modell, das nachliest, wenn eine Plausibilitätsprüfung scheitert (z. B. Positionssumme einer Arztrechnung)' },
 
-  { key: 'chat_research', group: 'chat', settingKey: 'chat_model_research', label: 'Assistent: Recherche',
+  { key: 'chat_research', group: 'chat', modus: 'gestaffelt', aufgabe: 'routine', settingKey: 'chat_model_research', label: 'Assistent: Recherche',
     desc: 'Research-Agent des Büroassistenten (Tool-Use-Loop: Suche + Dokumente lesen)' },
-  { key: 'chat_synthesis', group: 'chat', settingKey: 'chat_model_synthesis', label: 'Assistent: Antwort',
+  { key: 'chat_synthesis', group: 'chat', modus: 'gestaffelt', aufgabe: 'komplex', settingKey: 'chat_model_synthesis', label: 'Assistent: Antwort',
     desc: 'Synthese-Modell des Büroassistenten (formuliert die finale Antwort, gestreamt)' },
-  { key: 'chat_title', group: 'chat', settingKey: 'chat_model_title', label: 'Assistent: Titel',
+  { key: 'chat_title', group: 'chat', modus: 'gestaffelt', aufgabe: 'routine', settingKey: 'chat_model_title', label: 'Assistent: Titel',
     desc: 'Erzeugt den Gesprächstitel nach der ersten Antwort (sehr kurzer Aufruf)' },
-  { key: 'akte_vorschlag', group: 'chat', settingKey: 'akte_model_vorschlag', label: 'Akte: Metadaten-Vorschlag',
+  { key: 'akte_vorschlag', group: 'chat', modus: 'gestaffelt', aufgabe: 'routine', settingKey: 'akte_model_vorschlag', label: 'Akte: Metadaten-Vorschlag',
     desc: 'Schlägt Betreff, Beschreibung und Schlagwörter einer Akte vor (JSON-Antwort)' },
 ];
 

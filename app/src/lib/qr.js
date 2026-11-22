@@ -21,10 +21,16 @@ import { writeFile, readFile, mkdir, rm } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { PDFDocument } from 'pdf-lib';
 import { scanGrayBuffer } from '@undecaf/zbar-wasm';
+import { mitRechenplatz } from './ressourcen.js';
 
 const execFileAsync = promisify(execFile);
+// Ghostscript-Läufe sind die rechenlastigen Schritte; sie teilen sich die
+// Rechenplätze (lib/ressourcen.js) mit allen übrigen Dokumenten.
+const ghostscript = (args, opts) => mitRechenplatz(() => execFileAsync('gs', args, opts));
 
-const MAX_SEITEN = 5; // QR-Codes stehen praktisch immer auf den vorderen Seiten
+// Alle Seiten bis zu dieser Grenze: Ein Scan aus dem Einzug enthält oft
+// mehrere Schreiben, und der QR-Code des letzten steht dann weit hinten.
+const MAX_SEITEN = 40;
 const DPI = 200;       // Untergrenze mit Sicherheitsabstand, siehe Messreihe im Feature-Dokument
 const TIMEOUT_MS = 30_000;
 
@@ -162,7 +168,7 @@ function binarizeAdaptive(gray, width, height) {
  */
 async function rasterSeiteAlsPgm(pdfPath, seite, dir, dpi) {
   const outputPath = `${dir}/s-${seite}.pgm`;
-  await execFileAsync('gs', [
+  await ghostscript([
     '-q', '-dNOPAUSE', '-dBATCH', '-dSAFER',
     '-sDEVICE=pgmraw',
     `-r${dpi}`,
@@ -197,7 +203,7 @@ function benenne(inhalt) {
 }
 
 /**
- * Liest die QR-Codes der ersten Seiten eines PDFs aus.
+ * Liest die QR-Codes eines PDFs aus (bis MAX_SEITEN Seiten).
  * @param {Buffer} pdfBuffer
  * @returns {Promise<Array<{ seite: number, name: string, typ: string, inhalt: string }>>}
  */

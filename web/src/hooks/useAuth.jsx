@@ -9,20 +9,38 @@ export function AuthProvider({ children }) {
   const [role, setRole] = useState(null);
   const [lesebereich, setLesebereich] = useState('alle');
 
+  // Nur ein echtes 401 heißt „nicht angemeldet“. Während eines Neustarts der App
+  // (Neu-Build, Update) antwortet der Proxy mit 502/503 oder die Verbindung
+  // bricht ab; die Sitzung liegt dann weiter gültig in der Datenbank. In dem Fall
+  // bleibt die Oberfläche beim Ladezustand und fragt erneut, statt abzumelden.
   useEffect(() => {
-    api.auth.check()
-      .then((data) => {
-        setAuthenticated(true);
-        setUsername(data.username ?? null);
-        setRole(data.role ?? null);
-        setLesebereich(data.lesebereich ?? 'alle');
-      })
-      .catch(() => {
-        setAuthenticated(false);
-        setUsername(null);
-        setRole(null);
-        setLesebereich('alle');
-      });
+    let abgebrochen = false;
+    let timer = null;
+    let versuch = 0;
+    const pruefe = () => {
+      api.auth.check()
+        .then((data) => {
+          if (abgebrochen) return;
+          setAuthenticated(true);
+          setUsername(data.username ?? null);
+          setRole(data.role ?? null);
+          setLesebereich(data.lesebereich ?? 'alle');
+        })
+        .catch((err) => {
+          if (abgebrochen) return;
+          if (err?.status === 401) {
+            setAuthenticated(false);
+            setUsername(null);
+            setRole(null);
+            setLesebereich('alle');
+            return;
+          }
+          versuch += 1;
+          timer = setTimeout(pruefe, Math.min(1000 * versuch, 5000));
+        });
+    };
+    pruefe();
+    return () => { abgebrochen = true; clearTimeout(timer); };
   }, []);
 
   // Übernimmt eine abgeschlossene Anmeldung (Passwort allein oder nach dem

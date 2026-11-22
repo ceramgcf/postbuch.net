@@ -9,11 +9,12 @@ Administratoren sichtbar).
 
 Ein erreichbares Sprachmodell ist Voraussetzung für die Dokumentverarbeitung. Es
 übernimmt die automatische Klassifikation und ermöglicht den Büroassistenten;
-Embeddings ergänzen semantische Suche und Duplikatprüfung.
+Embeddings ergänzen die Suche nach dem Inhalt und die Duplikatprüfung.
 
 Für einen schnellen Einstieg genügt ein Entwicklerkonto mit kleinem Guthaben bei
-einem Anbieter von Sprachmodellen, etwa OpenAI. Das ist ein Beispiel, keine
-Anbieterempfehlung und keine Preisgarantie. Cloudfrei geht es mit einem lokalen
+einem Anbieter von Sprachmodellen, etwa Anthropic oder OpenAI. Beide arbeiten mit
+vorab aufgeladenem Guthaben, das du in kleinen Beträgen aufladen kannst. Das ist
+keine Preisgarantie. Cloudfrei geht es mit einem lokalen
 OpenAI-kompatiblen Chatmodell; die Embeddings liefert ohnehin der eingebaute
 Dienst.
 
@@ -27,8 +28,10 @@ Ein **Provider** ist eine API-Adresse plus ein Schlüssel plus eine Liste von
 Fähigkeiten. Drei Einträge sind eingebaut und lassen sich bearbeiten, aber nicht
 löschen: `anthropic`, `openai` und `bedrock`. Ein vierter, der **Eingebaute
 Embedding-Dienst**, hat nichts Einstellbares: Er lässt sich nur testen und
-steht auf „nicht gewählt“, solange er nicht das Embedding-Modell ist. Alles
-Weitere legst du selbst an – beliebig viele.
+steht auf „nicht gewählt“, solange er nicht das Embedding-Modell ist. Ebenso
+fest ist die [**Lokale KI**](#eingebaute-lokale-ki); sie steht auf
+„ausgeschaltet“, bis der Dienst läuft. Alles Weitere legst du selbst an –
+beliebig viele.
 
 Beim Anlegen hilft eine Vorlage:
 
@@ -44,6 +47,12 @@ Beim Anlegen hilft eine Vorlage:
 
 Für OpenAI gibt es keine Vorlage: Der eingebaute Provider `openai` deckt diesen
 Zugang bereits vollständig ab.
+
+Die Adresse ist die **Basis-URL**, bei OpenAI-kompatiblen Diensten in der
+Regel bis einschließlich `/v1`. Die Endpunkte wie `/embeddings` oder
+`/chat/completions` hängt postbuch.net selbst an. Eine Adresse, die auf einen
+solchen Endpunkt endet, nimmt der Dialog nicht an und sagt, wie sie richtig
+lautet. Ist sie schon so gespeichert, weist die Karte des Providers darauf hin.
 
 `host.docker.internal` ist dabei aus Sicht des Containers das der Weg zu einem
 Dienst, der auf demselben Rechner läuft. Läuft der Provider auf einem anderen
@@ -61,7 +70,7 @@ Jeder Provider trägt sechs Schalter:
 | **Werkzeuge/Tool-Calling**           | Voraussetzung für den Büroassistenten                                                          |
 | **Antworten streamen**               | Antwort erscheint fortlaufend statt am Stück                                                   |
 | **Prompt-Caching**                   | Wiederholte Prompt-Anteile werden günstiger abgerechnet                                        |
-| **Embeddings erzeugen**              | Voraussetzung für semantische Suche, Duplikatprüfung und die semantische Hilfe des Assistenten |
+| **Embeddings erzeugen**              | Voraussetzung für die Suche nach dem Inhalt, Duplikatprüfung und die semantische Hilfe des Assistenten |
 
 > [!CAUTION]
 >
@@ -79,6 +88,32 @@ Kann ein Modell weder PDF noch Bilder, bekommt es statt des PDFs den lokal
 extrahierten Text. In diesem Fall wird die OCR-Textebene nie entfernt – sie ist
 dann die einzige Informationsquelle. Solche Modelle werden nicht empfohlen, weil
 sie die Klassifikation stark verschlechtern.
+
+### Kontextfenster
+
+Im Feld **Kontextfenster (Tokens)** steht, wie viel Eingabe und Antwort
+zusammen höchstens fassen dürfen. Leer gelassen gelten 200.000 Tokens; mehr
+nutzt postbuch.net bei keinem Anbieter, auch wenn das Modell ein größeres
+Fenster hat. Bei einem lokalen Server trägst du den Wert ein, mit dem er
+gestartet wurde.
+
+Von diesem Fenster gehen die Antwort und eine kleine Reserve ab. Was übrig
+bleibt, teilen sich Anweisung und Dokument:
+
+- **Text:** Ein zu langer Dokumenttext wird gekürzt. Anfang und Ende bleiben
+  erhalten, die Lücke in der Mitte ist für das Modell markiert; im Protokoll
+  steht eine Warnung.
+- **Gerasterte Seiten:** Es werden nur so viele Seiten gerastert, wie ins
+  Fenster passen, höchstens aber das eingestellte **Seitenlimit beim Rastern**.
+  Ein längeres Dokument wird nicht abgelehnt: Das Modell bekommt die ersten
+  Seiten als Bild und den erkannten Text der übrigen Seiten dazu, soweit das
+  PDF eine Textebene hat.
+- **Assistent:** Wird der Verlauf einer Recherche zu lang, kürzt postbuch.net
+  ältere Werkzeugergebnisse. Im Fortschritt erscheint dann kurz „Ältere
+  Rechercheergebnisse verdichtet“; eine Rückfrage gibt es nicht.
+
+Lehnt ein Anbieter die Eingabe trotzdem als zu lang ab, wird der Aufruf nicht
+wiederholt: Die Kette geht gleich zum nächsten Modell weiter.
 
 ### Mistral AI
 
@@ -125,6 +160,112 @@ In postbuch.net legst du dafür einen Provider mit der Vorlage
 **Benutzerdefiniert** und der Adresse `http://<rechner>:8080/v1` an. Schalte
 **Bilder verstehen** ein; **PDF-Dokumente direkt verarbeiten** bleibt aus.
 
+### Eingebaute lokale KI
+
+postbuch.net kann dieses Modell auch selbst betreiben, als Docker-Dienst `llm`
+im eigenen Stack. Eingeschaltet wird er unter
+[Einstellungen → Stack](betrieb-troubleshooting.md#der-stack) mit **Einrichten
+und einschalten**. Der Update-Agent lädt dann die drei Dateien (zusammen rund
+9 GB) in den Modellordner, prüft ihre Prüfsummen und startet den Dienst. Je
+nach Leitung dauert das über eine Stunde; ein abgebrochener Download wird beim
+nächsten Einschalten fortgesetzt.
+
+Wie das Modell läuft, wählt der Agent selbst anhand der erkannten
+NVIDIA-Grafikkarte:
+
+| Grafikkarte                   | Betrieb                               | Kontext       |
+| ----------------------------- | ------------------------------------- | ------------- |
+| ab 12 GB                      | vollständig auf der Grafikkarte, mit Entwurfsmodell | 65.536 Tokens |
+| 10 GB                         | vollständig auf der Grafikkarte       | 32.768 Tokens |
+| 6–8 GB                        | teils auf der Grafikkarte, teils im Arbeitsspeicher | 32.768 Tokens |
+| keine NVIDIA-Grafikkarte      | nur Prozessor                         | 32.768 Tokens |
+
+Voraussetzungen, die der Reiter **Stack**, der Update-Agent und der Installer
+gleichermaßen prüfen:
+
+- **Arbeitsspeicher und nutzbarer Grafikspeicher zusammen mindestens 24 GB.**
+  Darunter ist **Einrichten und einschalten** ausgegraut, mit Begründung. Unter
+  Windows zählt der Arbeitsspeicher, den WSL bekommt (standardmäßig die Hälfte,
+  siehe [unten](#lokale-ki-unter-windows)).
+- **Nach dem Laden des Modells noch mindestens 5 GB frei.** Sonst ist der
+  Knopf ebenfalls gesperrt.
+
+Unter 8 GB nutzbarem Grafikspeicher läuft das Modell zwar, aber extrem langsam:
+Ein Dokument kann dann viele Minuten dauern. Der Reiter **Stack** zeigt dafür
+einen roten Warnhinweis. Die Grafikkarte muss für Docker
+freigegeben sein (NVIDIA Container Toolkit und einmalige Zustimmung zu den
+NVIDIA-Bedingungen). Beides richtet der [Installer](installation.md#komplett-lokal)
+ein. Bis dahin verwendet der Dienst den Prozessor.
+
+Sobald das Modell geladen ist und der Dienst läuft, wird der eingebaute
+Provider **Lokale KI** aktiv; sein [Kontextfenster](#kontextfenster) übernimmt
+er aus der Tabelle oben. Einstellen musst du an ihm nichts, nur die Modellklassen
+auf ihn umstellen. In der Modellauswahl und am Dokument steht dabei der Name des
+gerade geladenen Modells, etwa „Gemma 4 12B“. Bringt ein Update ein neues Modell mit, stellt der
+Update-Agent selbst darauf um: Das neue Modell wird geladen, das alte bleibt
+aktiv, bis das neue bereit ist, und wird danach gelöscht. Ist ein Download nur
+nicht rechtzeitig fertig geworden, setzt der Agent ihn fort; scheitert die
+Umstellung aus einem anderen Grund, versucht er es nach sechs Stunden erneut.
+Sofort neu anstoßen lässt sie sich im Reiter **Stack** mit **Modell
+aktualisieren**.
+
+Ausschalten oder entfernen lässt sich der Dienst jederzeit. Sind ihm noch
+Modellklassen zugeordnet, fragt postbuch.net vorher nach; diese Aufgaben
+schlagen danach fehl, bis ein anderer Provider gewählt ist.
+
+#### Wie viel Arbeitsspeicher die lokale KI belegt
+
+Das Modell wird erst bei der ersten Anfrage geladen und nach **5 Minuten ohne
+Anfrage** wieder entladen. Arbeitsspeicher belegt es also nur, solange
+Dokumente verarbeitet werden oder der Chat läuft:
+
+| Grafikkarte              | Arbeitsspeicher während der Arbeit | im Leerlauf |
+| ------------------------ | ---------------------------------- | ----------- |
+| ab 10 GB                 | rund 4 GB                          | unter 1 GB  |
+| 6–8 GB                   | rund 12 GB                         | unter 1 GB  |
+| keine NVIDIA-Grafikkarte | rund 16 GB                         | unter 1 GB  |
+
+Im Leerlauf belegt der Dienst nur noch rund 0,5 bis 0,7 GB. Zusammen mit dem
+übrigen Stack (Datenbank, App, Oberfläche, Embedding-Dienst), der immer läuft,
+sind es im Leerlauf knapp 2 GB. Beim Laden liest
+das System außerdem die rund 9 GB große Modelldatei; sie liegt danach
+vorübergehend im Datei-Cache und wird wieder freigegeben, wenn Speicher
+anderweitig gebraucht wird oder das Modell entladen ist.
+
+#### Lokale KI unter Windows
+
+Unter Windows läuft postbuch.net in WSL 2, einer kleinen virtuellen Maschine.
+Sie darf standardmäßig höchstens die Hälfte des Arbeitsspeichers nutzen; nur
+diesen Anteil kann auch das Modell verwenden, und nur er zählt für die
+24-GB-Prüfung. Bei einem PC mit 32 GB sind das 16 GB.
+
+- **Belegt wird nur, was gerade gebraucht wird.** Die Hälfte ist eine
+  Obergrenze, keine feste Reservierung. Im Leerlauf zeigt der Task-Manager für
+  den Prozess **VmmemWSL** etwa 1 bis 2,5 GB. Während der Verarbeitung steigt
+  der Wert (mit Modelldatei im Cache auf rund 10 GB) und fällt nach dem
+  Entladen des Modells von selbst wieder; Windows bekommt den Speicher zurück.
+- **Mehr Speicher für WSL bietet der Windows-Installer selbst an**, aber nur,
+  wenn erst dadurch die 24 GB erreicht werden und Windows danach noch
+  mindestens 8 GB behält. Er gibt WSL dann nur so viel, wie nötig ist: 24 GB
+  abzüglich des Grafikspeichers. Reichen Arbeits- und Grafikspeicher auch so,
+  fragt er nicht. Die Einstellung gilt für **alle** WSL-Umgebungen auf dem PC
+  (etwa Ubuntu oder Docker Desktop), die dann ebenfalls bis zu dieser Grenze
+  Speicher belegen können; darauf weist er vor der Frage ausdrücklich hin. Die
+  Deinstallation entfernt den Eintrag wieder. Wer die lokale KI erst später
+  einschalten will, führt den Installer erneut aus (oder in den Apps
+  **postbuch.net Server → Ändern**).
+- **Von Hand** lässt sich die Grenze in der Datei `.wslconfig` im eigenen
+  Benutzerordner festlegen, etwa für 24 GB:
+
+  ```ini
+  [wsl2]
+  memory=24GB
+  ```
+
+  Wirksam wird das nach `wsl --shutdown` in einer PowerShell. Steht dort schon
+  ein `memory`-Wert, ändert der Installer ihn nicht. Lass Windows selbst genug
+  übrig, mindestens etwa 8 GB.
+
 ### Schlüssel
 
 Der Schlüssel eines Providers wird gespeichert, aber **nie wieder ausgeliefert**
@@ -151,29 +292,49 @@ betroffenen Stellen. Erst danach lässt sich das Löschen erzwingen.
 
 ## Modellwahl
 
-Oben in der **Modell-Konfiguration** steht, wie postbuch.net Dokumente
-analysiert. Die Wahl gilt sofort; die Modelle der jeweils anderen Wahl bleiben
-gespeichert und gelten beim Zurückschalten wieder.
+Oben in der **Modell-Konfiguration** steht, wie fein du die Modelle wählst. Die
+Wahl gilt sofort; die Modelle der jeweils anderen Wahl bleiben gespeichert und
+gelten beim Zurückschalten wieder.
 
-| Modellwahl                       | Ablauf                                                                                                   |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| **Ein Modell für alles**         | Das **Analysemodell** liest jedes Dokument, egal wie lang oder schwierig. Scheitert es, springt der **Letzte Fallback** ein. |
-| **Nach Schwierigkeit gestaffelt** | Eine Voranalyse schätzt jedes Dokument ein und wählt danach eine der Modellstufen (siehe unten).          |
+| Modellwahl               | Ablauf                                                                                                                                                                  |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Zwei Aufgabentypen**   | Du wählst nur zwei Modelle: eines für **Einfach & Routine**, eines für **Anspruchsvoll & Komplex**. Sie decken alle KI-Aufgaben ab.                                     |
+| **Jede Aufgabe einzeln** | Eine Voranalyse schätzt jedes Dokument ein und wählt danach eine der [Modellstufen](#modellstufen); Fallback, Nachlese, Büroassistent und Akten haben eigene Modelle. |
 
-Neue Instanzen starten mit **Ein Modell für alles**. Eine Instanz, die schon vor
-dieser Wahl eingerichtet war, behält die Staffelung, bis jemand umschaltet.
+Neue Instanzen starten mit **Zwei Aufgabentypen**. Eine Instanz, die schon vor
+dieser Wahl eingerichtet war, behält die Einzelwahl, bis jemand umschaltet.
 
-Ein Modell für alles kommt ohne Voranalyse aus, das spart einen Aufruf je
-Dokument. Weil das Modell fest ist, nutzt postbuch.net dabei immer
-Prompt-Caching, sofern der Provider es kann (siehe [Cache-Mode](#cache-mode)).
-Funktionen, die sonst eine bestimmte Stufe verwenden, etwa die Auswertung von
-Erstattungsbescheiden, nutzen dann ebenfalls das Analysemodell.
+### Zwei Aufgabentypen
+
+Die beiden Aufgabentypen teilen sich alle Aufgaben so auf:
+
+| Aufgabentyp                 | Aufgaben                                                                                                                                                        | Empfehlung                     |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| **Einfach & Routine**       | Prüfung der gelesenen Angaben, Ersatz bei einer gescheiterten Analyse, Recherche und Gesprächstitel im Büroassistenten, Metadaten-Vorschlag für Akten, [KI-Duplikatprüfung](#duplikat-erkennung) | schnelles, günstiges Modell    |
+| **Anspruchsvoll & Komplex** | Analyse jedes Dokuments, Arztrechnungs-Positionen und [Nachlese](#arztrechnungen-und-nachlese), Erstattungsbescheide, Kostenträger-Profile, Antworten des Büroassistenten | starkes Modell                 |
+
+Jedes Dokument analysiert das Modell für **Anspruchsvoll & Komplex**. Scheitert
+es, springt das Modell für **Einfach & Routine** ein. Eine Voranalyse gibt es
+nicht, das spart einen Aufruf je Dokument. Weil das Modell fest ist, nutzt
+postbuch.net dabei immer Prompt-Caching, sofern der Provider es kann (siehe
+[Cache-Mode](#cache-mode)). Der Büroassistent braucht für beide Aufgabentypen
+ein Modell, das Tool-Calling beherrscht.
+
+**Nach einem Update:** Früher verlangte auch die einfache Modellwahl ein Modell
+je Aufgabe. Beim ersten Start nach dem Update übernimmt postbuch.net für jeden
+Aufgabentyp das Modell, das du für die darin aufgegangenen Aufgaben am
+häufigsten gewählt hattest. Gibt es keinen eindeutigen Spitzenreiter, gilt
+vorläufig die erste verfügbare Empfehlung für **Einfach & Routine**. Bis du die
+Auswahl in der Modell-Konfiguration bestätigst oder änderst, weist das
+Dashboard Admins darauf hin und nennt die vorläufigen Modelle samt Herkunft.
+Bestätigen heißt: **Auswahl bestätigen** bzw. **Modelle speichern** klicken
+oder eine Empfehlung für einen Aufgabentyp übernehmen.
 
 ### Arztrechnungen und Nachlese
 
 Die Einzelpositionen einer Arztrechnung liest postbuch.net in einem eigenen
 Aufruf nach der Erkennung, immer mit dem Modell der Stufe **Schwierig** (bei
-einem Modell für alles mit dem Analysemodell). Ebenso zerlegt dieses Modell die
+zwei Aufgabentypen mit **Anspruchsvoll & Komplex**). Ebenso zerlegt dieses Modell die
 Kürzungen eines Erstattungsbescheids auf die betroffenen Positionen.
 
 Beide Ergebnisse prüft postbuch.net nach, zum Beispiel ob die Positionen den
@@ -182,14 +343,14 @@ ihrer Position ergeben, ob Begründungen im Volltext statt als bloßer Verweis
 vorliegen und ob die Anteile einer Kürzung genau ihren Betrag ergeben und jeden
 Satz der Begründung abdecken. Scheitert
 eine Prüfung, liest das Modell der Klasse **Nachlese** das Dokument mit den
-Befunden erneut. Die Nachlese gilt in beiden Modellwahlen. Solange sie nicht
-eigens eingerichtet ist, übernimmt sie das Modell der Stufe Schwierig bzw. das
-Analysemodell. Für die Nachlese lohnt sich das stärkste verfügbare Modell, denn
+Befunden erneut. Bei zwei Aufgabentypen ist das ebenfalls **Anspruchsvoll &
+Komplex**. In der Einzelwahl übernimmt die Nachlese, solange sie nicht eigens
+eingerichtet ist, das Modell der Stufe Schwierig. Für die Nachlese lohnt sich das stärkste verfügbare Modell, denn
 sie läuft nur in den Fällen, an denen das erste Modell gescheitert ist.
 
 ### Modellstufen
 
-Bei gestaffelter Modellwahl benutzt postbuch.net nicht ein Modell, sondern
+Bei der Einzelwahl benutzt postbuch.net nicht ein Modell, sondern
 mehrere – nach Schwierigkeit gestaffelt. So bekommt einfache Post ein
 günstiges Modell und nur schwierige Post ein teures.
 
@@ -201,7 +362,7 @@ günstiges Modell und nur schwierige Post ein teures.
 | **Mittel**           | Schwierigkeit > 0,25 und < 0,5                                                                                                |
 | **Schwierig**        | Schwierigkeit ≥ 0,5                                                                                                           |
 | **Letzter Fallback** | Notfallmodell am Ende jeder Kette                                                                                             |
-| **Nachlese**         | Liest nach, wenn eine Plausibilitätsprüfung scheitert (siehe [Arztrechnungen und Nachlese](#arztrechnungen-und-nachlese)); gilt auch bei einem Modell für alles |
+| **Nachlese**         | Liest nach, wenn eine Plausibilitätsprüfung scheitert (siehe [Arztrechnungen und Nachlese](#arztrechnungen-und-nachlese)) |
 
 Die Voranalyse läuft zuerst und entscheidet, welche Kette greift:
 
@@ -217,8 +378,8 @@ rückt automatisch das nächste Glied nach. Ein Konfigurationsfehler (falscher
 Schlüssel, unbekanntes Modell) wird dabei als dauerhaft erkannt und nicht
 sinnlos wiederholt.
 
-Darunter, in einem eigenen Block, stehen in beiden Modellwahlen vier Modelle,
-die **nicht** an der Dokumentanalyse hängen:
+Darunter, in einem eigenen Block, stehen in der Einzelwahl vier Modelle, die
+**nicht** an der Dokumentanalyse hängen:
 
 | Klasse                    | Wofür                                                         |
 | ------------------------- | ------------------------------------------------------------- |
@@ -231,9 +392,9 @@ Jede Zeile wird als **Provider + Modell** gespeichert, nie nur als Modellname.
 Zwei lokale Server mit demselben `llama3.3` wären sonst nicht unterscheidbar.
 
 Im Einrichtungsassistenten müssen **alle Klassen der gewählten Modellwahl** auf
-einen erreichbaren Provider zeigen: bei einem Modell für alles Analysemodell,
-Letzter Fallback und Nachlese, gestaffelt die sechs Stufen und die Nachlese, dazu jeweils die vier für
-Büroassistent und Akten-Vorschlag. Zusätzlich ist ein nutzbares Embedding-Modell Pflicht;
+einen erreichbaren Provider zeigen: bei zwei Aufgabentypen beide, in der
+Einzelwahl die sechs Stufen, die Nachlese und die vier für Büroassistent und
+Akten-Vorschlag. Zusätzlich ist ein nutzbares Embedding-Modell Pflicht;
 Sprachmodell und Embedding werden getrennt geprüft.
 
 ### Empfehlungen
@@ -254,6 +415,16 @@ Wechsel werden alle vorhandenen Embeddings automatisch neu berechnet (siehe
 Abschnitt _Embeddings_). Die Dimension wird auch hier nicht aus der Empfehlung
 übernommen, sondern mit einem Testaufruf an deinem Provider ermittelt.
 
+Zu jedem empfohlenen Embedding-Modell gehören eigene Schwellen: ab wann eine
+Ähnlichkeit als sinnlos gilt, welcher Wert in der Suche 100 % entspricht und
+ab welcher Ähnlichkeit zwei Dokumente als mögliches Duplikat gelten. Bei jedem
+Wechsel auf ein empfohlenes Modell übernimmt postbuch.net diese Werte, auch
+bei einem Wechsel von Hand; für andere Modelle setzt es Startwerte (siehe
+[Suchschwellen](#suchschwellen)). Voyage 4 Nano und EmbeddingGemma 2 erscheinen auf
+Geräten mit weniger als 2 GB Arbeitsspeicher als nicht verfügbar. Muss der
+eingebaute Dienst das empfohlene Modell erst herunterladen, startet
+**Übernehmen** den Download; danach noch einmal übernehmen.
+
 Modellwahl und Nutzung erfolgen auf eigenes Risiko; maßgeblich für Preise und
 Verfügbarkeit sind immer die Angaben des jeweiligen KI-Anbieters.
 
@@ -265,6 +436,8 @@ eigenen Tarif ab. Bei einem selbst betriebenen Provider wie Ollama oder LM
 Studio gibt es keine Rechnung pro Aufruf; Strom und Hardware bleiben natürlich
 eigene Betriebskosten.
 
+#### Dokumente verarbeiten
+
 Die folgenden Beträge sind bewusst grobe **Richtwerte in Eurocent, Stand August
 2026**. Sie beruhen auf den mitgelieferten Modellpreisen und einem
 anonymisierten Plausibilitätsabgleich mit echten Aufrufen. Anbieter rechnen
@@ -273,23 +446,31 @@ Maßgeblich ist deshalb immer die Abrechnung des Providers.
 
 | Vorgang                                | Welche externen KI-Aufrufe entstehen?                                                                                                                                 | Grober Richtwert                                                                                                                                           |
 | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dokument importieren                   | Eigentliche PDF-/Textanalyse und ein Embedding, bei gestaffelter Modellwahl vorher eine kurze Voranalyse; bei ungültiger Antwort zusätzlich ein Reparatur- oder Fallback-Aufruf | meist **1–20 ct je Dokument**; mit sehr günstigen Modellen auch darunter, bei langen oder schwierigen Dokumenten, Retries und teuren Modellen auch darüber |
+| Dokument importieren                   | Eigentliche PDF-/Textanalyse und ein Embedding, bei der Einzelwahl vorher eine kurze Voranalyse; bei ungültiger Antwort zusätzlich ein Reparatur- oder Fallback-Aufruf | meist **1–20 ct je Dokument**; mit sehr günstigen Modellen auch darunter, bei langen oder schwierigen Dokumenten, Retries und teuren Modellen auch darüber |
 | Dokument erneut verarbeiten            | Erneute Analyse und neues Embedding; bei einer fest gewählten Modellstufe entfällt die Voranalyse                                                                    | ungefähr wie ein neuer Import                                                                                                                              |
+| KI-Duplikatprüfung (wenn eingeschaltet) | In Zweifelsfällen ein Aufruf mit den ersten Seiten des neuen Dokuments und von bis zu drei Kandidaten | meist **1–3 ct je Prüfung**, je nach Modell |
 | Arztrechnung                           | Zusätzlich zum Import ein Aufruf, der alle Einzelpositionen liest; bei einer gescheiterten Prüfung ein weiterer Aufruf der Nachlese                                   | je nach Länge und Modell oft zusätzlich **2–30 ct**, bei sehr langen Rechnungen auch darüber                                                               |
 | Erstattungsbescheid                    | Zusätzlich zum Import eine eigene Detailauswertung und, falls Kürzungen vorliegen, je Rechnung ein Zerlegungsaufruf mit hohem Denkaufwand, bei einer gescheiterten Prüfung zusätzlich die Nachlese | oft zusätzlich **1–15 ct**, bei langen Sammelkürzungen auch deutlich darüber                                                                               |
+
+Ein normaler Import besteht also nicht aus „einem KI-Aufruf". Fällt ein Modell
+aus oder liefert unbrauchbare Daten, kann die Fallback-Kette mehrere Versuche
+abrechnen. Auch ein fehlgeschlagener Provider-Aufruf kann Kosten verursachen.
+Umgekehrt sind lokale Schritte wie Scanner-OCR, PDF-Rotation, die Suche nach dem Wortlaut,
+Datenbankabfragen und das reine Ersetzen einer PDF **keine** externen
+KI-Aufrufe.
+
+#### Assistent, Suche und Embeddings
+
+| Vorgang                                | Welche externen KI-Aufrufe entstehen?                                                                                                                                 | Grober Richtwert                                                                                                                                           |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Eine Antwort des Assistenten           | Mehrere Recherche-Runden, Embedding-Suchen, gegebenenfalls PDF-Vision, Schlussantwort und beim ersten Beitrag ein kurzer Titel-Aufruf                                 | häufig **1–15 ct**, bei breiten Fragen oder PDF-Vision auch **25 ct und mehr**                                                                             |
-| Semantisch suchen                      | Die Anfrage wird für Dokumente und Akten separat eingebettet; „mehr laden" kann erneut aufrufen                                                                       | normalerweise zusammen **unter 0,01 ct je Suche**                                                                                                          |
+| Suchen                                 | Die Anfrage wird für Dokumente und Akten je einmal eingebettet; eine Nummerneingabe braucht keinen Aufruf                                                            | normalerweise zusammen **unter 0,01 ct je Suche**                                                                                                          |
 | Dokument- oder Aktenmetadaten ändern   | Relevante Dokumentfelder werden neu eingebettet. Auch Aktenanlage, Betreff/Beschreibung sowie Hinzufügen oder Entfernen eines Dokuments erneuern das Akten-Embedding. | normalerweise **unter 0,01 ct je Objekt**                                                                                                                  |
 | KI-Metadaten für eine Akte vorschlagen | Ein kurzer LLM-Aufruf mit den Akten- und Dokumentmetadaten                                                                                                            | gewöhnlich **unter 1 ct**                                                                                                                                  |
 | Embedding-Modell speichern             | Ein winziger Test-Embedding-Aufruf ermittelt die Vektor-Dimension                                                                                                     | deutlich **unter 0,01 ct**                                                                                                                                 |
 | Embedding-Modell wechseln              | Nach dem Bestätigen startet automatisch je ein Aufruf pro Dokument und Akte; Hilfeabschnitte nur, wenn sie nicht mitgeliefert oder wiederverwendbar sind              | Beispiel: **500 Dokumente, 20 Akten und 250 Hilfeabschnitte etwa 2–10 ct**, je nach Embedding-Modell und Textlänge                                         |
 
-Ein normaler Import besteht also nicht aus „einem KI-Aufruf". Fällt ein Modell
-aus oder liefert unbrauchbare Daten, kann die Fallback-Kette mehrere Versuche
-abrechnen. Auch ein fehlgeschlagener Provider-Aufruf kann Kosten verursachen.
-Umgekehrt sind lokale Schritte wie Scanner-OCR, PDF-Rotation, Volltextsuche,
-Datenbankabfragen und das reine Ersetzen einer PDF **keine** externen
-KI-Aufrufe.
+#### Preise und Token-Kosten
 
 Zu jedem Sprachmodell lassen sich Preise je eine Million Token hinterlegen:
 **In** (Eingabe), **Out** (Ausgabe), **Cache-Write** (Schreiben in den
@@ -318,8 +499,8 @@ nachvollziehbar. Dabei gelten vier wichtige Einschränkungen:
 ## Embeddings
 
 Embeddings sind Zahlenvektoren, die Inhalte beschreiben. Sie tragen die
-**semantische Dokumentensuche**, die **Duplikatprüfung** und die **Hilfesuche
-des Assistenten** – ohne sie bleibt die Suche eine reine Volltextsuche.
+**Suche nach dem Inhalt**, die **Duplikatprüfung** und die **Hilfesuche
+des Assistenten** – ohne sie findet die Suche nur über den Wortlaut.
 
 Eine neue Installation verwendet den eingebauten Embedding-Dienst. Ein
 anderer Dienst lässt sich nur bewusst unter
@@ -329,22 +510,36 @@ wählen; der Einrichtungsassistent bietet keinen an.
 ### Der eingebaute Embedding-Dienst
 
 postbuch.net bringt einen eigenen Embedding-Dienst mit, den Docker-Dienst
-`embedding`. Er rechnet mit **Snowflake Arctic Embed M v2.0**, einem
-mehrsprachigen offenen Modell (Lizenz Apache 2.0), auf dem Prozessor des
-Servers. Dokumentinhalte verlassen dafür den Rechner nicht, und es fallen keine
-Kosten je Aufruf an.
+`embedding`. Er rechnet auf dem Prozessor des Servers. Dokumentinhalte
+verlassen dafür den Rechner nicht, und es fallen keine Kosten je Aufruf an.
 
 - Der Dienst ist von außen nicht erreichbar; nur die App spricht ihn im
   Docker-Netz an.
-- Das Modell lädt erst bei der ersten Anfrage und wird nach zehn Minuten ohne
-  Anfrage wieder entladen. Geladen belegt es rund 300 MB Arbeitsspeicher, der
-  Container ist auf 640 MB begrenzt.
-- Das erste Einbetten nach einer Pause dauert deshalb einige Sekunden länger.
-- Sehr lange Texte werden für das Embedding auf 512 Token gekürzt.
-- Die Vektoren haben 768 Dimensionen.
+- Ein Modell lädt erst bei der ersten Anfrage und wird nach zehn Minuten ohne
+  Anfrage wieder entladen. Das erste Einbetten nach einer Pause dauert deshalb
+  einige Sekunden länger.
+- Der Container ist auf 1200 MB Arbeitsspeicher begrenzt.
 
-Mit dem Release kommen die Vektoren der Anwenderhilfe für dieses Modell gleich
-mit. Eine neue Instanz muss die Hilfe deshalb nicht selbst einbetten.
+#### Modelle des eingebauten Dienstes
+
+Der Dienst bietet drei mehrsprachige offene Modelle an (alle Lizenz Apache
+2.0). Gewählt wird das Modell in der Embedding-Karte im Abschnitt
+**Eingebauter Dienst**:
+
+- **Snowflake Arctic Embed M v2.0** – im Dienst enthalten, läuft schon mit
+  1 GB Arbeitsspeicher (geladen rund 300 MB). 768 Dimensionen, Texte bis
+  512 Token. Für dieses Modell kommen die Vektoren der Anwenderhilfe mit dem
+  Release; eine neue Instanz muss die Hilfe nicht selbst einbetten.
+- **Voyage 4 Nano** – findet in deutschen Dokumenten am treffsichersten.
+  2048 Dimensionen, Download rund 370 MB.
+- **EmbeddingGemma 2** – 768 Dimensionen, Download rund 240 MB.
+
+Voyage 4 Nano und EmbeddingGemma 2 stehen nur auf Geräten mit mindestens
+2 GB Arbeitsspeicher zur Wahl; darunter sind sie ausgegraut. Geladen belegen
+sie bis zu rund 900 MB. Ihre Modelldatei lädt der Dienst beim ersten Wählen
+einmalig herunter und prüft sie; die Karte zeigt dabei den Fortschritt und
+wählt das Modell, sobald die Datei da ist. Die Dateien bleiben über Updates
+hinweg erhalten. Die Vorsilben setzt postbuch.net für alle drei Modelle fest.
 
 Der Dienst ist ein eigenes Compose-Profil `embedding` und läuft nur dort, wo
 er gewählt ist. Eine neue Installation schaltet das Profil ein. Eine
@@ -376,10 +571,11 @@ ergänzen (kommagetrennt, etwa `COMPOSE_PROFILES=scanner,embedding`) und
 `docker compose up -d --build embedding` ausführen. Danach lässt sich der
 Dienst in der Karte mit **Verwenden** wählen.
 
-Der Wechsel auf den eingebauten Dienst ist ein Modellwechsel: Sind schon
-Dokumente vorhanden, fragt postbuch.net vorher nach und berechnet deren
-Embeddings danach automatisch neu (siehe unten). Die Hilfe muss dabei nicht
-berechnet werden, ihre Vektoren kommen mitgeliefert. Antwortet der Dienst beim
+Der Wechsel auf den eingebauten Dienst oder zwischen seinen Modellen ist ein
+Modellwechsel: Sind schon Dokumente vorhanden, fragt postbuch.net vorher nach
+und berechnet deren Embeddings danach automatisch neu (siehe unten). Mit
+Arctic muss die Hilfe dabei nicht berechnet werden, ihre Vektoren kommen
+mitgeliefert. Antwortet der Dienst beim
 Speichern nicht, bleibt das bisherige Modell aktiv.
 
 ### Anderen Dienst wählen
@@ -397,7 +593,7 @@ Manche offenen Embedding-Modelle sind darauf trainiert, dass vor einer
 Suchanfrage oder vor einem gespeicherten Text eine feste Anweisung steht, etwa
 `query: ` vor der Anfrage. Ohne diese **Vorsilben** finden sie spürbar
 schlechter. Unter `Vorsilben` in der Embedding-Karte stehen zwei Felder:
-**Vor Suchanfragen** gilt für die semantische Suche, die Recherche des
+**Vor Suchanfragen** gilt für die Suche, die Recherche des
 Assistenten und die Hilfesuche; **Vor Dokumenten** gilt für alles, was
 gespeichert wird – Dokumente, Akten und Hilfeabschnitte – und für die
 Duplikatprüfung, die neue Dokumente mit gespeicherten vergleicht.
@@ -409,6 +605,8 @@ brauchen keine Vorsilben; dort bleiben die Felder leer. Gespeichert wird
 genau das, was in den Feldern steht. Ein späteres Update ändert gespeicherte
 Vorsilben nicht.
 
+#### Modellwechsel und Neuberechnung
+
 **Wichtig beim Wechsel des Embedding-Modells:** Jede Zeile trägt eine Signatur
 aus Provider, Modell und Dimension, bei gesetzten Vorsilben zusätzlich mit einer
 Kennung für diese. Eine Änderung der Vorsilben wirkt deshalb wie ein
@@ -419,10 +617,28 @@ Dokumente da, nennt ein Dialog vor dem Wechsel ihre Zahl und bei einem
 Cloud-Anbieter die anfallenden Kosten; **Wechseln und neu berechnen**
 bestätigt beides zusammen. Der Lauf startet danach von selbst im Hintergrund,
 die Karte und die Aufgabenanzeige zeigen den Fortschritt. Bis er durch ist,
-findet die semantische Suche weniger. Das ist kein Defekt, sondern die
+findet die Suche über den Inhalt weniger. Das ist kein Defekt, sondern die
 Alternative zu einem stillen Mischbestand aus unvergleichbaren Vektoren.
 Bleiben einzelne Einträge zurück, etwa weil der Anbieter zwischendurch nicht
 antwortete, holt **Fehlende Embeddings nachberechnen** sie nach.
+
+#### Suchschwellen
+
+Wie die Suche die Ähnlichkeit in die Prozentwerte **Inhalt** und
+**Übereinstimmung** umrechnet, hängt vom Modell ab. Zwei Eckwerte legen das
+fest: die **Unsinnsschwelle** (so ähnlich ist für dieses Modell auch eine
+sinnlose Anfrage, 0 %) und **100 % ab** (ein sehr gut passender Treffer). Die
+Zeile **Suchschwellen** in der Karte **Embeddings** zeigt, welche gelten.
+
+Für die [empfohlenen Modelle](#empfehlungen) sind beide gemessen und werden
+nur angezeigt. Für jedes andere Modell setzt postbuch.net beim Wechsel
+Startwerte (0,30 und 0,90) und öffnet die Zeile zum Anpassen. Die Startwerte
+ordnen die Treffer zuverlässig. Manche Modelle liefern aber auch für
+unpassende Dokumente hohe Ähnlichkeiten. Zeigt die Suche dann für fast alles
+einen hohen Inhaltswert, hebe die Unsinnsschwelle an. Ein erneuter
+Modellwechsel setzt beide Werte wieder neu.
+
+#### Eingebettete Hilfe
 
 Die mit der jeweiligen postbuch.net-Version ausgelieferte Hilfe wird ebenfalls
 in kleine Abschnitte zerlegt und im Hintergrund eingebettet. So kann der
@@ -464,7 +680,7 @@ Modell zu benutzen und den gemeinsamen Prompt-Anteil zwischenspeichern zu
 lassen. Genau das macht der **Cache-Mode**: festes Klassifikationsmodell statt
 Staffelung, dazu Prompt-Caching, sofern der Provider es kann.
 
-Den Cache-Mode gibt es nur bei gestaffelter [Modellwahl](#modellwahl). Mit
+Den Cache-Mode gibt es nur bei der Einzelwahl ([Modellwahl](#modellwahl)). Mit
 einem Modell für alles ist das Modell ohnehin fest und das Prompt-Caching immer
 an; Karte und Import-Schalter entfallen dann.
 
@@ -578,16 +794,30 @@ _Kostenträger-Profil beisteuern_ bereit.
 
 ## Duplikat-Erkennung
 
-Zwei Werte steuern, wann postbuch.net einen Doppeleingang vermutet:
+Die Karte **Duplikat-Erkennung** in den KI-Einstellungen steuert, wann
+postbuch.net einen Doppeleingang vermutet:
 
-| Einstellung           | Standard   | Bedeutung                                                              |
-| --------------------- | ---------- | ---------------------------------------------------------------------- |
-| Ähnlichkeits-Schwelle | 0,80       | Ab welcher Cosinus-Ähnlichkeit zweier Embeddings ein Verdacht entsteht |
-| Entscheidungs-Timeout | 60 Minuten | Wie lange ein pausiertes Dokument auf deine Entscheidung wartet        |
+| Einstellung                              | Standard | Bedeutung                                                                         |
+| ---------------------------------------- | -------- | --------------------------------------------------------------------------------- |
+| Cosinus-Schwelle                         | 80 %     | Ab welcher Ähnlichkeit zweier Embeddings ein Dokument als Kandidat gilt           |
+| KI-Duplikatprüfung in Zweifelsfällen     | aus      | Lässt die KI Zweifelsfälle anhand der ersten Seiten beider Dokumente beurteilen    |
+| Entscheidungsfrist (Stunden)             | 168 (7 Tage) | Wie lange ein angehaltenes Dokument auf deine Entscheidung wartet             |
 
-Höhere Schwelle = weniger Verdachtsfälle, dafür mehr echte Duplikate, die
-durchrutschen. Der Ablauf selbst steht unter
-[Dokumente importieren](dokumente-importieren.md#duplikate-experimentell).
+Höhere Schwelle = weniger Kandidaten, dafür mehr echte Duplikate, die
+durchrutschen. Die Cosinus-Schwelle hängt vom Embedding-Modell ab; beim
+Wechsel auf ein [empfohlenes Modell](#empfehlungen) setzt postbuch.net sie auf
+dessen Wert, bei anderen Modellen auf den Startwert 85 %. Eine eigene
+Einstellung lässt sich danach wieder anpassen. Nach Ablauf der Frist werden immer beide Dokumente behalten.
+
+**KI-Duplikatprüfung:** Ein Zweifelsfall liegt vor, wenn ein Kandidat nur einen
+Teil der Merkmale teilt (Briefdatum, fremdes Zeichen, Betrag); bei Rezepten wird
+immer gefragt. Die KI bekommt das neue Dokument und höchstens drei Kandidaten,
+je die ersten zwei Seiten, und meldet einen Verdacht nur bei hoher Sicherheit.
+Jede Prüfung ist ein zusätzlicher, bei einem Cloud-Anbieter kostenpflichtiger
+Aufruf. Verwendet wird das Modell für die Voranalyse, bei der einfachen
+[Modellwahl](#modellwahl) das Modell „Einfach & Routine“. Kann dieses Modell
+weder PDFs noch Bilder lesen, entfällt die Prüfung. Der Ablauf selbst steht
+unter [Dokumente importieren](dokumente-importieren.md#duplikate).
 
 ---
 

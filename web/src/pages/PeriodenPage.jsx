@@ -11,6 +11,7 @@ import { GlowHeading } from '@/components/ui/GlowHeading';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
 import {
   Dialog, DialogTitle, DialogFooter, DialogDescription,
 } from '@/components/ui/dialog';
@@ -1369,6 +1370,28 @@ function ConfirmMergeOmittedDialog({ open, request, onClose }) {
 }
 
 // ─── PeriodenPage ─────────────────────────────────────────────────────────────
+const INAKTIVE_AUSBLENDEN_KEY = 'perioden-inaktive-ausblenden';
+
+function leseInaktiveAusblenden() {
+  try { return localStorage.getItem(INAKTIVE_AUSBLENDEN_KEY) !== '0'; } catch { return true; }
+}
+
+/**
+ * Ein Bereich (Person × Kostenträger) gilt als inaktiv, wenn die Person
+ * archiviert ist oder den Kostenträger nicht mehr hat. Er bleibt trotzdem
+ * sichtbar, solange dort etwas offen ist: eingereicht ohne Bescheid,
+ * zurückgehalten oder eine Sammelperiode mit Inhalt.
+ */
+function istInaktiverBereich(perioden) {
+  if (perioden.length === 0) return false;
+  const inaktiv = perioden.some((p) => p.person_archiviert || !p.kostentraeger_aktiv);
+  if (!inaktiv) return false;
+  const offen = perioden.some((p) => p.status === 'SUBMITTED' || p.status === 'WITHHELD'
+    || (p.status === 'COLLECTING'
+      && (Number(p.anzahl_rechnungen) > 0 || Number(p.anzahl_angepinnt) > 0 || Number(p.anzahl_pruefung) > 0)));
+  return !offen;
+}
+
 export default function PeriodenPage() {
   const { data, isLoading, error } = usePerioden();
   const backPath = '/analyse/perioden';
@@ -1379,7 +1402,13 @@ export default function PeriodenPage() {
   const [mergeOmittedRequest, setMergeOmittedRequest] = useState(null);
   const [editRequest, setEditRequest] = useState(null);
   const [tierTab, setTierTab] = useState(false);
+  const [inaktiveAusblenden, setInaktiveAusblendenState] = useState(leseInaktiveAusblenden);
   const { istMobil } = useDarstellung();
+
+  const setInaktiveAusblenden = useCallback((wert) => {
+    setInaktiveAusblendenState(wert);
+    try { localStorage.setItem(INAKTIVE_AUSBLENDEN_KEY, wert ? '1' : '0'); } catch { /* nur Komfort */ }
+  }, []);
 
   const handleOpen = useCallback((col) => {
     setColState((prev) => ({ ...prev, [col]: prev[col] + 1, active: col }));
@@ -1423,6 +1452,18 @@ export default function PeriodenPage() {
     if (row.kostentraeger === 'PKV') byPerson[row.person].PKV.push(row);
     else if (row.kostentraeger === 'Beihilfe') byPerson[row.person].Beihilfe.push(row);
   }
+  let ausgeblendeteBereiche = 0;
+  let inaktiveBereiche = 0;
+  for (const person of Object.keys(byPerson)) {
+    for (const kt of ['PKV', 'Beihilfe']) {
+      if (!istInaktiverBereich(byPerson[person][kt])) continue;
+      inaktiveBereiche += 1;
+      if (inaktiveAusblenden) {
+        byPerson[person][kt] = [];
+        ausgeblendeteBereiche += 1;
+      }
+    }
+  }
 
   const { active } = colState;
   const zeigeBeihilfe = !aktiveTierGruppe;
@@ -1463,6 +1504,24 @@ export default function PeriodenPage() {
       )}
 
       <AbrechnungWizardCard istTier={aktiveTierGruppe} />
+
+      {inaktiveBereiche > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <label className="flex items-center gap-2 font-medium">
+            <Switch
+              checked={inaktiveAusblenden}
+              onCheckedChange={setInaktiveAusblenden}
+              label="Inaktive ausblenden"
+            />
+            Inaktive ausblenden
+          </label>
+          <span className="text-xs text-muted-foreground">
+            {inaktiveAusblenden
+              ? `${ausgeblendeteBereiche} ${ausgeblendeteBereiche === 1 ? 'Bereich' : 'Bereiche'} archivierter oder nicht mehr versicherter Personen ausgeblendet`
+              : 'Archivierte und nicht mehr versicherte Personen werden angezeigt'}
+          </span>
+        </div>
+      )}
 
       <div className={istMobil ? 'flex flex-col gap-4' : 'flex gap-4 items-start'} style={{ width: '100%' }}>
         <div style={{ width: pkvWidth, transition: 'width 0.3s ease', flexShrink: 0, minWidth: 0, overflow: 'hidden' }}>

@@ -39,7 +39,11 @@ import {
   buildCostMap, calculateCost, logLlmCall,
   resolveKlassenModell, buildKeys, getBedrockClient, providerForRef,
 } from '../lib/llm.js';
-import { chatCompletionsUrl } from '../lib/llm/registry.js';
+import {
+  chatCompletionsUrl, clampMaxTokens, grenzeAusAblehnung, istMaxTokensAblehnung,
+  MAX_TOKENS_NOTFALL, MAX_TOKENS_OHNE_GRENZE,
+} from '../lib/llm/registry.js';
+import { verdichteVerlauf } from '../lib/llm/kontext-budget.js';
 import { messagesUrl, ANTHROPIC_VERSION, buildThinkingBodyFields } from '../lib/llm/providers/anthropic.js';
 import { resolveThinkingPolicy, resolveReasoningEffort, learnReasoningCapability } from '../lib/llm/thinking-policy.js';
 import {
@@ -47,8 +51,7 @@ import {
   isOpenAIPromptCacheUnsupportedError, markOpenAIPromptCacheUnsupported,
   isOpenAIReasoningEffortToolError, maxTokensFeld as maxTokensFeldFuerDialekt, antwortText,
 } from '../lib/llm/providers/openai.js';
-import { guardedFetch, readLimitedText, TIMEOUT_COMPLETION_MS } from '../lib/net-guard.js';
-import { embedText } from '../lib/embedding.js';
+import { guardedFetch, readLimitedText, TIMEOUT_COMPLETION_LANG_MS } from '../lib/net-guard.js';
 import { streamClaudeSubscriptionAgent } from '../lib/claude-subscription.js';
 import { retrieveDocument } from './document-retriever.js';
 import { extractDocumentText, serveCachedText } from '../lib/text-extractor.js';
@@ -56,6 +59,7 @@ import { runAkteOp, getAkteWithDocuments, AKTEID_RE, POSTID_RE } from './akten-s
 import { listWiedervorlagen, listFaelligkeiten } from './fristen.js';
 import { buildReferenceContext } from './chat-references.js';
 import { searchHelp } from './help-corpus.js';
+import { sucheDokumente, sucheAkten } from './suche.js';
 import pool from '../db.js';
 import { ermittleZahlungslage } from './rechnung-zahlung.js';
 import { ladeErsetzung, ladeErsetzungen, ersetzungsHinweis } from './rechnung-ersetzung.js';
@@ -92,7 +96,7 @@ const FORCE_REPORT_MSG = 'Das Runden-Limit ist erreicht. Erstelle JETZT deinen A
 const TOOLS = [
   {
     name: 'search_documents',
-    description: 'Durchsucht alle Dokumente semantisch und per Volltext. Gibt Metadaten inkl. Zusammenfassung zurück (postid, Datum, Art, Betreff, Zusammenfassung, Kontakt, Schlagwörter, Betrag — OHNE PDF-Inhalt). Nutze dies zuerst, um relevante Dokumente zu finden — prüfe dabei auch die Zusammenfassung jedes Treffers, nicht nur Betreff/Schlagwörter: manche relevanten Dokumente (z.B. eine Vorbereitungs-/Zusatzrechnung zu einer Behandlungsserie) enthalten das Suchwort nicht wörtlich im Betreff, sind aber laut Zusammenfassung inhaltlich zugehörig. Für weitere Details zu einem konkreten Treffer (Notiz, Einzelpositionen, bestrittener Betrag, Aktenzugehörigkeit, Wiedervorlagen) danach gezielt get_document_metadata aufrufen. Achtung: Ergebnisse werden nach Relevanz sortiert und bei "limit" gekappt — bei Kürzung liefert das Ergebnis ein "note"-Feld mit Hinweis auf weitere (auch ältere) Treffer; bei Fragen nach Vollständigkeit/Entwicklung über die Zeit ggf. mit höherem limit oder datum_von/datum_bis erneut suchen.',
+    description: 'Durchsucht alle Dokumente semantisch und per Volltext. Gibt Metadaten inkl. Zusammenfassung zurück (postid, Datum, Art, Betreff, Zusammenfassung, Kontakt, Schlagwörter, Betrag – OHNE PDF-Inhalt). Jeder Treffer trägt treffer_art: "woertlich" (Suchwörter kommen in den Metadaten vor), "inhaltlich" (nur thematisch ähnlich), "beide" oder "id" (Nummerntreffer). Nutze dies zuerst, um relevante Dokumente zu finden – prüfe dabei auch die Zusammenfassung jedes Treffers, nicht nur Betreff/Schlagwörter: manche relevanten Dokumente (z.B. eine Vorbereitungs-/Zusatzrechnung zu einer Behandlungsserie) enthalten das Suchwort nicht wörtlich im Betreff, sind aber laut Zusammenfassung inhaltlich zugehörig. Für weitere Details zu einem konkreten Treffer (Notiz, Einzelpositionen, bestrittener Betrag, Aktenzugehörigkeit, Wiedervorlagen) danach gezielt get_document_metadata aufrufen. Achtung: Ergebnisse werden nach Relevanz sortiert und bei "limit" gekappt – bei Kürzung liefert das Ergebnis ein "note"-Feld mit Hinweis auf weitere (auch ältere) Treffer; bei Fragen nach Vollständigkeit/Entwicklung über die Zeit ggf. mit höherem limit oder datum_von/datum_bis erneut suchen.',
     input_schema: {
       type: 'object',
       properties: {
@@ -442,84 +446,17 @@ const DELETE_AKTE_SHAPE = {
 
 // ── Tool-Implementierungen ────────────────────────────────────────────────────
 
-async function toolSearchDocuments({ query, art, datum_von, datum_bis, limit = 15 }, settings) {
+// Assistent und MCP laufen nur mit vollem Lesebereich (lesebereichGate bzw.
+// mcp-auth sperren eingeschränkte Zugänge); deshalb ohne lesebereich-Option.
+// Archivierte Dokumente gehören zum Bestand, den der Assistent kennen muss.
+async function toolSearchDocuments({ query, art, datum_von, datum_bis, limit = 15 }, settings, ctx = {}) {
   const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 15, 1), 50);
-
-  // Embedding über den einzigen Pfad (lib/embedding.js). Schlägt es fehl oder ist
-  // kein Provider konfiguriert, greift der Volltext-Zweig.
-  let embedding = null;
-  try {
-    embedding = await embedText(query, settings, { kategorie: 'chat', rolle: 'anfrage' });
-  } catch { /* Fallback auf Volltext */ }
-
-  // Filter-Bedingungen unabhängig vom Query-Typ vorbereiten — Haupt- und
-  // Count-Query brauchen unterschiedliche Platzhalter-Startindizes, da sie
-  // unterschiedlich viele führende Parameter haben (embedding/query + limit).
-  const filterConditions = [];
-  const filterValues = [];
-  if (art)       { filterConditions.push('p.dokumentart ILIKE'); filterValues.push(`%${art}%`); }
-  if (datum_von) { filterConditions.push('p.briefdatum >=');    filterValues.push(datum_von); }
-  if (datum_bis) { filterConditions.push('p.briefdatum <=');    filterValues.push(datum_bis); }
-  const buildFilterSql = (startIdx) =>
-    filterConditions.map((cond, i) => `${cond} $${startIdx + i}`).join(' AND ');
-
-  let rows, totalCount;
-  if (embedding) {
-    const embStr = embedding.literal;
-    // Nur Zeilen mit der aktuellen Embedding-Signatur sind vergleichbar.
-    const sigSql = 'AND p.embedding_signature = $3';
-    const filterSql = filterConditions.length ? `AND ${buildFilterSql(4)}` : ''; // $1=embedding, $2=limit, $3=signature
-    const r = await pool.query(`
-      SELECT p.postid, p.briefdatum, p.kontakt, p.dokumentart AS art, p.betreff,
-             p.zusammenfassung, p.schlagwoerter, p.status::text AS status,
-             p.familienmitglied, p.richtung::text AS richtung,
-             COALESCE(a.gesamtbetrag, h.gesamtbetrag, g.gesamtbetrag, e.erstattungsbetrag) AS betrag,
-             1 - (p.embedding <=> $1::postbuch.halfvec) AS similarity
-      FROM postbuch.postbuch p
-      LEFT JOIN postbuch.arztrechnung a ON a.postid = p.postid
-      LEFT JOIN postbuch.handwerkerrechnung h ON h.postid = p.postid
-      LEFT JOIN postbuch.generische_rechnung g ON g.postid = p.postid
-      LEFT JOIN postbuch.erstattungsbescheid e ON e.postid = p.postid
-      WHERE p.embedding IS NOT NULL ${sigSql} ${filterSql}
-      ORDER BY p.embedding <=> $1::postbuch.halfvec
-      LIMIT $2
-    `, [embStr, safeLimit, embedding.signature, ...filterValues]);
-    rows = r.rows;
-
-    const countFilterSql = filterConditions.length ? `AND ${buildFilterSql(2)}` : '';
-    const countR = await pool.query(
-      `SELECT count(*) FROM postbuch.postbuch p
-        WHERE p.embedding IS NOT NULL AND p.embedding_signature = $1 ${countFilterSql}`,
-      [embedding.signature, ...filterValues],
-    );
-    totalCount = Number(countR.rows[0].count);
-  } else {
-    const filterSql = filterConditions.length ? `AND ${buildFilterSql(3)}` : ''; // $1=query, $2=limit
-    const r = await pool.query(`
-      SELECT p.postid, p.briefdatum, p.kontakt, p.dokumentart AS art, p.betreff,
-             p.zusammenfassung, p.schlagwoerter, p.status::text AS status,
-             p.familienmitglied, p.richtung::text AS richtung,
-             COALESCE(a.gesamtbetrag, h.gesamtbetrag, g.gesamtbetrag, e.erstattungsbetrag) AS betrag,
-             ts_rank(to_tsvector('german', COALESCE(p.betreff,'') || ' ' || COALESCE(p.zusammenfassung,'') || ' ' || COALESCE(p.kontakt,'')), plainto_tsquery('german', $1)) AS similarity
-      FROM postbuch.postbuch p
-      LEFT JOIN postbuch.arztrechnung a ON a.postid = p.postid
-      LEFT JOIN postbuch.handwerkerrechnung h ON h.postid = p.postid
-      LEFT JOIN postbuch.generische_rechnung g ON g.postid = p.postid
-      LEFT JOIN postbuch.erstattungsbescheid e ON e.postid = p.postid
-      WHERE to_tsvector('german', COALESCE(p.betreff,'') || ' ' || COALESCE(p.zusammenfassung,'') || ' ' || COALESCE(p.kontakt,'')) @@ plainto_tsquery('german', $1) ${filterSql}
-      ORDER BY similarity DESC
-      LIMIT $2
-    `, [query, safeLimit, ...filterValues]);
-    rows = r.rows;
-
-    const countFilterSql = filterConditions.length ? `AND ${buildFilterSql(2)}` : '';
-    const countR = await pool.query(
-      `SELECT count(*) FROM postbuch.postbuch p
-       WHERE to_tsvector('german', COALESCE(p.betreff,'') || ' ' || COALESCE(p.zusammenfassung,'') || ' ' || COALESCE(p.kontakt,'')) @@ plainto_tsquery('german', $1) ${countFilterSql}`,
-      [query, ...filterValues],
-    );
-    totalCount = Number(countR.rows[0].count);
-  }
+  const erg = await sucheDokumente(query, {
+    historisch: true, art, datumVon: datum_von, datumBis: datum_bis, limit: safeLimit,
+    settings, username: ctx.username ?? null, logKategorie: 'chat',
+  });
+  const rows = erg.treffer;
+  const totalCount = erg.gesamt;
 
   const truncated = totalCount > rows.length;
   // Ersetzte Rechnungen kennzeichnen, sonst zählt ein Treffer mit altem
@@ -529,7 +466,7 @@ async function toolSearchDocuments({ query, art, datum_von, datum_bis, limit = 1
     count: rows.length,
     total_count: totalCount,
     note: truncated
-      ? `Es gibt insgesamt ${totalCount} Treffer, hier werden nur die ${rows.length} relevantesten gezeigt (nach Ähnlichkeit sortiert, NICHT chronologisch). Für vollständige zeitliche Abdeckung (z.B. bei "alle X" oder "Entwicklung über die Zeit"): erneut mit höherem limit (max. 50) oder datum_von/datum_bis aufrufen.`
+      ? `Es gibt mindestens ${totalCount} Treffer, hier werden nur die ${rows.length} relevantesten gezeigt (nach Relevanz sortiert, NICHT chronologisch). Für vollständige zeitliche Abdeckung (z.B. bei "alle X" oder "Entwicklung über die Zeit"): erneut mit höherem limit (max. 50) oder datum_von/datum_bis aufrufen.`
       : null,
     documents: rows.map(r => ({
       postid: r.postid,
@@ -542,7 +479,7 @@ async function toolSearchDocuments({ query, art, datum_von, datum_bis, limit = 1
       betrag: r.betrag,
       familienmitglied: r.familienmitglied,
       richtung: r.richtung,
-      similarity: r.similarity ? Math.round(Number(r.similarity) * 100) / 100 : null,
+      treffer_art: r.quelle,
       ...(ersetzungen.get(r.postid) ?? {}),
     })),
   };
@@ -714,44 +651,13 @@ async function toolGetDocumentMetadata({ postid }) {
 
 // ── Akten-Lese-Tool-Implementierungen ─────────────────────────────────────────
 
-async function toolSearchAkten({ query: q, limit = 15 }, settings) {
+async function toolSearchAkten({ query: q, limit = 15 }, settings, ctx = {}) {
   const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 15, 1), 50);
-
-  let embedding = null;
-  try {
-    embedding = await embedText(q, settings, { kategorie: 'chat', rolle: 'anfrage' });
-  } catch { /* Fallback auf Volltext */ }
-
-  const tsExpr = `to_tsvector('german', COALESCE(a.betreff,'') || ' ' || COALESCE(a.beschreibung,'') || ' ' || COALESCE(array_to_string(a.schlagwoerter, ' '),''))`;
-  let rows;
-  if (embedding) {
-    const embStr = embedding.literal;
-    const r = await pool.query(`
-      SELECT a.akteid, a.betreff, a.beschreibung, a.schlagwoerter, a.historisch,
-             COUNT(ad.postid)::int AS dok_count,
-             1 - (a.embedding <=> $1::postbuch.halfvec) AS similarity
-      FROM postbuch.akte a
-      LEFT JOIN postbuch.akte_dokument ad ON ad.akteid = a.akteid
-      WHERE a.embedding IS NOT NULL AND a.embedding_signature = $3
-      GROUP BY a.akteid
-      ORDER BY a.embedding <=> $1::postbuch.halfvec
-      LIMIT $2
-    `, [embStr, safeLimit, embedding.signature]);
-    rows = r.rows;
-  } else {
-    const r = await pool.query(`
-      SELECT a.akteid, a.betreff, a.beschreibung, a.schlagwoerter, a.historisch,
-             COUNT(ad.postid)::int AS dok_count,
-             ts_rank(${tsExpr}, plainto_tsquery('german', $1)) AS similarity
-      FROM postbuch.akte a
-      LEFT JOIN postbuch.akte_dokument ad ON ad.akteid = a.akteid
-      WHERE ${tsExpr} @@ plainto_tsquery('german', $1)
-      GROUP BY a.akteid
-      ORDER BY similarity DESC
-      LIMIT $2
-    `, [q, safeLimit]);
-    rows = r.rows;
-  }
+  const erg = await sucheAkten(q, {
+    historisch: true, limit: safeLimit,
+    settings, username: ctx.username ?? null, logKategorie: 'chat',
+  });
+  const rows = erg.treffer;
 
   return {
     count: rows.length,
@@ -762,7 +668,7 @@ async function toolSearchAkten({ query: q, limit = 15 }, settings) {
       schlagwoerter: r.schlagwoerter,
       dok_count: r.dok_count,
       historisch: r.historisch,
-      similarity: r.similarity != null ? Math.round(Number(r.similarity) * 100) / 100 : null,
+      treffer_art: r.quelle,
     })),
   };
 }
@@ -1028,7 +934,7 @@ export async function executeToolCall(toolName, toolInput, ctx) {
   try {
     if (toolName === 'search_documents') {
       onProgress(`Suche: "${toolInput.query}"${toolInput.art ? ` [${toolInput.art}]` : ''}`);
-      const result = await toolSearchDocuments(toolInput, settings);
+      const result = await toolSearchDocuments(toolInput, settings, ctx);
       for (const doc of result.documents || []) {
         if (!usedSources.has(doc.postid)) {
           usedSources.set(doc.postid, {
@@ -1089,7 +995,7 @@ export async function executeToolCall(toolName, toolInput, ctx) {
     // ── Akten-Lese-Tools ──
     if (toolName === 'search_akten') {
       onProgress(`Suche Akten: "${toolInput.query}"`);
-      return await toolSearchAkten(toolInput, settings);
+      return await toolSearchAkten(toolInput, settings, ctx);
     }
     if (toolName === 'get_akte') {
       onProgress(`Lade Akte ${toolInput.akteid}…`);
@@ -1261,6 +1167,37 @@ function maxTokensFeld(prov, n) {
   return maxTokensFeldFuerDialekt(prov?.dialekt, n);
 }
 
+// ── Antwortlänge ohne künstliche Grenze ──────────────────────────────────────
+// Wie in lib/llm.js (callModel): Es gilt nur die beim Provider hinterlegte
+// Ausgabegrenze. OpenAI-kompatible Ziele bekommen ohne sie gar kein Feld.
+// Anthropic und Bedrock verlangen max_tokens; dort steht MAX_TOKENS_OHNE_GRENZE,
+// und lehnt das Modell den Wert ab, wird einmal mit dem genannten Maximum
+// wiederholt und dieses für den Rest der Laufzeit gemerkt. Denkende Modelle
+// verbrauchen Ausgabe-Token vor der Antwort; eine feste Grenze schnitt sie ab.
+const gelernteGrenze = new Map();
+const grenzSchluessel = (prov, model) => `${prov?.id}\u0000${model}`;
+
+function openaiMaxTokens(prov) {
+  const grenze = clampMaxTokens(undefined, prov);
+  return grenze ? maxTokensFeld(prov, grenze) : {};
+}
+
+function anthropicMaxTokens(prov, model) {
+  return gelernteGrenze.get(grenzSchluessel(prov, model)) ?? clampMaxTokens(undefined, prov) ?? MAX_TOKENS_OHNE_GRENZE;
+}
+
+async function mitGrenzRueckfall(prov, model, body, senden) {
+  try {
+    return await senden(body);
+  } catch (err) {
+    if (!istMaxTokensAblehnung(err) || !(body.max_tokens > MAX_TOKENS_NOTFALL)) throw err;
+    const zweiterWert = grenzeAusAblehnung(err.message, body.max_tokens) ?? MAX_TOKENS_NOTFALL;
+    gelernteGrenze.set(grenzSchluessel(prov, model), zweiterWert);
+    console.warn(`[chat] ${model} via ${prov?.id}: max_tokens ${body.max_tokens} abgelehnt → Wiederholung mit ${zweiterWert}`);
+    return senden({ ...body, max_tokens: zweiterWert });
+  }
+}
+
 // Mistral liefert bei Reasoning `content` als Liste mit thinking-/text-Teilen.
 // Für den Gesprächsverlauf zählt nur der Antworttext; die tool_calls bleiben.
 function normalisiereNachricht(msg) {
@@ -1270,13 +1207,19 @@ function normalisiereNachricht(msg) {
 
 // ── Research-Loop: Anthropic-Format (Direct + Bedrock) ───────────────────────
 
-async function callAnthropicFormat(prov, model, body, keys, ctx) {
+function callAnthropicFormat(prov, model, body, keys, ctx) {
+  return mitGrenzRueckfall(prov, model, body, (b) => callAnthropicFormatEinmal(prov, model, b, keys, ctx));
+}
+
+async function callAnthropicFormatEinmal(prov, model, body, keys, ctx) {
   const t0 = Date.now();
   let data;
   try {
     if (prov.typ === 'bedrock') {
       const client = getBedrockClient(prov.apiKey, prov.region);
-      data = await client.messages.create(body);
+      // Expliziter Timeout: Ohne ihn lehnt das SDK große max_tokens-Werte ohne
+      // Streaming als „dauert länger als 10 Minuten“ ab.
+      data = await client.messages.create(body, { timeout: TIMEOUT_COMPLETION_LANG_MS });
     } else {
       const { response } = await guardedFetch(messagesUrl(prov), {
         method: 'POST',
@@ -1289,7 +1232,7 @@ async function callAnthropicFormat(prov, model, body, keys, ctx) {
           'content-type': 'application/json',
         },
         body: JSON.stringify(body),
-      }, { allowPrivate: prov.allowPrivate === true, timeoutMs: TIMEOUT_COMPLETION_MS });
+      }, { allowPrivate: prov.allowPrivate === true, timeoutMs: TIMEOUT_COMPLETION_LANG_MS });
       const txt = await readLimitedText(response);
       if (!response.ok) throw new Error(`Anthropic API ${response.status}: ${txt.slice(0, 300)}`);
       data = JSON.parse(txt);
@@ -1352,6 +1295,17 @@ function setSlidingCacheBreakpoint(messages) {
   }
 }
 
+// Automatische Verdichtung: wächst der Verlauf über ~70 % des Kontextbudgets,
+// werden ältere Werkzeugergebnisse gekürzt (lib/llm/kontext-budget.js). Kein
+// Rückfragen – nur ein dezenter Hinweis im Fortschritt.
+function verdichteWennNoetig(messages, prov, festZeichen, ctx) {
+  const n = verdichteVerlauf(messages, prov, { festZeichen });
+  if (n > 0) {
+    ctx.onProgress('Ältere Rechercheergebnisse verdichtet');
+    console.log(`[chat] Verlauf verdichtet: ${n} Einträge gekürzt (Kontextbudget)`);
+  }
+}
+
 async function runAnthropicResearchLoop(prov, model, systemPrompt, initialMessages, keys, ctx) {
   const messages = [...initialMessages];
   let lastText = '';
@@ -1379,10 +1333,12 @@ async function runAnthropicResearchLoop(prov, model, systemPrompt, initialMessag
     if (t) ctx.onThinking(t);
   };
 
+  const festZeichen = systemPrompt.length + JSON.stringify(anthropicToolsFor(ctx)).length;
   for (let round = 0; round < MAX_AGENT_ROUNDS; round++) {
+    verdichteWennNoetig(messages, prov, festZeichen, ctx);
     setSlidingCacheBreakpoint(messages);
     const response = await callAnthropicFormat(prov, model, {
-      model, max_tokens: 4096, system: systemParam, tools: anthropicToolsFor(ctx), messages, ...thinkingFields,
+      model, max_tokens: anthropicMaxTokens(prov, model), system: systemParam, tools: anthropicToolsFor(ctx), messages, ...thinkingFields,
     }, keys, ctx);
 
     messages.push({ role: 'assistant', content: response.content });
@@ -1407,9 +1363,10 @@ async function runAnthropicResearchLoop(prov, model, systemPrompt, initialMessag
   if (roundsExhausted) {
     ctx.onProgress('Fasse Rechercheergebnisse zusammen…');
     messages.push({ role: 'user', content: [{ type: 'text', text: FORCE_REPORT_MSG }] });
+    verdichteWennNoetig(messages, prov, festZeichen, ctx);
     setSlidingCacheBreakpoint(messages);
     const response = await callAnthropicFormat(prov, model, {
-      model, max_tokens: 4096, system: systemParam, ...thinkingFields, messages,
+      model, max_tokens: anthropicMaxTokens(prov, model), system: systemParam, ...thinkingFields, messages,
     }, keys, ctx);
     surfaceThinking(response.content);
     const textBlocks = (response.content || []).filter(b => b.type === 'text');
@@ -1429,7 +1386,7 @@ async function callOpenAIChat(prov, model, body, keys, ctx) {
     if (prov.apiKey) headers.Authorization = `Bearer ${prov.apiKey}`;
     const post = (requestBody) => guardedFetch(chatCompletionsUrl(prov), {
       method: 'POST', headers, body: JSON.stringify(requestBody),
-    }, { allowPrivate: prov.allowPrivate === true, timeoutMs: TIMEOUT_COMPLETION_MS });
+    }, { allowPrivate: prov.allowPrivate === true, timeoutMs: TIMEOUT_COMPLETION_LANG_MS });
 
     const reasoningContext = body.tools ? 'tools' : 'plain';
     const { effort: reasoningEffort, probe: reasoningProbe } =
@@ -1497,9 +1454,11 @@ async function runOpenAIResearchLoop(prov, model, systemPrompt, initialMessages,
   let lastText = '';
   let roundsExhausted = true;
 
+  const festZeichen = JSON.stringify(openaiToolsFor(ctx)).length;
   for (let round = 0; round < MAX_AGENT_ROUNDS; round++) {
+    verdichteWennNoetig(messages, prov, festZeichen, ctx);
     const data = await callOpenAIChat(prov, model, {
-      model, ...maxTokensFeld(prov, 4096), messages, tools: openaiToolsFor(ctx),
+      model, ...openaiMaxTokens(prov), messages, tools: openaiToolsFor(ctx),
       ...(openAIPromptCachePolicy({ provider: prov, model }) || {}),
     }, keys, ctx);
 
@@ -1522,8 +1481,9 @@ async function runOpenAIResearchLoop(prov, model, systemPrompt, initialMessages,
   if (roundsExhausted) {
     ctx.onProgress('Fasse Rechercheergebnisse zusammen…');
     messages.push({ role: 'user', content: FORCE_REPORT_MSG });
+    verdichteWennNoetig(messages, prov, festZeichen, ctx);
     const data = await callOpenAIChat(prov, model, {
-      model, ...maxTokensFeld(prov, 4096), messages, tool_choice: 'none', tools: OPENAI_TOOLS,
+      model, ...openaiMaxTokens(prov), messages, tool_choice: 'none', tools: OPENAI_TOOLS,
       ...(openAIPromptCachePolicy({ provider: prov, model }) || {}),
     }, keys, ctx);
     const msg = normalisiereNachricht(data.choices?.[0]?.message);
@@ -1537,22 +1497,25 @@ async function runOpenAIResearchLoop(prov, model, systemPrompt, initialMessages,
 
 async function streamAnthropicDirect(prov, model, prompt, system, keys, onToken, onThinking, viaMcp) {
   const thinkingFields = buildThinkingBodyFields(resolveThinkingPolicy({ model, viaMcp }));
-  const { response: res } = await guardedFetch(messagesUrl(prov), {
-    method: 'POST',
-    headers: {
-      'x-api-key': prov.apiKey,
-      'anthropic-version': ANTHROPIC_VERSION,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model, max_tokens: 4096, system, stream: true, ...thinkingFields,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  }, { allowPrivate: prov.allowPrivate === true, timeoutMs: TIMEOUT_COMPLETION_MS });
-  if (!res.ok) {
-    const err = await readLimitedText(res).catch(() => '');
-    throw new Error(`Anthropic Streaming API ${res.status}: ${err.slice(0, 300)}`);
-  }
+  const res = await mitGrenzRueckfall(prov, model, {
+    model, max_tokens: anthropicMaxTokens(prov, model), system, stream: true, ...thinkingFields,
+    messages: [{ role: 'user', content: prompt }],
+  }, async (body) => {
+    const { response } = await guardedFetch(messagesUrl(prov), {
+      method: 'POST',
+      headers: {
+        'x-api-key': prov.apiKey,
+        'anthropic-version': ANTHROPIC_VERSION,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    }, { allowPrivate: prov.allowPrivate === true, timeoutMs: TIMEOUT_COMPLETION_LANG_MS });
+    if (!response.ok) {
+      const err = await readLimitedText(response).catch(() => '');
+      throw new Error(`Anthropic Streaming API ${response.status}: ${err.slice(0, 300)}`);
+    }
+    return response;
+  });
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -1582,10 +1545,10 @@ async function streamAnthropicDirect(prov, model, prompt, system, keys, onToken,
 async function streamBedrock(prov, model, prompt, system, keys, onToken, onThinking, viaMcp) {
   const thinkingFields = buildThinkingBodyFields(resolveThinkingPolicy({ model, viaMcp }));
   const client = getBedrockClient(prov.apiKey, prov.region);
-  const stream = await client.messages.create({
-    model, max_tokens: 4096, system, stream: true, ...thinkingFields,
+  const stream = await mitGrenzRueckfall(prov, model, {
+    model, max_tokens: anthropicMaxTokens(prov, model), system, stream: true, ...thinkingFields,
     messages: [{ role: 'user', content: prompt }],
-  });
+  }, (body) => client.messages.create(body, { timeout: TIMEOUT_COMPLETION_LANG_MS }));
   const usage = { input_tokens: null, output_tokens: null };
   for await (const evt of stream) {
     if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') onToken(evt.delta.text);
@@ -1600,7 +1563,7 @@ async function streamOpenAI(prov, model, prompt, system, keys, onToken, viaMcp) 
   const headers = { 'content-type': 'application/json' };
   if (prov.apiKey) headers.Authorization = `Bearer ${prov.apiKey}`;
   const baseBody = {
-    model, ...maxTokensFeld(prov, 4096), stream: true,
+    model, ...openaiMaxTokens(prov), stream: true,
     stream_options: { include_usage: true },
     messages: [
       { role: 'system', content: system },
@@ -1609,7 +1572,7 @@ async function streamOpenAI(prov, model, prompt, system, keys, onToken, viaMcp) 
   };
   const post = (requestBody) => guardedFetch(chatCompletionsUrl(prov), {
     method: 'POST', headers, body: JSON.stringify(requestBody),
-  }, { allowPrivate: prov.allowPrivate === true, timeoutMs: TIMEOUT_COMPLETION_MS });
+  }, { allowPrivate: prov.allowPrivate === true, timeoutMs: TIMEOUT_COMPLETION_LANG_MS });
 
   // Synthese hat keine Tools ('plain'-Kontext) — derselbe Lernmechanismus wie
   // im Research-Loop (callOpenAIChat), siehe Kommentar dort.

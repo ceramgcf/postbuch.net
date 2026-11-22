@@ -63,6 +63,12 @@ export default function ModelSelector({
   // Ein reiner Embedding-Dienst taugt für keine Sprachmodell-Aufgabe.
   const aktiveProvider = (providers || []).filter((p) => p.aktiv !== false && !p.nurEmbedding);
   const prov = aktiveProvider.find((p) => p.id === providerId);
+  // Der gewählte Provider gehört immer in die Auswahl, auch wenn er gerade
+  // inaktiv ist (etwa die lokale KI beim Laden). Fehlt er, zeigt ein <select>
+  // stillschweigend die erste Option – dann steht dort ein falscher Anbieter.
+  const gewaehlt = (providers || []).find((p) => p.id === providerId);
+  const providerOptionen = !providerId || prov ? aktiveProvider
+    : [gewaehlt ? { ...gewaehlt, label: `${gewaehlt.label} (inaktiv)` } : { id: providerId, label: providerId }, ...aktiveProvider];
 
   // Kennt irgendein Provider dieses Modell? Nur dann darf gewarnt werden.
   const listeVorhanden = aktiveProvider.some((p) => (p.models || []).length > 0);
@@ -126,7 +132,7 @@ export default function ModelSelector({
           <p className="text-xs text-muted-foreground">{cls.desc}</p>
         </div>
 
-        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap min-w-0 max-w-full">
           {laedt ? (
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <Spinner className="h-3.5 w-3.5" />Lade…
@@ -146,13 +152,13 @@ export default function ModelSelector({
                 className="h-8 text-xs rounded-md border border-input bg-background px-2 py-0 cursor-pointer"
               >
                 {!providerId && <option value="">Provider wählen…</option>}
-                {aktiveProvider.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+                {providerOptionen.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
               </select>
               <input
                 value={model}
                 onChange={(e) => handleFreitext(providerId, e.target.value)}
                 placeholder="Modell-ID eingeben…"
-                className="h-8 w-[220px] text-xs rounded-md border border-input bg-background px-2 font-mono"
+                className="h-8 w-[220px] min-w-0 max-w-full text-xs rounded-md border border-input bg-background px-2 font-mono"
               />
               {modelleDesProviders.length > 0 && (
                 <Button variant="ghost" size="icon" className="h-7 w-7" title="Aus Liste wählen"
@@ -166,7 +172,7 @@ export default function ModelSelector({
               <select
                 value={auswahlwert}
                 onChange={(e) => handleAuswahl(e.target.value)}
-                className="h-8 max-w-[300px] text-xs rounded-md border border-input bg-background px-2 py-0 cursor-pointer"
+                className="h-8 min-w-0 flex-1 sm:flex-none max-w-[300px] text-xs rounded-md border border-input bg-background px-2 py-0 cursor-pointer"
               >
                 {/* Gespeicherter Wert, den keine Liste kennt (auch nicht als
                     Alias): sichtbar halten, statt ihn beim ersten Rendern

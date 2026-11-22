@@ -29,7 +29,7 @@
 import { appLog } from '../app-log.js';
 import { callLLM, parseJsonFromText, resolveTierModelConfig } from '../lib/llm.js';
 import { kanonisiere } from '../lib/db-enums.js';
-import { getAktiveTaxonomie } from '../lib/taxonomie.js';
+import { getAktiveTaxonomie, istPflichtRechnung } from '../lib/taxonomie.js';
 import { toDate, toNumeric, toBetrag, MAX_BETRAG, MAX_FAKTOR } from '../lib/coerce.js';
 import { buildRepairPrompt } from '../prompts/repair.js';
 
@@ -76,19 +76,40 @@ const PIPELINE_FACHBLOCK = {
  *
  * @returns {string|null} Fehlermeldung für Modell-Fallback bzw. Pipeline-Abbruch
  */
-export function pruefeFachblockStruktur(data, taxonomie) {
-  if (!data || typeof data !== 'object') return 'Extraktion ist kein JSON-Objekt';
-  if (typeof data.istRechnung !== 'boolean') return 'Pflichtfeld "istRechnung" fehlt oder ist kein Boolean';
-
+function erwarteterFachblock(data, taxonomie) {
   const dokumentart = (taxonomie?.dokumentarten || [])
     .find((d) => d.code === data.dokumentart);
   const istAktiviert = (taxonomie?.aktivierungen || []).some((a) =>
     a.lebensbereich_code === data.lebensbereich
     && a.dokumentart_code === data.dokumentart);
   const pipeline = istAktiviert ? dokumentart?.spezial_pipeline : null;
-  const fachblock = PIPELINE_FACHBLOCK[pipeline]
-    || (data.istRechnung ? 'generischeRechnung' : null);
+  return PIPELINE_FACHBLOCK[pipeline]
+    || (data.istRechnung || istPflichtRechnung(data.dokumentart) ? 'generischeRechnung' : null);
+}
 
+const istObjekt = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * Manche Modelle benennen den Fachblock nach der erkannten Dokumentart (etwa
+ * `laborrechnung`) statt nach dem erwarteten Block. Fehlt der erwartete Block
+ * und liegt unter dem Code der Dokumentart ein Objekt, wird es umgehängt.
+ * Ändert `data` in place; gibt true zurück, wenn umgehängt wurde.
+ */
+export function ordneFachblockZu(data, taxonomie) {
+  if (!istObjekt(data) || typeof data.dokumentart !== 'string') return false;
+  const fachblock = erwarteterFachblock(data, taxonomie);
+  if (!fachblock || fachblock === data.dokumentart || istObjekt(data[fachblock])) return false;
+  if (!istObjekt(data[data.dokumentart])) return false;
+  data[fachblock] = data[data.dokumentart];
+  delete data[data.dokumentart];
+  return true;
+}
+
+export function pruefeFachblockStruktur(data, taxonomie) {
+  if (!data || typeof data !== 'object') return 'Extraktion ist kein JSON-Objekt';
+  if (typeof data.istRechnung !== 'boolean') return 'Pflichtfeld "istRechnung" fehlt oder ist kein Boolean';
+
+  const fachblock = erwarteterFachblock(data, taxonomie);
   if (!fachblock) return null;
 
   const block = data[fachblock];
@@ -102,6 +123,30 @@ export function pruefeFachblockStruktur(data, taxonomie) {
     return `Pflicht-Fachblock "${fachblock}" ist unvollständig; fehlend: ${fehlend.join(', ')}`;
   }
   return null;
+}
+
+/**
+ * Legt einen fehlenden oder unvollständigen Pflicht-Fachblock mit allen
+ * Feldern auf null an, damit das Dokument gespeichert und der Block in der
+ * Oberfläche nachgetragen werden kann. Ändert `data` in place.
+ *
+ * @returns {{ fachblock: string, fehlend: string[] }|null} null, wenn nichts fehlte
+ */
+export function ergaenzeFachblock(data, taxonomie) {
+  if (!istObjekt(data)) return null;
+  if (istPflichtRechnung(data.dokumentart)) data.istRechnung = true;
+  if (typeof data.istRechnung !== 'boolean') {
+    // Ohne Angabe gilt ein vorhandener Rechnungsblock als Hinweis.
+    data.istRechnung = istObjekt(data.generischeRechnung);
+  }
+  const fachblock = erwarteterFachblock(data, taxonomie);
+  if (!fachblock) return null;
+  if (!istObjekt(data[fachblock])) data[fachblock] = {};
+  const block = data[fachblock];
+  const fehlend = FACHBLOCK_FELDER[fachblock]
+    .filter((feld) => !Object.prototype.hasOwnProperty.call(block, feld));
+  for (const feld of fehlend) block[feld] = null;
+  return fehlend.length ? { fachblock, fehlend } : null;
 }
 
 // Unterstrich-Felder, die die App selbst an das Ergebnis hängt (lib/llm.js:774).
@@ -478,21 +523,26 @@ export async function pruefeUndRepariere(rohdaten, settings, meta = {}) {
     if (rohdaten?.[k] !== undefined) data[k] = rohdaten[k];
   }
 
-  // Normalerweise hat analyzeDocument diesen Fehler bereits als Modellfehler
-  // behandelt und das nächste Kettenglied versucht. Diese zweite Schranke
-  // verhindert auch bei künftigen direkten Aufrufern einen leeren DB-Fachblock.
+  // analyzeDocument hat dem Modell bereits einen gezielten zweiten Versuch
+  // gegeben. Fehlt der Fachblock danach noch, wird er leer angelegt: Das
+  // Dokument wird gespeichert, der Block ist nachzutragen.
+  const reparaturen = [];
   const fachblockFehler = pruefeFachblockStruktur(data, taxonomie);
   if (fachblockFehler) {
-    const fatal = { pfad: 'fachblock', regel: 'FACHBLOCK', nullbar: false, wert: fachblockFehler };
-    appLog('ERROR', 'extract-validator', fachblockFehler, meta);
-    return { data, repariert: false, reparaturen: [], fatal };
+    const ergaenzt = ergaenzeFachblock(data, taxonomie);
+    if (ergaenzt) {
+      reparaturen.push({
+        feld: ergaenzt.fachblock, regel: 'FACHBLOCK', roh: kuerzeWert(fachblockFehler),
+        ergebnis: 'ergaenzt', neu: null, fehlend: ergaenzt.fehlend,
+      });
+      appLog('WARN', 'extract-validator', `${fachblockFehler} – leer angelegt`, meta);
+    }
   }
 
   const verstoesse = validiere(data, lxdCodes);
-  const reparaturen = [];
 
   if (!sollRepariert(verstoesse)) {
-    return { data, repariert: false, reparaturen, fatal: null };
+    return { data, repariert: reparaturen.length > 0, reparaturen, fatal: null };
   }
 
   console.log(`[extract-validator] ${verstoesse.length} Verstoß/Verstöße: ${verstoesse.map((v) => `${v.pfad}/${v.regel}`).join(', ')}`);

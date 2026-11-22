@@ -122,7 +122,44 @@ function kandidat(roh, rang) {
   const waehrung = roh.waehrung == null ? 'USD' : textFeld(roh.waehrung, 8);
   if (waehrung !== 'USD') return null;   // buildCostMap rechnet ausschließlich in USD
 
-  return { rang, providerId, providerTyp, model, label: label || model, notiz: notiz || '', preisIn, preisOut, preisCacheWrite, preisCacheRead, waehrung };
+  // Nur für Embedding-Modelle: Arbeitsspeicher, den das Gerät mindestens
+  // haben muss (eingebauter Dienst), und die modellabhängigen Schwellen.
+  let ramMinMb = null;
+  if (roh.ramMinMb != null) {
+    ramMinMb = zahlImBereich(roh.ramMinMb, 0, 1_000_000);
+    if (ramMinMb == null || !Number.isInteger(ramMinMb)) return null;
+  }
+  const schwellen = embeddingSchwellen(roh.schwellen);
+  if (schwellen === false) return null;
+
+  return {
+    rang, providerId, providerTyp, model, label: label || model, notiz: notiz || '', preisIn, preisOut,
+    preisCacheWrite, preisCacheRead, waehrung, ramMinMb, schwellen,
+  };
+}
+
+/** Kosinus-Felder der Schwellen eines Embedding-Modells (alle optional). */
+export const SCHWELLEN_FELDER = ['grundrauschen', 'unsinnMax', 'voll', 'duplikat'];
+
+/**
+ * Schwellen eines Embedding-Modells aus dem Benchmark: grundrauschen (Median
+ * unpassender Paare), unsinnMax (bester Treffer sinnloser Anfragen; untere
+ * Grenze der Suche und 0 % der Inhaltsanzeige), voll (100 % der Anzeige),
+ * duplikat (Vorfilter der Duplikaterkennung). null, wenn keine angegeben;
+ * false bei ungültigen Werten (Kandidat wird verworfen).
+ */
+function embeddingSchwellen(roh) {
+  if (roh == null) return null;
+  if (typeof roh !== 'object' || Array.isArray(roh)) return false;
+  const erg = {};
+  for (const f of SCHWELLEN_FELDER) {
+    if (roh[f] == null) continue;
+    const v = zahlImBereich(roh[f], 0, 0.999);
+    if (v == null) return false;
+    erg[f] = v;
+  }
+  if (erg.unsinnMax != null && erg.voll != null && erg.voll <= erg.unsinnMax) return false;
+  return Object.keys(erg).length ? erg : null;
 }
 
 /**

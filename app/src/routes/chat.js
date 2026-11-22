@@ -307,14 +307,12 @@ router.post('/conversations/:id/messages', async (req, res) => {
         const titleResult = await callLLM(
           titleModel,
           `Erstelle einen kurzen Gesprächstitel (3–6 Wörter) auf Deutsch für diese Anfrage:\n"${message.trim().slice(0, 300)}"\nNur den Titel ausgeben, keine Anführungszeichen, kein Satzzeichen am Ende.`,
-          // 1024 statt vormals 25/200: Reasoning-fähige lokale Modelle (z. B. LM
-          // Studio mit aktiviertem "Reasoning") verbrauchen einen Teil des
-          // Budgets für den Denkblock, bevor der eigentliche Titel kommt. Ein
-          // kompletter <think>-Block wird ohnehin serverseitig herausgefiltert
-          // (lib/llm/providers/openai.js) — das Budget muss nur noch für "Denken
-          // + Titel" statt nur "Titel" reichen. Diese Anfrage ist kurz und
-          // selten (einmal pro Konversation), der Mehrverbrauch ist irrelevant.
-          { maxTokens: 1024, system: 'Antworte ausschließlich mit dem Titel, ohne weitere Erklärung.' },
+          // Ohne maxTokens (Grenze des Providers, siehe MAX_TOKENS_OHNE_GRENZE):
+          // Denkende Modelle verbrauchen Ausgabe-Token, bevor der Titel kommt;
+          // jede feste Grenze kann dafür zu knapp sein. Ein kompletter
+          // <think>-Block wird serverseitig herausgefiltert
+          // (lib/llm/providers/openai.js).
+          { system: 'Antworte ausschließlich mit dem Titel, ohne weitere Erklärung.' },
           titleSettings,
           { kategorie: 'chat_title' }
         );

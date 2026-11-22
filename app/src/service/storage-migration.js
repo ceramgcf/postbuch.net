@@ -105,6 +105,11 @@ const LOCK_KEY_2 = 0x4d494752; // 'MIGR'
 const MAX_PARALLEL = 2;   // ein Nextcloud auf einem Pi geht bei mehr in die Knie
 const MAX_VERSUCHE = 3;
 
+// Gründe, unter denen dieses Modul die Pipeline anhält. Aufgehoben wird immer
+// nur der eigene (jobs/pipeline-pause.js).
+const PAUSE_UMZUG = 'Ablage-Umzug läuft';
+const PAUSE_WECHSEL = 'Backend-Wechsel';
+
 function sha256Hex(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
 }
@@ -207,6 +212,25 @@ export async function getOffenenLauf() {
       ORDER BY created_at DESC LIMIT 1`
   );
   return r.rows[0] ? getRun(r.rows[0].id) : null;
+}
+
+/**
+ * Sperrt den Wechsel des lokalen Ablageordners, solange ein Umzug mit der
+ * lokalen Ablage als Quelle oder Ziel Dateien kopiert hat und noch nicht
+ * aufgeräumt oder abgebrochen ist: Der Host-Agent hielte die Anwendung mitten
+ * im Lauf an und legte die Ablage in einen Ordner, den der Lauf nicht kennt.
+ * Vorbereitung und Trockenlauf sperren nicht – beim ersten Festlegen des
+ * Ordners läuft der Assistent bereits.
+ */
+export async function umzugSperrtOrdnerwechsel() {
+  const r = await pool.query(
+    `SELECT 1 FROM postbuch._storage_migration_runs
+      WHERE status IN ('laeuft','pausiert','abgeschlossen','abgeschlossen_mit_resten')
+        AND cleaned_at IS NULL
+        AND 'lokal' IN (src_backend, dst_backend)
+      LIMIT 1`
+  );
+  return r.rowCount > 0;
 }
 
 /** Der jüngste offene Lauf für genau dieses (Quelle,Ziel)-Paar — reused von
@@ -559,7 +583,7 @@ async function mitMigrationsLock(runId, fn) {
     if (freigegeben) return;
     freigegeben = true;
     _aktiverLauf = null;
-    pipelineQueue.resume();
+    pipelineQueue.resume(PAUSE_UMZUG);
     try { await lockClient.query('SELECT pg_advisory_unlock($1, $2)', [LOCK_KEY_1, LOCK_KEY_2]); } catch { /* Verbindung ggf. tot */ }
     lockClient.release();
   };
@@ -612,7 +636,7 @@ export async function starteLauf(runId) {
       await tracker.awaitPersisted(jobId);
       await updateRun(runId, { status: 'laeuft', job_id: jobId, error_message: null });
       // Kein Scan darf ins Quell-Backend schreiben, während umgeschaltet wird.
-      pipelineQueue.pause('Ablage-Migration läuft');
+      pipelineQueue.pause(PAUSE_UMZUG);
     } catch (err) {
       tracker.fail(jobId, sichererFehler(err));
       await freigeben();
@@ -963,28 +987,68 @@ async function itemHolen(runId, postid) {
   return r.rows[0];
 }
 
-/** „Erneut versuchen" — Zeile zurück auf offen. */
+/**
+ * Welche Item-Zustände eine Restlisten-Aktion anfassen darf. Die Oberfläche
+ * bietet die Aktionen nur für Zeilen der Restliste an; die Routen nehmen aber
+ * jede Dokumentnummer des Laufs entgegen. Ohne diese Prüfung ließe sich ein
+ * erfolgreich übertragenes Dokument „ohne Datei weiterführen" – der Datensatz
+ * verlöre den Verweis auf seine intakte Datei.
+ */
+const REST_AKTIONEN = {
+  erneut: REST_STATUS,
+  'ohne-datei': REST_STATUS,
+  // „Ohne Datei weiterführen" setzt den Zustand auf ohne_datei; erst danach
+  // lässt sich der Eintrag löschen.
+  loeschen: [...REST_STATUS, 'ohne_datei'],
+};
+
+export function restAktionErlaubt(aktion, status) {
+  return (REST_AKTIONEN[aktion] ?? []).includes(status);
+}
+
+/** Item für eine Restlisten-Aktion: Lauf ruht, Zustand passt zur Aktion. */
+async function restItemHolen(runId, postid, aktion) {
+  if (_aktiverLauf) {
+    const e = new Error('Während der Lauf arbeitet, lässt sich die Restliste nicht bearbeiten. Bitte zuerst anhalten.');
+    e.statusCode = 409; throw e;
+  }
+  const it = await itemHolen(runId, postid);
+  if (!restAktionErlaubt(aktion, it.status)) {
+    const e = new Error('Dieser Eintrag steht nicht (mehr) in der Restliste.');
+    e.statusCode = 409; throw e;
+  }
+  return it;
+}
+
+/** „Erneut versuchen" – Zeile zurück auf offen. */
 export async function restErneutVersuchen(runId, postid) {
-  await itemHolen(runId, postid);
+  await restItemHolen(runId, postid, 'erneut');
   await updateItem(runId, postid, { status: 'offen', versuche: 0, fehler_text: null });
   return { ok: true };
 }
 
 /**
- * „Ohne Datei weiterführen" — storage_id auf NULL. Die App kennt den Zustand
+ * „Ohne Datei weiterführen" – storage_id auf NULL. Die App kennt den Zustand
  * (hat_pdf), der Datensatz bleibt vollständig durchsuchbar, nur ohne PDF.
+ * Nur solange der Datensatz noch in der Quelle dieses Laufs liegt: Wurde er
+ * inzwischen übertragen oder anderweitig umgehängt, bleibt er unberührt.
  */
 export async function restOhneDatei(runId, postid) {
-  await itemHolen(runId, postid);
-  await pool.query(
+  await restItemHolen(runId, postid, 'ohne-datei');
+  const run = await getRun(runId);
+  const upd = await pool.query(
     `UPDATE postbuch.postbuch
         SET storage_id = NULL, onedrive_id = NULL,
             storage_filename = NULL, onedrive_filename = NULL,
             storage_modified = NULL, onedrive_modified = NULL,
             link = NULL
-      WHERE postid = $1`,
-    [postid]
+      WHERE postid = $1 AND storage_backend = $2`,
+    [postid, run.src_backend]
   );
+  if (upd.rowCount !== 1) {
+    const e = new Error('Der Datensatz liegt nicht mehr in der Quelle dieses Laufs und bleibt unverändert.');
+    e.statusCode = 409; throw e;
+  }
   await updateItem(runId, postid, { status: 'ohne_datei', fehler_text: null });
   appLog('WARN', 'storage-migration',
     `${postid}: ohne Datei weitergeführt (Migration)`, { entity: 'postbuch', entityId: postid });
@@ -993,7 +1057,7 @@ export async function restOhneDatei(runId, postid) {
 
 /** „DB-Eintrag löschen" — nur mit confirm, und nur solange keine Datei dranhängt. */
 export async function restEintragLoeschen(runId, postid) {
-  const it = await itemHolen(runId, postid);
+  const it = await restItemHolen(runId, postid, 'loeschen');
   const { client, document } = await oeffneSichereDokumentloeschung(postid);
   try {
     // Unter demselben Parent-Lock erneut prüfen; eine Vorabprüfung außerhalb
@@ -1020,13 +1084,25 @@ export async function restEintragLoeschen(runId, postid) {
   return { ok: true };
 }
 
-/** „Trotzdem abschließen" — Lauf beenden, Restliste bleibt einsehbar. */
+/** „Trotzdem abschließen" – Lauf beenden, Restliste bleibt einsehbar. */
 export async function laufAbschliessen(runId) {
   const run = await getRun(runId);
   if (!run) { const e = new Error('Lauf nicht gefunden'); e.statusCode = 404; throw e; }
-  const reste = await getRestliste(runId);
+  if (_aktiverLauf) {
+    const e = new Error('Der Lauf arbeitet gerade. Bitte zuerst anhalten.'); e.statusCode = 409; throw e;
+  }
+  if (run.status === 'abgebrochen') {
+    const e = new Error('Dieser Lauf wurde zurückgebaut und lässt sich nicht abschließen.'); e.statusCode = 409; throw e;
+  }
+  // Auch nie versuchte oder nur halb kopierte Einträge sind Reste: „abgeschlossen"
+  // ohne Zusatz hieße sonst, es sei alles übertragen.
+  const unerledigt = (await pool.query(
+    `SELECT count(*)::int AS n FROM postbuch._storage_migration_items
+      WHERE run_id = $1 AND status = ANY($2)`,
+    [runId, [...new Set([...REST_STATUS, ...OFFEN_STATUS])]]
+  )).rows[0].n;
   await updateRun(runId, {
-    status: reste.length > 0 ? 'abgeschlossen_mit_resten' : 'abgeschlossen',
+    status: unerledigt > 0 ? 'abgeschlossen_mit_resten' : 'abgeschlossen',
     completed_at: new Date(),
   });
   return getRun(runId);
@@ -1071,7 +1147,7 @@ export async function schalteBackendUm(ziel) {
   }
 
   // Keine Pipeline darf mitten im Umschalten schreiben.
-  pipelineQueue.pause('Backend-Wechsel');
+  pipelineQueue.pause(PAUSE_WECHSEL);
   try {
     const leer = await pipelineQueue.warteAufLeerlauf(60000);
     if (!leer) {
@@ -1081,7 +1157,7 @@ export async function schalteBackendUm(ziel) {
 
     // Nachzügler-Gate: MUSS innerhalb des pausierten Fensters laufen, sonst
     // ist es nur ein UX-Hinweis statt einer echten Schranke — zwischen einer
-    // Prüfung vor pipelineQueue.pause() und dem UPDATE unten könnte die
+    // Prüfung vor dem Anhalten der Pipeline und dem UPDATE unten könnte die
     // Pipeline noch ein weiteres Dokument in die Quelle geschrieben haben.
     // Betrifft nur den Lauf, dessen Ziel gerade aktiv werden soll — ein Lauf
     // in die andere Richtung ist von diesem Umschalten nicht betroffen.
@@ -1114,7 +1190,7 @@ export async function schalteBackendUm(ziel) {
     }
     appLog('WARN', 'storage-migration', `Aktives Ablage-Backend umgeschaltet auf "${ziel}"`);
   } finally {
-    pipelineQueue.resume();
+    pipelineQueue.resume(PAUSE_WECHSEL);
   }
   return { ok: true, backend: ziel };
 }
@@ -1488,7 +1564,7 @@ export async function rolleLaufZurueck(runId, erwarteteAnzahl) {
       // ein await, in dem sich der Lauf-Status geändert haben kann.
       pruefeRueckbaubar(await getRun(runId));
       // Kein Scan darf mitten im Rückbau in eine der beiden Ablagen schreiben.
-      pipelineQueue.pause('Migrations-Rückbau');
+      pipelineQueue.pause(PAUSE_UMZUG);
 
       let zurueckgebaut = 0, uebersprungen = 0;
       for (const k of vorschau.alle) {

@@ -13,28 +13,75 @@ Aktenverzeichnis. Das Ergebnis ist in zwei Registerkarten geteilt:
 ![Akten-Symbol](icons/folder-open.svg) **Akten** – beide werden bei jeder Suche
 parallel abgefragt, die Trefferzahl steht am Reiter.
 
-### Zwei Modi
+### Wie die Suche findet
 
-| Modus                                                   | Was passiert                                                                                                                              | Grenze                                     |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| ![Volltext-Symbol](icons/search.svg) **Volltext**       | PostgreSQL-Volltextsuche mit deutscher Wortstammerkennung über Betreff, Zusammenfassung, Kontakt, Schlagwörter, fremdes Zeichen und Notiz | 50 Treffer                                 |
-| ![Semantisch-Symbol](icons/sparkles.svg) **Semantisch** | Vektorsuche über die Embeddings der Dokumente – findet inhaltlich Ähnliches, auch ohne wörtliche Übereinstimmung                          | 20 pro Seite, „mehr laden" blättert weiter |
+Jede Suche läuft auf zwei Wegen zugleich. Das Ergebnis ist eine gemeinsame
+Liste, die relevantesten Treffer stehen oben:
 
-Der Volltextmodus sucht in den **Metadaten**, nicht im PDF-Inhalt: „Kraftfahrt"
-findet auch „Kraftfahrzeugversicherung", aber ein Wort, das nur mitten im
-gescannten Brief steht und weder in Betreff noch Zusammenfassung auftaucht,
-findet er nicht. Genau dafür ist der semantische Modus da – er vergleicht die
-Bedeutung der Anfrage mit der Bedeutung des Dokuments. Mit dem Suchbegriff
-„Einrenken" findet er auch eine Rechnung, in der nur „Chiropraktik" steht.
+- **Wortlaut:** Die Suchwörter werden in Betreff, Zusammenfassung, Kontakt,
+  Schlagwörtern, fremdem Zeichen und Notiz gesucht – nach Wortstamm
+  („Rechnungen“ findet „Rechnung“) und ab drei Buchstaben auch als Wortteil
+  („Versicherung“ findet „Hausratversicherung“). Es müssen nicht alle Wörter
+  vorkommen. Seltene Wörter zählen mehr als häufige: Bei „Rechnung Zahnarzt“
+  wiegt „Zahnarzt“ viel mehr, weil fast jedes zweite Dokument „Rechnung“
+  enthält. Gezählt wird über Dokumente und Akten zusammen, ein Wort wiegt in
+  beiden Registerkarten gleich. Füllwörter wie „der“ oder „mein“ zählen
+  nicht. Wörter, die weder in Dokumenten noch in Akten vorkommen, drücken den
+  Wert anteilig: Sind zwei von drei
+  Suchwörtern nirgends zu finden, erreicht ein Treffer höchstens 33 %. Steht
+  die ganze Eingabe genau so im Dokument, etwa ein Aktenzeichen, kommt er ganz
+  nach vorn.
+- **Inhalt:** Die Bedeutung der Anfrage wird mit der Bedeutung der Dokumente
+  verglichen. So erscheinen auch Dokumente, die das Thema mit anderen Worten
+  beschreiben.
+
+#### Reihenfolge und Trefferwerte
+
+Unter jedem Treffer stehen bis zu drei Werte als kleine Pillen; ein Balken
+füllt sie entsprechend dem Prozentwert:
+
+- ![Übereinstimmung-Symbol](icons/target.svg) **Übereinstimmung:** wie gut der
+  Treffer insgesamt zur Anfrage passt, aus Wörtern und Inhalt zusammen. Die
+  Liste ist danach sortiert; die Pille steht ganz links und hat den kräftigsten
+  Balken. Was auf beiden Wegen passt, steht oben. Stimmen nur die Wörter, das
+  Dokument handelt aber von etwas anderem, bleibt die Übereinstimmung deutlich
+  unter 100 %. Steht eine Eingabe aus mehreren Teilen genau so im Dokument,
+  etwa ein Aktenzeichen, sind es 100 %.
+- **Wörter:** welcher Anteil der Suchwörter im Dokument vorkommt, auch als
+  Wortteil, gewichtet nach Seltenheit. Enthält ein Dokument bei „Unfall 2024“
+  nur das seltene „Unfall“, steht dort etwa „Wörter 87 %“. Steht die ganze
+  Eingabe genau so im Dokument, sind es 100 %. Kommt keines vor, steht dort
+  ausgegraut „keine Wörter“.
+- ![Inhalt-Symbol](icons/sparkles.svg) **Inhalt:** wie ähnlich die Bedeutung
+  des Dokuments der Anfrage ist, auf der Skala des Modells: 0 % entspricht
+  der Ähnlichkeit, die das Modell auch für sinnlose Anfragen liefert, 100 %
+  einem sehr gut passenden Treffer. Für die empfohlenen Embedding-Modelle sind
+  die Eckwerte gemessen (aus den [Empfehlungen](ki-provider.md#empfehlungen)),
+  für andere gelten Startwerte, die sich unter
+  [Embeddings](ki-provider.md#suchschwellen) anpassen lassen. Liegt die
+  Ähnlichkeit so niedrig wie bei sinnlosen Anfragen, ist die Pille
+  ausgegraut.
+
+Je Registerkarte zeigt die Suche zunächst die gut passenden Treffer,
+höchstens 50; gibt es mehr, steht am Reiter zum Beispiel „50+“. Beim Scrollen
+ans Listenende lädt sie weitere nach. Unter der Linie „Weniger passende
+Treffer“ folgen Dokumente mit geringerer Übereinstimmung. Die Liste endet, wo
+die Treffer nicht mehr zur Anfrage passen. Eine Anfrage ohne Sinn liefert
+deshalb gar keine inhaltlichen Treffer.
+
+Beide Wege arbeiten mit den **Metadaten** des Dokuments, nicht mit dem
+PDF-Inhalt: Ein Wort, das nur mitten im gescannten Brief steht und weder in
+Betreff noch Zusammenfassung auftaucht, findet die Suche nicht.
 
 > [!CAUTION]
 >
-> Semantische Suche setzt ein eingerichtetes **Embedding** voraus, standardmäßig
-> den [eingebauten Dienst](ki-provider.md#der-eingebaute-embedding-dienst).
-> Ohne Embedding bleibt nur Volltext. Außerdem
-> werden nur Dokumente gefunden, deren Embedding mit dem _aktuell_ eingestellten
-> Modell erzeugt wurde – nach einem Modellwechsel muss neu eingebettet werden,
-> sonst fehlen alte Dokumente still im Ergebnis.
+> Die Suche nach dem Inhalt setzt ein eingerichtetes **Embedding** voraus,
+> standardmäßig den
+> [eingebauten Dienst](ki-provider.md#der-eingebaute-embedding-dienst). Ist es
+> nicht verfügbar, zeigt die Suche nur Treffer mit passendem Wortlaut und sagt
+> das über der Liste. Außerdem werden über den Inhalt nur Dokumente gefunden,
+> deren Embedding mit dem _aktuell_ eingestellten Modell erzeugt wurde – nach
+> einem Modellwechsel muss neu eingebettet werden.
 
 > [!TIP]
 >
@@ -58,8 +105,8 @@ als Nummerneingabe:
   ![Akten-Symbol](icons/folder-open.svg) **Akten** um.
 
 Bei einer Nummerneingabe wird der ![Archiv-Symbol](icons/archive.svg)
-Historisch-Filter bewusst ignoriert und die semantische Suche gar nicht erst
-angestoßen: Wer eine Nummer eintippt, will genau dieses Objekt sehen.
+Historisch-Filter bewusst ignoriert und die Suche nach dem Inhalt gar nicht
+erst angestoßen: Wer eine Nummer eintippt, will genau dieses Objekt sehen.
 
 Kommst du über den ![Zurück-Symbol](icons/arrow-left.svg) Zurück-Button in die
 Suche zurück, springt sie **nicht** erneut automatisch weiter – sonst säßest du
@@ -102,7 +149,7 @@ aber auch:
 Der Assistent bekommt nicht deine ganze Datenbank vorgelegt, sondern
 **Werkzeuge**, mit denen er sich selbst holt, was er braucht:
 
-- **Recherchieren** – Dokumente semantisch und per Volltext durchsuchen,
+- **Recherchieren** – Dokumente mit derselben Suche wie im Suchfeld finden,
   Metadaten eines Dokuments abrufen, Akten durchsuchen, eine Akte samt
   Dokumentliste laden, Wiedervorlagen und Fälligkeiten auflisten.
 - **Bedienung erklären** – passende Abschnitte der eingebauten Hilfe semantisch
@@ -232,8 +279,7 @@ bestehen und sind über Rückgängig zurücknehmbar.
 ## Was wähle ich wann?
 
 - **Nummer bekannt** → Suchfeld, Nummer eintippen, drei Sekunden warten.
-- **Stichwort bekannt** → Volltextsuche.
-- **Nur das Thema bekannt** → semantische Suche.
+- **Stichwort oder Thema bekannt** → Suche; sie findet beides in einer Liste.
 - **Frage statt Suche** → Assistent. Er ist langsamer und kostet KI-Aufrufe,
   aber er liest die Dokumente wirklich.
 - **Große Akte anlegen** → Assistent, weil er die Dokumente für dich automatisch

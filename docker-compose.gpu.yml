@@ -1,0 +1,16 @@
+# docker-compose.gpu.yml – lokale KI auf einer NVIDIA-Grafikkarte.
+#
+# Der Host-Agent nimmt diese Datei nur in COMPOSE_FILE auf, wenn er eine
+# NVIDIA-GPU samt Container-Toolkit erkannt hat und die CUDA-Bedingungen im
+# Installer akzeptiert wurden. Gleicher llama.cpp-Build wie die CPU-Variante.
+
+services:
+  llm:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda-b12182@sha256:77e84a5d6d885c07afbda0ae2fe48f4943f5181c8c8fe3b2e4231e8a1498bb24
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

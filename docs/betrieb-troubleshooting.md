@@ -65,10 +65,44 @@ an ist,
 Nach der Fehlersuche wieder ausschalten: Die Protokolle im Ordner `_debug`
 sammeln sich sonst ungebremst an.
 
+## Der Stack
+
+Unter **Einstellungen → Stack** (nur Administratoren) stehen alle Docker-Dienste
+dieser Instanz mit ihrem Zustand (**Läuft**, **Angehalten**, **Nicht
+installiert**, **Gestört**), dem Platz ihres Images auf der Festplatte und einem
+Richtwert für den Arbeitsspeicher unter Last. Oben steht, wie viel auf der
+Festplatte noch frei ist.
+
+- **Kern – läuft immer:** Datenbank, Anwendung und Oberfläche. Sie haben keine
+  Schalter.
+- **Optional:** der [eingebaute Embedding-Dienst](ki-provider.md#der-eingebaute-embedding-dienst),
+  die [eingebaute lokale KI](ki-provider.md#eingebaute-lokale-ki) und die
+  Scan-Dienste (Scanner-Webhook und Bildbereinigung). Jeder lässt sich
+  **einschalten**, **ausschalten** und **entfernen**. Ausschalten hält den
+  Dienst an und gibt seinen Arbeitsspeicher frei; Image und Modelldateien
+  bleiben, Einschalten geht danach ohne Download. Entfernen löscht zusätzlich
+  das Image und bei der lokalen KI sowie beim Embedding-Dienst die
+  heruntergeladenen Modelldateien; Einschalten richtet den Dienst dann neu ein.
+- **HTTPS (Caddy mit DuckDNS)** wird hier nur angezeigt. Ein- und ausgeschaltet
+  wird es unter **Allgemein → Erreichbarkeit**, weil Abschalten den Zugang von
+  außen kappen kann.
+- **Steuerung:** ob der [Update-Agent](#der-update-agent) sich meldet. Er führt
+  alle Schaltaufträge aus; unter Linux startet ihn ein systemd-Timer, unter
+  Windows eine geplante Aufgabe.
+
+Ein Auftrag wird innerhalb einer Minute abgeholt. Solange er läuft, zeigt die
+Karte seinen Fortschritt, beim Modell-Download mit Balken, und alle Schalter
+sind gesperrt. Die Seite darf dabei geschlossen werden.
+
+Ohne Update-Agent zeigt der Reiter nur die Dienste, schalten lässt sich dort
+nichts. Dann gilt die Liste `COMPOSE_PROFILES` in der `.env` (etwa
+`scanner,embedding`), umgesetzt mit `docker compose up -d`.
+
 ## Updates
 
 postbuch.net fragt täglich bei der eingetragenen Bezugsquelle nach, ob es eine
-neuere Version gibt. Das Ergebnis steht unter ![Einstellungen-Symbol](icons/settings.svg) **Einstellungen → Allgemein** und
+neuere Version gibt. War der Rechner zur Prüfzeit in der Nacht aus oder im
+Energiesparmodus, holt postbuch.net die Prüfung nach dem Start nach. Das Ergebnis steht unter ![Einstellungen-Symbol](icons/settings.svg) **Einstellungen → Allgemein** und
 als Hinweis in der Seitenleiste. Nur Administratoren sehen die Karte.
 
 ### Vorabversionen
@@ -85,6 +119,9 @@ behält ihre Version und bekommt das nächste Update, sobald eine neuere stabile
 Version erscheint.
 
 Bei einer anderen Bezugsquelle als GitHub gibt es den Schalter nicht.
+
+Wie man eine Vorabversion gleich neu installiert, steht unter
+[Eine Vorabversion installieren](installation.md#eine-vorabversion-installieren).
 
 Drei Zustände:
 
@@ -133,21 +170,30 @@ Egal ob per Knopf oder von Hand – es ist derselbe Ablauf:
    der Embeddings gewechselt wurden. Details und Kostenbeispiele stehen unter
    [KI-Anbieter → Kosten und kostenpflichtige Aufrufe](ki-provider.md#kosten-und-kostenpflichtige-aufrufe).
 
-Während des Laufs ist die Anwendung **einige Minuten nicht erreichbar** – bei
-kleinen Servern spürbar länger, weil das Bauen der Images Zeit kostet.
+Während des Bauens läuft die bisherige Version weiter, das kann auf kleinen
+Servern 20 bis 35 Minuten dauern. Erst beim Start der neuen Container ist die
+Anwendung kurz **nicht erreichbar**, meist wenige Minuten.
+
+Scheitert ein Update, bevor die neuen Container starten, etwa beim Herunterladen,
+bei der Prüfung oder beim Bauen, sagt der Update-Dialog, dass die bisherige
+Version unverändert weiterläuft. Scheitert es danach oder antwortet die
+Anwendung nach dem Containerwechsel länger als zehn Minuten nicht, zeigt der
+Dialog den Weg [zurück auf die vorige Version](#zurück-auf-eine-ältere-version).
 
 ### Der Update-Agent
 
 Der `app`-Container ist absichtlich unprivilegiert: kein Docker-Socket, kein
-Zugriff auf den Quellbaum. Er *kann* kein Update ausführen. Wer den Knopf in
-der Oberfläche haben will, installiert dafür einen kleinen Host-Agenten, der
+Zugriff auf den Quellbaum. Er *kann* kein Update ausführen. Dafür richtet der
+Installer bei jedem geführten Lauf einen kleinen Host-Agenten ein, der
 regelmäßig nachsieht, ob eine Anforderung vorliegt, und dann `install.sh
---update` startet. Die App schreibt nur die Anforderung; ausgeführt wird auf
+--update` startet. Über denselben Agenten steuert die Oberfläche auch Ports,
+Ablageordner, Dienste und HTTPS und lädt das Modell der lokalen KI. Die App schreibt nur die Anforderung; ausgeführt wird auf
 dem Host. Anforderungen sind einmalig verwendbar und verfallen nach zehn
 Minuten.
 
-Ohne Agenten funktioniert alles andere unverändert – man aktualisiert eben
-über die Shell.
+Fehlt der Agent, etwa weil die Einrichtung ohne sudo scheiterte, funktioniert
+alles andere unverändert – man aktualisiert eben über die Shell, und ein
+erneuter Installer-Lauf richtet ihn nach.
 
 ### Datenbank-Image aktualisieren
 
@@ -241,6 +287,39 @@ Die alte Datenbank bleibt bis zum erfolgreichen Start der App unter
 `data/postgres/umzug/` liegen und wird erst danach gelöscht. Der Platzbedarf
 liegt dabei beim Dreifachen der Datenbankgröße.
 
+### Update reparieren
+
+Ein Update auf **dieselbe Version** ist die Reparatur. Der Installer spielt das
+Release noch einmal vollständig ein: Er prüft Signatur und Prüfsumme, legt eine
+Sicherung an, packt den Quellbaum neu aus, baut und startet alle Container und
+richtet den Update-Agenten neu ein. `.env`, Datenbank und Dokumente bleiben,
+wie sie sind.
+
+Das hilft immer dann, wenn ein Update mittendrin abgebrochen ist, Container
+fehlen oder hängen (etwa „No such container“) oder die Oberfläche nach einem
+Update nicht mehr erreichbar ist. Der Weg führt über die Shell, weil die
+Oberfläche dann oft nicht antwortet:
+
+```bash
+curl -fsSL https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.sh | bash
+```
+
+Im Menü **Update** wählen. Die Vorschau meldet „Gleiche Version“ und dass das
+Release noch einmal eingespielt wird; mit `j` bestätigen. Statt des Downloads
+geht auch der Installer im Installationsverzeichnis (`~/postbuch/install.sh`);
+er holt das Release ebenfalls von der Bezugsquelle, braucht also Netz.
+
+Unter Windows gibst du in einer PowerShell **Als Administrator** denselben
+Befehl wie bei der Installation ein (siehe
+[Installation unter Windows](installation.md#unter-windows)) oder gehst über
+**Einstellungen → Apps → Installierte Apps → postbuch.net Server → Ändern**
+und wählst dort ebenfalls **Update**.
+
+Arbeitet der Update-Agent gerade (etwa an einem Update aus der Oberfläche),
+wartet der Installer, bis er fertig ist. Umgekehrt startet der Agent nichts,
+solange ein Installer läuft. Hilft auch die Reparatur nicht, bleibt der Weg
+[zurück auf die vorige Version](#zurück-auf-eine-ältere-version).
+
 ### Zurück auf eine ältere Version
 
 ```bash
@@ -258,6 +337,9 @@ getrennte Fragen**:
 2. **Bestätigung**: das Wort `ROLLBACK` tippen. Enter bricht ab.
 
 Ein Rollback ist nur interaktiv möglich, nicht automatisiert.
+
+Unter Windows führt derselbe Weg über **Einstellungen → Apps → Installierte
+Apps → postbuch.net Server → Ändern** und dort **Update rückgängig machen**.
 
 Nutzt die Sicherung eine andere PostgreSQL-Version als die laufende Datenbank,
 etwa nach dem Umzug auf PostgreSQL 18, wird die Datenbank zwingend mit
@@ -289,17 +371,24 @@ Administrator den Faktor zurück, für sich selbst über den
 [Notschalter](sicherheit.md#notschalter-für-den-administrator).
 
 **Ein Dokument ist in der Pipeline gescheitert.**
-![Logs-Symbol](icons/scroll-text.svg) Logs → Jobs zeigt den Lauf mit Status *fehlgeschlagen* oder *unterbrochen* und
-daneben ![Wiederholen-Symbol](icons/refresh-cw.svg) **↺ Wiederholen**. Das startet dieselbe Datei erneut, ohne dass man sie
-neu hochladen muss. Vorher lohnt ein Blick ins System-Log: Ein abgelaufenes
-Dateiablage-Token oder ein nicht erreichbares KI-Modell wiederholt sich sonst.
+Es steht unter ![Import-Symbol](icons/upload.svg) **Importieren → Eingang** in
+der Gruppe _Handlung nötig_, mit dem Fehler des letzten Versuchs. Von dort lässt
+es sich **neu auslösen**, ohne KI **manuell ablegen** oder **verwerfen** – siehe
+[Der Eingang](dokumente-importieren.md#der-eingang-offene-dokumente). Vorher
+lohnt ein Blick ins System-Log: Ein abgelaufenes Dateiablage-Token oder ein
+nicht erreichbares KI-Modell wiederholt sich sonst.
 
 **Ein Job steht und tut nichts.**
 Steht er auf *wartet auf Entscheidung*, ist es kein Fehler, sondern eine
 erkannte Dublette – siehe [Dokumente importieren](dokumente-importieren.md).
 Steht er auf *in Warteschlange*, laufen bereits so viele Pipelines wie erlaubt
 (Standard drei), oder es läuft gerade ein Dateiablage-Umzug, der die Warteschlange
-absichtlich anhält.
+absichtlich anhält. Steht dort „Wartet bis HH:MM – KI-Dienst nicht erreichbar“,
+hat kein Modell geantwortet; der Job versucht es zur genannten Zeit erneut
+(nach 1, 10 und 60 Minuten, danach scheitert er). Läuft die KI auf demselben
+Rechner, arbeitet sie standardmäßig nur einen Aufruf zur Zeit ab – weitere
+Dokumente warten dann auf der Stufe *KI-Analyse*, ohne dass etwas hängt
+(siehe [Architektur](architektur.md#warteschlange-und-parallelität)).
 
 **Die Dateiablage antwortet nicht mehr.**
 Bei OneDrive läuft das Zugriffstoken ab, wenn die Instanz länger stand oder
@@ -395,7 +484,9 @@ einzige Fehlerfall, für den es vorher etwas zu tun gab.
 Es gibt wenig zu pflegen, aber drei Dinge wachsen:
 
 - **Docker-Images.** Jedes Update baut neue; die alten bleiben liegen.
-  `docker image prune -f` räumt herrenlose Ebenen weg.
+  `docker image prune -f` räumt herrenlose Ebenen weg. Was ein optionaler
+  Dienst belegt, steht unter [Der Stack](#der-stack); dort lässt er sich auch
+  samt Image entfernen.
 - **Update-Sicherungen** unter `~/postbuch/backups/`. Jede enthält einen
   Datenbank-Dump. Die letzten paar behalten, ältere löschen.
 - **Die Datenbank selbst**, vor allem durch Text- und Bild-Caches der

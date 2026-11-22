@@ -76,9 +76,9 @@ Modell der Preis oder meldet der Provider keine Token, ist die angezeigte Summe
 unvollständig; endgültig maßgeblich ist die Abrechnung des KI-Anbieters.
 
 **Kann ich die Kosten senken?**
-Ja, an drei Stellen: ein günstiges Analysemodell bzw. bei gestaffelter
-Modellwahl eine günstigere Modellstufe für einfache Dokumente, Prompt-Caching
-(mit einem Modell für alles immer an, sonst über den Cache-Mode beim
+Ja, an drei Stellen: ein günstigeres Modell für **Anspruchsvoll & Komplex**
+bzw. bei der Einzelwahl eine günstigere Modellstufe für einfache Dokumente,
+Prompt-Caching (mit zwei Aufgabentypen immer an, sonst über den Cache-Mode beim
 Massenimport) und ein selbst betriebenes Modell. Alle drei sind in
 [KI-Anbieter](ki-provider.md) beschrieben.
 

@@ -1,4 +1,4 @@
-FROM jbarlow83/ocrmypdf:latest@sha256:73c1628f4a93ec177189cb53df636b44e7788dfef97d9187f334ee30bd916daa
+FROM jbarlow83/ocrmypdf:latest@sha256:ff55064ad8fea4b32d9867fc0d82a9b9ce6b39ada15cf0c3fdb6eeb4d4ad191e
 
 # Das Base-Image läuft inzwischen standardmäßig als non-root User;
 # für apt-get brauchen wir root.

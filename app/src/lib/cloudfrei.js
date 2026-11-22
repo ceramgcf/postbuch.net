@@ -80,7 +80,9 @@ export function cloudfreiBericht(settings, laufzeit = {}) {
 
   // ── Ablage ────────────────────────────────────────────────────────────────
   const backend = s.storage_backend || 'onedrive';
-  if (backend === 'nextcloud') {
+  if (backend === 'lokal') {
+    zeilen.push(zeile('storage', 'Ablage', true, 'Ordner auf diesem Rechner', 'storage'));
+  } else if (backend === 'nextcloud') {
     zeilen.push(zeile('storage', 'Ablage', wirktLokal(s.nextcloud_base_url),
       wirktLokal(s.nextcloud_base_url) ? 'Nextcloud im eigenen Netz' : 'Nextcloud auf einem öffentlichen Server',
       'storage'));

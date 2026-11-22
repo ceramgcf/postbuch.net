@@ -15,12 +15,15 @@ import { Router } from 'express';
 import express from 'express';
 import { createHash, timingSafeEqual } from 'crypto';
 import { promisify } from 'util';
-import { writeFile, access, rm, mkdtemp } from 'fs/promises';
+import { writeFile, access, rm, mkdtemp, readFile, lstat, realpath, open } from 'fs/promises';
+import path from 'path';
 import { constants } from 'fs';
 import { gunzip } from 'zlib';
 import { atomicPgRestore, setupRestoreCleanupSql } from '../lib/pg-restore.js';
 import { geheimeSettingsDerInstanz } from '../lib/geheime-settings.js';
+import { hostSettingsDerInstanz } from '../lib/host-settings.js';
 import { getClient } from '../db.js';
+import { wurzelPfad as lokaleWurzel, istFestgelegt as lokaleAblageFestgelegt } from '../lib/storage/lokal.js';
 import {
   isEncryptedBackup, mitPasswortEntschluesseln, sidecarEintraege, BackupPasswortFalschError,
 } from '../lib/backup-crypto.js';
@@ -103,6 +106,40 @@ async function isSetupMode() {
   }
 }
 
+// Hat der Installer eine Sicherung aus einem weiterverwendeten Ablageordner
+// gefunden, steht ihr Pfad relativ zum Ordner als `sicherung=…` in der
+// Markierungsdatei. Gelesen wird ausschließlich innerhalb des eingebundenen
+// Ablageordners und nur eine Datei namens postbuch_*.pgdump.gz in einem
+// Ordner _backup bzw. _backup/user – nie ein beliebiger Pfad.
+const VORSCHLAG_RE = /^(?:[^/]+\/)?_backup\/(?:user\/)?postbuch_[A-Za-z0-9._-]+\.pgdump\.gz$/;
+
+async function vorgeschlageneSicherung() {
+  if (!lokaleAblageFestgelegt()) return null;
+  let inhalt;
+  try { inhalt = await readFile(FLAG_FILE, 'utf8'); } catch { return null; }
+  const rel = /^sicherung=(.+)$/m.exec(inhalt)?.[1]?.trim();
+  if (!rel || !VORSCHLAG_RE.test(rel) || rel.split('/').some((t) => t === '..' || t.startsWith('.'))) return null;
+  const wurzel = lokaleWurzel();
+  const datei = path.resolve(wurzel, rel);
+  try {
+    const st = await lstat(datei);
+    if (!st.isFile() || st.size < 10 || st.size > MAX_COMPRESSED_BYTES) return null;
+    const echt = await realpath(datei);
+    const echteWurzel = await realpath(wurzel);
+    if (!echt.startsWith(echteWurzel + path.sep)) return null;
+    const fh = await open(echt, 'r');
+    const kopf = Buffer.alloc(8);
+    try { await fh.read(kopf, 0, 8, 0); } finally { await fh.close(); }
+    const backupOrdner = path.dirname(echt).replace(/\/user$/, '');
+    return {
+      pfad: echt, name: path.basename(echt), groesse: st.size, geaendertAm: st.mtime.toISOString(),
+      verschluesselt: isEncryptedBackup(kopf), schluesseldatei: path.join(backupOrdner, 'schluessel.json'),
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function requireSetupMode(_req, res, next) {
   if (!await isSetupMode()) return res.status(404).json({ error: 'Not found' });
   return next();
@@ -135,14 +172,20 @@ const SETUP_HTML = `<!DOCTYPE html>
       max-width: 480px;
       box-shadow: 0 1px 4px rgba(0,0,0,0.07);
     }
-    .logo {
-      font-size: 13px;
-      font-weight: 700;
-      letter-spacing: 0.12em;
-      text-transform: uppercase;
-      color: #6366f1;
-      margin-bottom: 6px;
+    /* Logo und Wortmarke wie auf der Anmeldeseite */
+    .marke { text-align: center; margin-bottom: 20px; }
+    .marke-bild { position: relative; width: 120px; height: 120px; margin: 0 auto 8px; }
+    .marke-bild img { position: absolute; inset: 0; width: 120px; height: 120px; }
+    .marke-glow { filter: blur(16px); opacity: 0.65; }
+    .wortmarke { position: relative; display: inline-block; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; }
+    .wm {
+      position: relative; white-space: nowrap;
+      background: linear-gradient(90deg, #7d2dbd 0%, #a56bd8 50%, #2cc5dd 100%);
+      -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
     }
+    .wm-glow { position: absolute; top: 0; left: 0; filter: blur(8px); opacity: 0.85; pointer-events: none; user-select: none; }
+    .wm-punkt { font-size: 1.8em; line-height: 1; }
+    .wm-net { font-size: 0.47em; line-height: 1; }
     h1 {
       font-size: 22px;
       font-weight: 600;
@@ -161,6 +204,13 @@ const SETUP_HTML = `<!DOCTYPE html>
       padding: 10px 12px; font-size: 14px; margin-bottom: 18px;
     }
     .backup-password-field { display: none; }
+    .vorschlag {
+      display: none; border: 1px solid #c7d2fe; background: #f5f3ff;
+      border-radius: 8px; padding: 16px; margin-bottom: 18px;
+    }
+    .vorschlag-titel { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .vorschlag-datei { font-size: 13px; color: #475569; margin-bottom: 12px; word-break: break-all; }
+    .vorschlag-alternativ { font-size: 13px; color: #64748b; margin-top: 14px; }
     .backup-password-hint {
       font-size: 12px; color: #64748b; margin: -12px 0 14px; line-height: 1.4;
     }
@@ -271,7 +321,16 @@ const SETUP_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <div class="card">
-    <div class="logo">postbuch.net</div>
+    <div class="marke">
+      <div class="marke-bild">
+        <img src="/logo.svg" alt="" aria-hidden="true" class="marke-glow">
+        <img src="/logo.svg" alt="postbuch.net" class="marke-scharf">
+      </div>
+      <div class="wortmarke">
+        <span class="wm wm-glow" aria-hidden="true">postbuch<span class="wm-punkt">.</span><span class="wm-net">net</span></span>
+        <span class="wm">postbuch<span class="wm-punkt">.</span><span class="wm-net">net</span></span>
+      </div>
+    </div>
     <h1>Backup einspielen</h1>
     <p class="subtitle">
       Wähle eine <strong>.pgdump.gz</strong>-Backup-Datei aus.<br>
@@ -281,6 +340,15 @@ const SETUP_HTML = `<!DOCTYPE html>
     <label class="password-label" for="adminPassword">Adminpasswort</label>
     <input class="password-input" type="password" id="adminPassword"
       autocomplete="current-password" required>
+
+    <div class="vorschlag" id="vorschlag">
+      <p class="vorschlag-titel">Sicherung aus deinem Ablageordner</p>
+      <p class="vorschlag-datei" id="vorschlagDatei"></p>
+      <button class="btn-upload" id="vorschlagBtn" type="button" disabled onclick="vorschlagEinspielen()">
+        Diese Sicherung einspielen
+      </button>
+      <p class="vorschlag-alternativ">Oder eine andere Datei hochladen:</p>
+    </div>
 
     <div class="drop-zone" id="dropZone">
       <span class="drop-icon">📦</span>
@@ -341,6 +409,7 @@ const SETUP_HTML = `<!DOCTYPE html>
   <script>
     let selectedFile = null;
     let selectedFileEncrypted = false;
+    let vorschlag = null;
 
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
@@ -376,12 +445,49 @@ const SETUP_HTML = `<!DOCTYPE html>
     });
 
     const ohneBackupBtn = document.getElementById('ohneBackupBtn');
+    const vorschlagBtn = document.getElementById('vorschlagBtn');
+
+    // Vom Installer gefundene Sicherung aus dem Ablageordner anbieten.
+    fetch('/setup/restore/vorschlag', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((v) => {
+        if (!v || !v.name) return;
+        vorschlag = v;
+        const am = new Date(v.geaendertAm);
+        document.getElementById('vorschlagDatei').textContent =
+          v.name + ' · ' + groesseText(v.groesse) + ' · ' + am.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })
+          + (v.verschluesselt ? ' · verschlüsselt' : '');
+        document.getElementById('vorschlag').style.display = 'block';
+        passwortfeldPlatzieren();
+        updateButton();
+      })
+      .catch(() => {});
     const statusActions = document.getElementById('statusActions');
     let beschaeftigt = false;
+
+    function groesseText(bytes) {
+      if (bytes < 1024 * 1024) {
+        return Math.max(1, Math.round(bytes / 1024)).toLocaleString('de-DE') + ' KB';
+      }
+      return (bytes / 1024 / 1024).toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' MB';
+    }
+
+    // Backup-Passwort und Schlüsseldatei stehen dort, wo sie gebraucht werden:
+    // vor „Diese Sicherung einspielen“ bzw. vor „Backup einspielen“ für eine
+    // hochgeladene verschlüsselte Datei.
+    function passwortfeldPlatzieren() {
+      const fuerDatei = !!selectedFile && selectedFileEncrypted;
+      const fuerVorschlag = !!vorschlag && vorschlag.verschluesselt;
+      if (fuerDatei) uploadBtn.parentNode.insertBefore(backupPasswordField, uploadBtn);
+      else if (fuerVorschlag) vorschlagBtn.parentNode.insertBefore(backupPasswordField, vorschlagBtn);
+      backupPasswordField.style.display = (fuerDatei || fuerVorschlag) ? 'block' : 'none';
+    }
 
     function updateButton() {
       const backupPwOk = !selectedFileEncrypted || backupPassword.value;
       uploadBtn.disabled = beschaeftigt || !selectedFile || !adminPassword.value || !backupPwOk;
+      vorschlagBtn.disabled = beschaeftigt || !vorschlag || !adminPassword.value
+        || (vorschlag.verschluesselt && !backupPassword.value);
       ohneBackupBtn.disabled = beschaeftigt || !adminPassword.value;
     }
 
@@ -400,7 +506,8 @@ const SETUP_HTML = `<!DOCTYPE html>
       fileNameEl.textContent = file.name;
       dropZone.classList.add('has-file');
       selectedFileEncrypted = await sniffEncrypted(file);
-      backupPasswordField.style.display = selectedFileEncrypted ? 'block' : 'none';
+      fileNameEl.textContent = file.name + ' · ' + groesseText(file.size);
+      passwortfeldPlatzieren();
       updateButton();
     }
 
@@ -473,6 +580,32 @@ const SETUP_HTML = `<!DOCTYPE html>
       }
     }
 
+    async function vorschlagEinspielen() {
+      if (!vorschlag || !adminPassword.value) return;
+      beschaeftigt = true;
+      updateButton();
+      showStatus('info', 'Backup wird eingespielt, bitte warten...');
+      try {
+        const headers = { 'X-Admin-Password': adminPassword.value };
+        if (backupPassword.value) headers['X-Backup-Passwort'] = encodeURIComponent(backupPassword.value);
+        if (keyFileBase64) headers['X-Backup-Schluesseldatei'] = keyFileBase64;
+        const res = await fetch('/setup/restore/vorschlag', { method: 'POST', headers });
+        let data = {};
+        try { data = await res.json(); } catch (_) { /* leer */ }
+        if (!res.ok) {
+          if (data.code === 'BACKUP_PASSWORT_FALSCH') backupPassword.value = '';
+          throw new Error(data.error || ('HTTP ' + res.status));
+        }
+        document.getElementById('ohneBackup').style.display = 'none';
+        showStatus('info', 'Backup eingespielt. App startet neu, bitte warten...');
+        setTimeout(pollUntilReady, 3000);
+      } catch (err) {
+        showStatus('error', 'Fehler: ' + err.message);
+        beschaeftigt = false;
+        updateButton();
+      }
+    }
+
     async function uploadBackup() {
       if (!selectedFile || !adminPassword.value) return;
       if (selectedFileEncrypted && !backupPassword.value) return;
@@ -517,7 +650,7 @@ const SETUP_HTML = `<!DOCTYPE html>
               } catch (_) {}
               if (code === 'PASSWORT_ERFORDERLICH') {
                 selectedFileEncrypted = true;
-                backupPasswordField.style.display = 'block';
+                passwortfeldPlatzieren();
               }
               if (code === 'BACKUP_PASSWORT_FALSCH') backupPassword.value = '';
               reject(new Error(msg));
@@ -548,7 +681,14 @@ router.get('/restore', async (req, res) => {
   res.type('html').send(SETUP_HTML);
 });
 
-// ── POST /setup/restore ───────────────────────────────────────────────────────
+// ── GET /setup/restore/vorschlag ──────────────────────────────────────────────
+// Nur Name, Größe, Datum und ob verschlüsselt – der Inhalt kommt erst mit dem
+// Adminpasswort (POST unten).
+router.get('/restore/vorschlag', requireSetupMode, async (_req, res) => {
+  const v = await vorgeschlageneSicherung();
+  if (!v) return res.status(404).json({ error: 'Keine Sicherung vorgeschlagen.' });
+  res.json({ name: v.name, groesse: v.groesse, geaendertAm: v.geaendertAm, verschluesselt: v.verschluesselt });
+});
 
 // ── POST /setup/restore/verlassen ─────────────────────────────────────────────
 //
@@ -607,12 +747,42 @@ router.post('/restore',
   requireSetupMode,
   setupAuth,
   express.raw({ type: 'application/octet-stream', limit: MAX_COMPRESSED_BYTES }),
+  (req, res) => einspielen(req, res, req.body),
+);
+
+// ── POST /setup/restore/vorschlag ─────────────────────────────────────────────
+// Spielt die vom Installer gefundene Sicherung direkt aus dem Ablageordner ein.
+// Bei einem verschlüsselten Backup nimmt es die Schlüsseldatei aus demselben
+// Ordner _backup mit, wenn keine eigene mitgeschickt wurde.
+router.post('/restore/vorschlag',
+  requireSetupMode,
+  setupAuth,
   async (req, res) => {
+    if (restoreInProgress) return res.status(409).json({ error: 'Ein Restore läuft bereits.' });
+    const v = await vorgeschlageneSicherung();
+    if (!v) return res.status(404).json({ error: 'Die vorgeschlagene Sicherung ist nicht mehr da.' });
+    let sidecarAusOrdner = null;
+    if (v.verschluesselt && !req.get('X-Backup-Schluesseldatei')) {
+      try {
+        const st = await lstat(v.schluesseldatei);
+        if (st.isFile() && st.size <= 6 * 1024) sidecarAusOrdner = await readFile(v.schluesseldatei);
+      } catch { /* ohne Schlüsseldatei */ }
+    }
+    let daten;
+    try {
+      daten = await readFile(v.pfad);
+    } catch {
+      return res.status(500).json({ error: 'Die Sicherung ließ sich nicht lesen.' });
+    }
+    return einspielen(req, res, daten, sidecarAusOrdner);
+  },
+);
+
+async function einspielen(req, res, rawBuffer, sidecarAusOrdner = null) {
     if (restoreInProgress) {
       return res.status(409).json({ error: 'Ein Restore läuft bereits.' });
     }
 
-    const rawBuffer = req.body;
     if (!Buffer.isBuffer(rawBuffer) || rawBuffer.length < 10) {
       return res.status(400).json({ error: 'Keine oder zu kleine Datei empfangen.' });
     }
@@ -630,7 +800,12 @@ router.post('/restore',
     let zusatzDeks = [];
     if (istVerschluesselt) {
       const rawBackupPasswort = req.get('X-Backup-Passwort');
-      const backupPasswort = rawBackupPasswort ? decodeURIComponent(rawBackupPasswort) : undefined;
+      let backupPasswort;
+      try {
+        backupPasswort = rawBackupPasswort ? decodeURIComponent(rawBackupPasswort) : undefined;
+      } catch {
+        return res.status(400).json({ error: 'Kopfzeile ist nicht gültig URL-kodiert.' });
+      }
       if (!backupPasswort) {
         return res.status(409).json({
           error: 'Diese Backup-Datei ist verschlüsselt. Backup-Passwort erforderlich.',
@@ -654,6 +829,11 @@ router.post('/restore',
         if (!sidecarEintraege(sidecar).length) {
           return res.status(400).json({ error: 'Die Datei enthält keine Backup-Schlüssel (schluessel.json erwartet).' });
         }
+      } else if (sidecarAusOrdner) {
+        try {
+          const kandidat = JSON.parse(sidecarAusOrdner.toString('utf8'));
+          if (sidecarEintraege(kandidat).length) sidecar = kandidat;
+        } catch { /* unbrauchbar: nur mit dem Passwort der Datei */ }
       }
 
       try {
@@ -691,7 +871,7 @@ router.post('/restore',
         process.env.POSTGRES_USER || 'postbuch',
         process.env.POSTGRES_DB   || 'postbuch',
         pgEnv,
-        setupRestoreCleanupSql({ zusatzDeks, geheimnisse: await geheimeSettingsDerInstanz() }),
+        setupRestoreCleanupSql({ zusatzDeks, geheimnisse: await geheimeSettingsDerInstanz(), hostwerte: await hostSettingsDerInstanz() }),
       );
 
       await rm(FLAG_FILE, { force: true });
@@ -700,12 +880,12 @@ router.post('/restore',
       setTimeout(() => process.exit(0), 1500);
     } catch (err) {
       console.error('[setup-restore] Restore fehlgeschlagen:', err);
+      if (err?.code === 'KEIN_BESTAND') return res.status(400).json({ error: err.message, code: err.code });
       res.status(500).json({ error: 'Restore fehlgeschlagen. Details stehen im Server-Log.' });
     } finally {
       if (tempDir) await rm(tempDir, { recursive: true, force: true }).catch(() => {});
       restoreInProgress = false;
     }
-  }
-);
+}
 
 export default router;

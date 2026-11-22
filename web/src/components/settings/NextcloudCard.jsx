@@ -30,6 +30,7 @@ import {
 /** MagentaCLOUD ist für alle Kunden derselbe Server. */
 const MAGENTACLOUD_URL = 'https://magentacloud.de';
 import { wirktPrivat } from '@/lib/net-heuristics';
+import { useUngespeichert } from '@/lib/ungespeichert';
 
 function mmss(sek) {
   const s = Math.max(0, Math.floor(sek));
@@ -104,6 +105,21 @@ export default function NextcloudCard({ onCollapse }) {
       qc.invalidateQueries({ queryKey: ['nextcloud-status'] });
       qc.invalidateQueries({ queryKey: ['settings'] });
       setTestErgebnis(null);
+    },
+  });
+
+  // Adresse und manuell eingetragene Zugangsdaten gegen den gespeicherten Stand.
+  const adresseGeaendert = !!status && (baseUrl.trim() !== (status.baseUrl || '') || allowInsecure !== !!status.allowInsecure);
+  const zugangOffen = manuell && !!ncPass;
+  useUngespeichert('nextcloud', {
+    aktiv: adresseGeaendert || zugangOffen, label: 'Nextcloud',
+    speichern: async () => {
+      if (adresseGeaendert) await configMutation.mutateAsync();
+      if (zugangOffen) await credMutation.mutateAsync();
+    },
+    verwerfen: () => {
+      setBaseUrl(status?.baseUrl || ''); setAllowInsecure(!!status?.allowInsecure);
+      setNcUser(status?.username || ''); setNcPass(''); setManuell(false);
     },
   });
 

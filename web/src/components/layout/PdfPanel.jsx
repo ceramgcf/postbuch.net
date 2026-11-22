@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Document, Page, pdfjs } from 'react-pdf';
+import { Document, Page } from 'react-pdf';
 import { PDFJS_DOCUMENT_OPTIONS } from '@/lib/pdfjs-worker';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
@@ -38,13 +38,6 @@ function DocumentLoadingIndicator() {
     </div>
   );
 }
-
-// Worker aus dem gleichen Build statt externem CDN laden. Das vermeidet einen
-// weiteren Laufzeit-Download und passt zu React-PDF 10 / PDF.js 5.
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
 
 export function PdfPanel({ postid, onClose, refreshKey = 0 }) {
   const { canWrite } = useAuth();

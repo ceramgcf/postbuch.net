@@ -6,6 +6,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { api } from '@/api/client';
+import { AppWindow } from 'lucide-react';
+import { usePwaInstallation, pwaInstallieren } from '@/lib/pwa-installation';
 import { CodeFeld, ZweiterFaktorEinrichtung, Wiederherstellungscodes } from '@/components/settings/ZweiterFaktor';
 
 export default function LoginPage() {
@@ -25,7 +27,16 @@ export default function LoginPage() {
   const [neueCodes, setNeueCodes] = useState(null); // Antwort von /login/bestaetigen
   const { login, anmeldungUebernehmen } = useAuth();
   const navigate = useNavigate();
+  const pwa = usePwaInstallation();
   const [instanceName, setInstanceName] = useState('');
+
+  // Steht nach der Installation noch das Einspielen einer Sicherung aus, führt
+  // jeder Aufruf (auch die Desktop-Verknüpfung) dorthin statt zur Anmeldung.
+  useEffect(() => {
+    fetch('/setup/restore', { method: 'HEAD', cache: 'no-store' })
+      .then((r) => { if (r.ok) window.location.replace('/setup/restore'); })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetch('/api/auth/instance-name')
@@ -333,6 +344,17 @@ export default function LoginPage() {
               </div>
             )}
           </form>
+          )}
+          {/* Das Angebot erscheint, sobald der Browser es meldet, und
+              verdrängt die Anmeldung nie; die Seite wartet nicht darauf. */}
+          {pwa.installierbar && !pwa.alsApp && !abschluss && (
+            <div className="mt-4 pt-3 border-t border-border/60 flex justify-center">
+              <Button type="button" variant="ghost" size="sm" onClick={() => pwaInstallieren()}
+                className="text-muted-foreground hover:text-foreground">
+                <AppWindow className="h-4 w-4" />
+                Als App registrieren
+              </Button>
+            </div>
           )}
         </CardContent>
       </Card>

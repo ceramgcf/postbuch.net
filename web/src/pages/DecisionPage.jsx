@@ -85,8 +85,8 @@ export default function DecisionPage() {
 
   if (result) {
     const labels = {
-      replace: '✅ Bestehendes wurde ersetzt',
-      discard: '🗑️ Duplikat wurde verworfen',
+      replace: '✅ Die neue Fassung ersetzt das vorhandene Dokument',
+      discard: '🗑️ Die alte Fassung bleibt, die neue liegt im Papierkorb',
       keep_both: '📋 Beide Dokumente werden behalten',
     };
     return (
@@ -110,7 +110,6 @@ export default function DecisionPage() {
   const simPct = Math.round((suspension.similarity || 0) * 100);
   const newConfPct = Math.round((suspension.newConfidence || 0) * 100);
   const oldConfPct = Math.round((suspension.matchConfidence || 0) * 100);
-  const betterQuality = (suspension.newConfidence || 0) > (suspension.matchConfidence || 0);
   const expiresStr = new Date(suspension.expiresAt).toLocaleString('de-DE', {
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
@@ -136,10 +135,8 @@ export default function DecisionPage() {
             <p className="text-sm text-muted-foreground">
               Neue Qualität: {newConfPct}% · Alte Qualität: {oldConfPct}%
             </p>
-            {betterQuality && (
-              <p className="text-sm font-medium text-green-700 dark:text-green-400">
-                📌 Empfehlung: Bestehendes ersetzen (bessere Qualität)
-              </p>
+            {suspension.begruendung && (
+              <p className="text-sm text-muted-foreground">Begründung: {suspension.begruendung}</p>
             )}
             {suspension.matchWeburl && (
               <a
@@ -154,8 +151,7 @@ export default function DecisionPage() {
           </div>
 
           <p className="text-xs text-amber-700 dark:text-amber-400">
-            ⏱ Automatische Entscheidung bis {expiresStr}
-            {betterQuality ? ' (Auto-Ersetzen)' : ' (Auto-Verwerfen)'}
+            ⏱ Ohne Entscheidung bis {expiresStr} werden beide Dokumente behalten.
           </p>
 
           {error && (
@@ -168,21 +164,21 @@ export default function DecisionPage() {
               disabled={decideMutation.isPending}
               onClick={() => decideMutation.mutate('replace')}
             >
-              Bestehendes ersetzen
+              Neue Fassung behalten
             </Button>
             <Button
               variant="outline"
               disabled={decideMutation.isPending}
               onClick={() => decideMutation.mutate('keep_both')}
             >
-              Beide behalten
+              Beide behalten (kein Duplikat)
             </Button>
             <Button
-              variant="destructive"
+              variant="outline"
               disabled={decideMutation.isPending}
               onClick={() => decideMutation.mutate('discard')}
             >
-              Duplikat verwerfen
+              Alte Fassung behalten
             </Button>
           </div>
         </CardContent>

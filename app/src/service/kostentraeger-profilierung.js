@@ -2,7 +2,7 @@
  * service/kostentraeger-profilierung.js — "Profil extrahieren" (Schritt IV)
  *
  * Leitet aus einer vom Admin zusammengestellten Akte automatisch ein neues
- * Kostenträger-Profil ab (internaldocs/FEATURE_KOSTENTRAEGER_PROFILE.md,
+ * Kostenträger-Profil ab (internaldocs/archiv/FEATURE_KOSTENTRAEGER_PROFILE.md,
  * Abschnitt 6). Anders als der reguläre EB-Parser bekommt der Profilierer
  * NIE gespeicherte Parse-Ergebnisse, sondern ausschließlich die Original-PDFs
  * — sonst schreibt er Fehler des bisherigen Parsers fort.
@@ -103,9 +103,10 @@ export async function profiliereAkte(akteid, { username } = {}) {
 
   const prompt = buildProfilierungsPrompt(personsResult.rows);
   const costMap = buildCostMap(settings);
-  const model = resolveKlassenModell('schwierig', settings).model;
+  const modelRef = resolveKlassenModell('schwierig', settings);
+  const model = modelRef.model;
 
-  const llmResult = await callLLM(model, prompt, { pdfs, zweck: 'profilierung' }, settings, {
+  const llmResult = await callLLM(modelRef, prompt, { pdfs, zweck: 'profilierung' }, settings, {
     kategorie: 'kostentraeger-profilierung', entity: 'akte', entityId: akteid, username,
   });
   const tokensIn  = llmResult.usage?.inputTokens  ?? null;

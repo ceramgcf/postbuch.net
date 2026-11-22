@@ -27,6 +27,36 @@ export function istBestaetigterDateiFehlt(err) {
 }
 
 /**
+ * Fehlt mehr als die Hälfte der beantworteten Dateien (und mindestens drei),
+ * ist eher die Ablage falsch eingebunden als jede Datei einzeln verschwunden –
+ * etwa nach einem Restore in einen leeren Ablageordner. Massenläufe lösen dann
+ * keine Verknüpfung, denn sie wären nach dem Korrigieren des Ordners verloren.
+ *
+ * @param {number} fehlend    Dateien mit bestätigtem 404
+ * @param {number} beantwortet Dateien mit Antwort der Ablage (gefunden + fehlend)
+ */
+export function wirktFalschEingebunden(fehlend, beantwortet) {
+  return fehlend >= 3 && fehlend * 2 > beantwortet;
+}
+
+/**
+ * Löst die gesammelten Verknüpfungen eines Massenlaufs – außer der Lauf deutet
+ * auf eine falsch eingebundene Ablage (siehe wirktFalschEingebunden).
+ *
+ * @returns {Promise<number>} Zahl der zurückgehaltenen Verknüpfungen (0 = alle gelöst)
+ */
+export async function loeseFehlendeOderHalte(postids, gefunden, quelle) {
+  if (wirktFalschEingebunden(postids.length, gefunden + postids.length)) {
+    appLog('ERROR', quelle,
+      `${postids.length} von ${gefunden + postids.length} Dateien nicht in der Ablage gefunden – ` +
+      'die Ablage wirkt falsch eingebunden. Es wurde keine Verknüpfung gelöst.');
+    return postids.length;
+  }
+  for (const postid of postids) await markiereDateiFehlend(postid, quelle);
+  return 0;
+}
+
+/**
  * Löst die Ablage-Verknüpfung eines Dokuments, weil die Ablage selbst mit
  * einem bestätigten 404 geantwortet hat. Wirft nie — ein Fehler beim Nullen
  * ist immer schwerwiegender als der ursprüngliche Aufrufkontext und wird nur

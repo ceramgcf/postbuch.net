@@ -44,7 +44,7 @@ const TYP_LABEL = {
   subscription: 'Abo',
 };
 
-function ProviderRow({ p, health, capKeys, onEdit, onTested }) {
+function ProviderRow({ p, health, ladend, capKeys, onEdit, onTested }) {
   const [testFehler, setTestFehler] = useState('');
   const [testOk, setTestOk] = useState(null);
 
@@ -60,16 +60,23 @@ function ProviderRow({ p, health, capKeys, onEdit, onTested }) {
 
   return (
     <div className="py-3 border-b border-border/40 last:border-0">
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="min-w-0 flex-1">
+      {/* Schmal: Name und Adresse bekommen die volle Breite, Fähigkeiten,
+          Status und Knöpfe rutschen darunter. Breit: alles in einer Zeile. */}
+      <div className="flex items-center gap-x-3 gap-y-1.5 flex-wrap">
+        <div className="min-w-0 basis-full sm:basis-0 sm:flex-1">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-medium truncate">{p.label}</span>
+            <span className="text-sm font-medium [overflow-wrap:anywhere]">{p.label}</span>
             <Badge variant="outline" className="text-[10px]">{TYP_LABEL[p.typ] || p.typ}</Badge>
             {p.builtin && <Badge variant="secondary" className="text-[10px]">eingebaut</Badge>}
             {p.aktiv === false && <Badge variant="secondary" className="text-[10px]">inaktiv</Badge>}
           </div>
           {p.baseUrl && (
             <p className="text-[11px] text-muted-foreground font-mono truncate mt-0.5">{p.baseUrl}</p>
+          )}
+          {/\/(embeddings|chat\/completions|completions|models)\/*$/i.test(p.baseUrl || '') && (
+            <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
+              Die Basis-URL endet auf einem Endpunkt; sie muss auf /v1 enden. Bitte über das Stift-Symbol korrigieren.
+            </p>
           )}
         </div>
 
@@ -88,9 +95,12 @@ function ProviderRow({ p, health, capKeys, onEdit, onTested }) {
         </div>
 
         {/* Status */}
-        <div className="flex items-center gap-1.5 w-[130px] justify-end">
-          {h?.ruhend ? (
-            <span className="text-[11px] text-muted-foreground">nicht gewählt</span>
+        <div className="flex items-center gap-1.5 ml-auto sm:ml-0 sm:w-[130px] justify-end">
+          {ladend && !laeuft ? (
+            <><Spinner className="h-3.5 w-3.5" />
+              <span className="text-[11px] text-muted-foreground">lädt …</span></>
+          ) : h?.ruhend ? (
+            <span className="text-[11px] text-muted-foreground">{p.nurEmbedding ? 'nicht gewählt' : 'ausgeschaltet'}</span>
           ) : !konfiguriert ? (
             <span className="text-[11px] text-muted-foreground">nicht konfiguriert</span>
           ) : laeuft ? (
@@ -107,7 +117,7 @@ function ProviderRow({ p, health, capKeys, onEdit, onTested }) {
                   disabled={mTest.isPending} onClick={() => mTest.mutate()}>
             {mTest.isPending ? <Spinner className="h-3.5 w-3.5" /> : <PlayCircle className="h-3.5 w-3.5" />}
           </Button>
-          {/* Der eingebaute Embedding-Dienst hat nichts Einstellbares. */}
+          {/* Eingebaute Dienste (Embedding, lokale KI) haben nichts Einstellbares. */}
           {!p.fest && (
             <Button variant="ghost" size="icon" className="h-7 w-7" title="Bearbeiten" onClick={onEdit}>
               <Settings2 className="h-3.5 w-3.5" />
@@ -128,7 +138,7 @@ function ProviderRow({ p, health, capKeys, onEdit, onTested }) {
   );
 }
 
-export default function ProviderCard({ health, onChanged }) {
+export default function ProviderCard({ health, ladend, sprachmodellBereit, onChanged }) {
   const qc = useQueryClient();
   const [dialog, setDialog] = useState(null);   // { provider } | { neu: true } | null
 
@@ -141,6 +151,10 @@ export default function ProviderCard({ health, onChanged }) {
   const providers = data?.providers || [];
   const openaiProvider = providers.find((p) => p.id === 'openai');
   const openaiKonfiguriert = health?.providers?.openai?.configured ?? openaiProvider?.hatKey;
+  // Der Hinweis gilt nur, solange gar kein Sprachmodell da ist. Eine laufende
+  // lokale KI oder ein anderer eingerichteter Provider zählt genauso.
+  const sprachmodellDa = sprachmodellBereit === true || ladend?.lokal === true || providers.some((p) => !p.nurEmbedding && p.aktiv !== false
+    && (health?.providers?.[p.id]?.working || (health?.providers?.[p.id]?.configured ?? p.hatKey)));
 
   function nachAenderung() {
     qc.invalidateQueries({ queryKey: ['ai-providers'] });
@@ -168,7 +182,7 @@ export default function ProviderCard({ health, onChanged }) {
             geht darin aber unter — "Hinzufügen" legt sonst ein funktionsarmes
             Duplikat an, statt den Nutzer zum Bearbeiten-Symbol der bestehenden
             Zeile zu führen. */}
-        {!isLoading && openaiProvider && !openaiKonfiguriert && (
+        {!isLoading && openaiProvider && !openaiKonfiguriert && !sprachmodellDa && (
           <div className="mb-3 flex items-center justify-between gap-3 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2.5">
             <div className="flex items-center gap-2 min-w-0">
               <Sparkles className="h-4 w-4 shrink-0 text-primary" />
@@ -189,7 +203,7 @@ export default function ProviderCard({ health, onChanged }) {
           </div>
         ) : (
           providers.map((p) => (
-            <ProviderRow key={p.id} p={p} health={health} capKeys={data.capKeys}
+            <ProviderRow key={p.id} p={p} health={health} ladend={ladend?.[p.id] === true} capKeys={data.capKeys}
                          onEdit={() => setDialog({ provider: p })}
                          onTested={nachAenderung} />
           ))
@@ -210,6 +224,8 @@ export default function ProviderCard({ health, onChanged }) {
           rasterGrenze={data?.rasterMaxSeitenGrenze}
           maxOutMin={data?.maxOutputTokensMin}
           maxOutGrenze={data?.maxOutputTokensGrenze}
+          kontextMin={data?.kontextTokensMin}
+          kontextGrenze={data?.kontextTokensGrenze}
           onSaved={nachAenderung}
         />
       )}

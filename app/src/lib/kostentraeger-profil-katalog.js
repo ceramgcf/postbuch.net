@@ -1,7 +1,7 @@
 /**
  * Statischer Katalog der mit postbuch.net mitgelieferten Kostenträger-Profile
  * (Layoutwissen für den generischen EB-Parse-Prompt, siehe
- * prompts/erstattungsbescheid.js und internaldocs/FEATURE_KOSTENTRAEGER_PROFILE.md).
+ * prompts/erstattungsbescheid.js und internaldocs/archiv/FEATURE_KOSTENTRAEGER_PROFILE.md).
  *
  * Diese Einträge sind reiner Code, keine Datenbankzeilen. Erst wenn ein Admin
  * einen Eintrag im UI aktiviert, wird er einmalig als Zeile in

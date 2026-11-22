@@ -298,22 +298,6 @@ export function useHandwerker(relevanz = 'relevant') {
   });
 }
 
-export function useFulltextSearch(q, opts = {}) {
-  return useQuery({
-    queryKey: ['search', 'fulltext', q, opts.historisch],
-    queryFn: () => api.search.fulltext(q, opts),
-    enabled: !!q && q.length >= 2,
-  });
-}
-
-export function useSemanticSearch(q) {
-  return useQuery({
-    queryKey: ['search', 'semantic', q],
-    queryFn: () => api.search.semantic(q),
-    enabled: false, // Manually triggered
-  });
-}
-
 export function useCollectingPerioden() {
   const { istEingeschraenkt } = useAuth();
   return useQuery({
@@ -430,6 +414,23 @@ export function useSetErstattungZuordnung() {
   });
 }
 
+export function useBescheidBearbeiten() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ postid, position, subid, daten, neu, loeschen }) => position
+      ? api.postbuch.speichereBescheidposition(postid, subid, daten, loeschen)
+      : api.postbuch.speichereBescheidkopf(postid, daten, neu),
+    onSuccess: async () => {
+      // Ein geändertes Bescheiddatum wird auch an verknüpften Rechnungen angezeigt.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ['postbuch'] }),
+        qc.invalidateQueries({ queryKey: ['analyse'] }),
+        qc.invalidateQueries({ queryKey: ['stats'] }),
+      ]);
+    },
+  });
+}
+
 export function useAddKuerzung() {
   const qc = useQueryClient();
   return useMutation({
@@ -520,6 +521,16 @@ export function useUpdateGenRechnung() {
       qc.invalidateQueries({ queryKey: ['postbuch'] });
       qc.invalidateQueries({ queryKey: ['analyse'] });
       qc.invalidateQueries({ queryKey: ['stats'] });
+    },
+  });
+}
+
+export function useUpdateArztbericht() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ postid, ...data }) => api.postbuch.updateArztbericht(postid, data),
+    onSuccess: (_data, { postid }) => {
+      qc.invalidateQueries({ queryKey: ['postbuch', 'detail', postid] });
     },
   });
 }

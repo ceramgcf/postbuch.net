@@ -15,7 +15,7 @@
  * Sonderfall.
  *
  * ── Adapter-Schnittstelle ───────────────────────────────────────────────────
- *   name                                     Backend-Name ('onedrive' | 'nextcloud')
+ *   name                                     Backend-Name ('onedrive' | 'nextcloud' | 'lokal')
  *   label                                    Anzeigename
  *   capabilities                             deklarative Eigenschaften
  *   download(id, onProgress?)                → Buffer
@@ -68,11 +68,13 @@
 
 import * as onedrive from './onedrive.js';
 import * as nextcloud from './nextcloud.js';
+import * as lokal from './lokal.js';
 import { loadDynamicSettings, getActiveBackendName } from '../../config.js';
 
 const ADAPTERS = {
   onedrive,
   nextcloud,
+  lokal,
 };
 
 /** Namen aller verfügbaren Backends. */

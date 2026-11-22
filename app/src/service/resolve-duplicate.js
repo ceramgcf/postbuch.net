@@ -17,6 +17,7 @@
 import * as suspensionStore from './suspension-store.js';
 import * as discord from '../lib/discord.js';
 import { getAdapter } from '../lib/storage/index.js';
+import { recordOrphanedFailed } from './failed-handler.js';
 import * as tracker from '../jobs/tracker.js';
 import { enqueueDocument } from '../jobs/pipeline-queue.js';
 import { loadDynamicSettings } from '../config.js';
@@ -26,7 +27,12 @@ import { sendPushToAllUsers } from '../lib/webpush.js';
 export async function resolveDuplicate({ jobId, decision, source = 'unknown' }, settings = null) {
   const s = settings || await loadDynamicSettings();
 
-  const suspension = await suspensionStore.get(jobId);
+  if (!['replace', 'discard', 'keep_both'].includes(decision)) {
+    return { ok: false, reason: 'Unbekannte Entscheidung' };
+  }
+  // Übernahme: Die Zeile wird gelöscht und zurückgegeben. Entscheiden Benutzer
+  // und Timeout-Job gleichzeitig, löst genau einer auf.
+  const suspension = await suspensionStore.uebernimm(jobId);
   if (!suspension) {
     return { ok: false, reason: 'Suspension nicht gefunden (evtl. bereits entschieden)' };
   }
@@ -37,13 +43,21 @@ export async function resolveDuplicate({ jobId, decision, source = 'unknown' }, 
     if (decision === 'discard') {
       // ─ Neues Dokument → Papierkorb, Job als erledigt markieren ─
       const trashed = await getAdapter(storage_backend)
-        .moveToTrash(storage_id, `Duplikat_${reserved_postid}_${Date.now()}.pdf`).catch(err => {
+        .moveToTrash(storage_id, `Duplikat_${reserved_postid}_${Date.now()}.pdf`).catch(async err => {
         console.warn(`[resolve-duplicate] moveToTrash fehlgeschlagen (${storage_id}): ${err.message}`);
+        // Die Entscheidung ist gefallen, die Datei liegt aber noch in der
+        // Ablage: als Fehleintrag sichtbar halten, statt sie still liegen zu lassen.
+        await recordOrphanedFailed({
+          onedriveFileId: storage_id,
+          reason: 'Verworfenes Duplikat: Papierkorb-Move fehlgeschlagen',
+          detail: err.message,
+          sourceJobId: jobId,
+          backend: storage_backend,
+        }).catch(e => console.error(`[resolve-duplicate] Fehleintrag für ${storage_id} nicht angelegt: ${e.message}`));
         return null;
       });
       const trashUrl = trashed?.webUrl || null;
 
-      await suspensionStore.deleteOne(jobId);
       tracker.complete(jobId);
 
       await _updateDiscordMessage(discord_message_id, s);
@@ -87,7 +101,6 @@ export async function resolveDuplicate({ jobId, decision, source = 'unknown' }, 
 
     const stepOffsetResume = step_offset; // Phase-Offset wie beim ursprünglichen Suspend
 
-    await suspensionStore.deleteOne(jobId);
     await tracker.resume(jobId);
     enqueueDocument(resumedInput, jobId, stepOffsetResume);
 
@@ -99,6 +112,17 @@ export async function resolveDuplicate({ jobId, decision, source = 'unknown' }, 
   } catch (err) {
     console.error('[resolve-duplicate] Fehler bei Job %s:', jobId, err.message);
     appLog('ERROR', 'duplicate', `resolve-duplicate Job ${jobId}: ${err.message}`);
+    // Die Suspension ist bereits übernommen. Kam die Wiederaufnahme nicht
+    // zustande, bleibt die Datei als Fehleintrag sichtbar.
+    if (decision !== 'discard' && !tracker.isActive(jobId)) {
+      await recordOrphanedFailed({
+        onedriveFileId: storage_id,
+        reason: 'Duplikat-Entscheidung: Wiederaufnahme fehlgeschlagen',
+        detail: err.message,
+        sourceJobId: jobId,
+        backend: storage_backend,
+      }).catch(() => {});
+    }
     return { ok: false, reason: err.message };
   }
 }
@@ -117,16 +141,14 @@ async function _postFollowup(decision, source, reservedPostid, matchPostid, matc
   let msg;
   if (decision === 'discard') {
     const trashLink = trashUrl ? ` · [Im Trash öffnen](${trashUrl})` : '';
-    msg = isTimeout
-      ? `🗑️ Auto-Verworfen — Qualität nicht besser. PostID \`${reservedPostid}\`${trashLink} · Bestand: \`${matchPostid}\``
-      : `🗑️ Manuell verworfen — PostID \`${reservedPostid}\`${trashLink} · Bestand: \`${matchPostid}\``;
+    msg = `🗑️ Alte Fassung behalten – neue PDF \`${reservedPostid}\` verworfen${trashLink} · Bestand: \`${matchPostid}\``;
   } else if (decision === 'replace') {
     const entryLink = matchWeburl ? ` [Eintrag öffnen](${matchWeburl})` : '';
-    msg = isTimeout
-      ? `🔄 Auto-Akzeptiert (höhere Qualität) — \`${reservedPostid}\` ersetzt \`${matchPostid}\`.${entryLink}`
-      : `✅ Manuell ersetzt — \`${reservedPostid}\` ersetzt \`${matchPostid}\`.${entryLink}`;
+    msg = `✅ Neue Fassung behalten – ersetzt \`${matchPostid}\`.${entryLink}`;
   } else if (decision === 'keep_both') {
-    msg = `📋 Beide behalten — neuer Eintrag entsteht parallel zu \`${matchPostid}\``;
+    msg = isTimeout
+      ? `📋 Frist abgelaufen – beide Dokumente werden behalten, neuer Eintrag parallel zu \`${matchPostid}\``
+      : `📋 Beide behalten – neuer Eintrag entsteht parallel zu \`${matchPostid}\``;
   } else {
     return;
   }
@@ -140,15 +162,15 @@ async function _postFollowup(decision, source, reservedPostid, matchPostid, matc
   const appHost = (s?.app_host || '').replace(/\/$/, '');
   let pushTitle, pushBody, pushUrl;
   if (decision === 'discard') {
-    pushTitle = isTimeout ? '🗑️ Auto-Verworfen' : '🗑️ Duplikat verworfen';
-    pushBody  = `${reservedPostid} wurde verworfen. Bestand: ${matchPostid}`;
+    pushTitle = '🗑️ Alte Fassung behalten';
+    pushBody  = `Neue PDF verworfen, Bestand: ${matchPostid}`;
     pushUrl   = appHost ? `${appHost}/logs` : '/logs';
   } else if (decision === 'replace') {
-    pushTitle = isTimeout ? '🔄 Auto-Ersetzt' : '✅ Ersetzt';
-    pushBody  = `${reservedPostid} ersetzt ${matchPostid}`;
+    pushTitle = '✅ Neue Fassung behalten';
+    pushBody  = `Neue Fassung ersetzt ${matchPostid}`;
     pushUrl   = matchWeburl || (appHost ? `${appHost}/postbuch/${reservedPostid}` : `/postbuch/${reservedPostid}`);
   } else if (decision === 'keep_both') {
-    pushTitle = '📋 Beide behalten';
+    pushTitle = isTimeout ? '📋 Frist abgelaufen – beide behalten' : '📋 Beide behalten';
     pushBody  = `Neuer Eintrag parallel zu ${matchPostid}`;
     pushUrl   = appHost ? `${appHost}/postbuch/${reservedPostid}` : `/postbuch/${reservedPostid}`;
   }

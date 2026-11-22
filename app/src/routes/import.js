@@ -5,9 +5,13 @@
  *   POST /api/import/scan
  *     Body: { endpoint, dpi?, mode?, size? }
  *     endpoint: 'adf/simplex' | 'adf/duplex' | 'adf/batch/simplex' | 'adf/batch/duplex'
+ *               | 'adf/stapel/simplex' | 'adf/stapel/duplex'
  *               | 'flatbed/single' | 'flatbed/session/scan' | 'flatbed/session/finish' | 'flatbed/session/abort'
  *     Die ADF-Batch-Endpunkte liefern statt einem Dateinamen ein `files`-Array
  *     (ein PDF pro Blatt) — jede Datei durchläuft Cleaner/Pipeline unabhängig.
+ *     Die Dokumentenstapel-Endpunkte liefern ebenfalls ein PDF pro Blatt; die App
+ *     sammelt sie aber zu einem Dokumentenstapel (service/stapel.js). Die Stapel-ID
+ *     entsteht hier und geht als ?stapel= an den Scanner.
  *     Proxied an Scanner-Service (SCANNER_URL, default http://scanner:8080), mit scanner_token.
  *     Rückgabe identisch zum Scanner-Service.
  *     Nach Erfolg landet die PDF in /data/scans_pending und wird vom Cleaner aufgegriffen.
@@ -22,6 +26,12 @@
  *     Body: { filename, dataB64 }
  *     Speichert in /input (scans_pending) — Cleaner übernimmt OCR + Webhook.
  *
+ * Upload-Stapel (Modus „Stapel auftrennen“, genau eine PDF):
+ *   POST /api/import/upload-stapel
+ *     Body: { filename, dataB64, hinweis }
+ *     Mehrseitig → { stapel, seiten }: Dokumentenstapel im Eingang.
+ *     Einseitig → { jobId, seiten }: normal in die Pipeline.
+ *
  * Upload-Merged (Sammlung):
  *   POST /api/import/upload-merged
  *     Body: { filename, files: [{ name, dataB64 }, ...] }
@@ -32,9 +42,9 @@ import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { unlink, statfs, readdir, stat, open } from 'node:fs/promises';
-import { mergePdfs, decodeBase64Pdf } from '../lib/pdf.js';
+import { mergePdfs, decodeBase64Pdf, countPdfPages } from '../lib/pdf.js';
 import { appLog } from '../app-log.js';
-import { enqueueDocument } from '../jobs/pipeline-queue.js';
+import { reiheDauerhaftEin } from '../jobs/pipeline-queue.js';
 import { importArchive, pruefeArchiv } from '../service/archive-importer.js';
 import { schlageZuordnungVor } from '../lib/personen-abgleich.js';
 import { query } from '../db.js';
@@ -45,7 +55,9 @@ import * as tracker from '../jobs/tracker.js';
 import { loadDynamicSettings } from '../config.js';
 import { quelleAusCapabilities, quelleFuerEndpunkt } from '../lib/scanner-capabilities.js';
 import { requireAdmin } from '../middleware/auth.js';
-import { scannerFetch, getScannerToken, erneuereScannerToken } from '../lib/scanner-dienst.js';
+import { starteScanVorgang, scanGeliefert, scanFehlgeschlagen } from '../jobs/scan-vorgang.js';
+import { starteStapel, verwirfLeerenStapel, stapelAusPdf, StapelGrenzeError } from '../service/stapel.js';
+import { scannerFetch, scannerFehlertext, getScannerToken, erneuereScannerToken } from '../lib/scanner-dienst.js';
 
 const router = Router();
 
@@ -60,6 +72,8 @@ const ALLOWED_SCAN_ENDPOINTS = new Set([
   'adf/duplex',
   'adf/batch/simplex',
   'adf/batch/duplex',
+  'adf/stapel/simplex',
+  'adf/stapel/duplex',
   'flatbed/single',
   'flatbed/session/scan',
   'flatbed/session/start',
@@ -98,7 +112,7 @@ async function getScannerCapabilities() {
  * passendem Status. Gibt true zurück, wenn die Antwort an den Client gesendet
  * wurde (also immer — die Funktion respondet selbst).
  */
-async function proxyScannerCall(req, res) {
+async function proxyScannerCall(req, res, { sichtbar = false, stapelId = null } = {}) {
   const { endpoint, dpi, mode, size } = req.body || {};
 
   if (!endpoint || !ALLOWED_SCAN_ENDPOINTS.has(endpoint)) {
@@ -152,6 +166,7 @@ async function proxyScannerCall(req, res) {
     params.set('size', size);
   }
 
+  if (stapelId) params.set('stapel', stapelId);
   const qs = params.toString();
   const pfad = `/scan/${endpoint}${qs ? '?' + qs : ''}`;
 
@@ -160,16 +175,28 @@ async function proxyScannerCall(req, res) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 300_000);
 
+  // Ein Scan, der ein Dokument erzeugt, ist ab dem Auslösen unter Logs/Jobs
+  // und im Eingang zu sehen (jobs/scan-vorgang.js).
+  // Ein Dokumentenstapel ist ab dem Auslösen selbst sichtbar (Eingang, Logs/Jobs).
+  const scanJobId = sichtbar && !stapelId && PIPELINE_SCAN_ENDPOINTS.has(endpoint)
+    ? starteScanVorgang(endpoint.startsWith('adf/') ? 'Scan aus dem Einzug' : 'Scan vom Flachbett')
+    : null;
+  const scanFehler = (meldung) => { if (scanJobId) scanFehlgeschlagen(scanJobId, meldung); };
+
   let response;
   try {
     response = await scannerFetch(pfad, { signal: controller.signal });
   } catch (err) {
     if (err.name === 'AbortError') {
+      req._scanTimeout = true;
+      scanFehler('Der Scanner hat nach 5 Minuten nicht geantwortet.');
       res.status(504).json({ error: 'Scanner-Timeout nach 5 Minuten' });
       return false;
     }
-    appLog('ERROR', 'import', `Scanner nicht erreichbar: ${err.message}`);
-    res.status(502).json({ error: `Scanner nicht erreichbar: ${err.message}` });
+    const meldung = scannerFehlertext(err);
+    appLog('ERROR', 'import', meldung);
+    scanFehler(meldung);
+    res.status(502).json({ error: meldung });
     return false;
   } finally {
     clearTimeout(timeout);
@@ -177,10 +204,23 @@ async function proxyScannerCall(req, res) {
 
   const bodyText = await response.text();
   let data;
-  try { data = JSON.parse(bodyText); } catch { data = { raw: bodyText }; }
+  try { data = JSON.parse(bodyText); } catch { data = null; }
 
   if (!response.ok) {
-    res.status(response.status).json(data);
+    const meldung = response.status === 404
+      ? 'Der Scan-Dienst unterstützt diese Scan-Funktion noch nicht. Bitte die Administration bitten, den Scan-Dienst zu aktualisieren und neu zu starten.'
+      : (typeof data?.error === 'string' && data.error)
+        || (typeof data?.detail === 'string' && data.detail)
+        || `Der Scan-Dienst meldet einen Fehler (HTTP ${response.status}). Bitte später erneut versuchen oder die Administration kontaktieren.`;
+    scanFehler(meldung);
+    res.status(response.status).json({ error: meldung });
+    return false;
+  }
+
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    const meldung = 'Der Scan-Dienst hat eine ungültige Antwort geliefert. Bitte die Administration kontaktieren.';
+    scanFehler(meldung);
+    res.status(502).json({ error: meldung });
     return false;
   }
 
@@ -194,6 +234,7 @@ async function proxyScannerCall(req, res) {
   // eines einzelnen Dateinamens ein `files`-Array (ein Dokument pro Blatt).
   req._scannedFile = (data && typeof data.file === 'string') ? data.file : null;
   req._scannedFiles = (data && Array.isArray(data.files)) ? data.files : null;
+  if (scanJobId) scanGeliefert(scanJobId, req._scannedFiles || (req._scannedFile ? [req._scannedFile] : []));
 
   res.json(data);
   return true;
@@ -203,8 +244,11 @@ async function proxyScannerCall(req, res) {
 // Nur für diese ist ein Benutzer-Hinweis sinnvoll.
 const PIPELINE_SCAN_ENDPOINTS = new Set([
   'adf/simplex', 'adf/duplex', 'adf/batch/simplex', 'adf/batch/duplex',
+  'adf/stapel/simplex', 'adf/stapel/duplex',
   'flatbed/single', 'flatbed/session/finish',
 ]);
+
+const STAPEL_SCAN_ENDPOINTS = new Set(['adf/stapel/simplex', 'adf/stapel/duplex']);
 
 // GET /api/import/scanner-webhook — Token für die kopierbare Scan-Webhook-URL.
 // Wer die URL hat, kann scannen (Schreibwirkung) – daher nicht für lesezugriff.
@@ -234,8 +278,9 @@ router.post('/scanner-webhook/erneuern', requireAdmin, async (req, res) => {
 router.post('/scan', async (req, res) => {
   const { endpoint, hinweis } = req.body || {};
   const userHinweis = typeof hinweis === 'string' ? hinweis.trim().slice(0, 1000) || undefined : undefined;
+  if (STAPEL_SCAN_ENDPOINTS.has(endpoint)) return scanneStapel(req, res, endpoint, userHinweis);
   try {
-    const ok = await proxyScannerCall(req, res);
+    const ok = await proxyScannerCall(req, res, { sichtbar: true });
     if (ok && userHinweis && PIPELINE_SCAN_ENDPOINTS.has(endpoint)) {
       // An den/die Scanner-Dateinamen koppeln — verhindert Überkreuzung bei
       // mehreren Scans. Ein ADF-Batch liefert mehrere Dateien; derselbe vom
@@ -250,6 +295,34 @@ router.post('/scan', async (req, res) => {
   }
 });
 
+// Dokumentenstapel: Stapel anlegen (ID vom Server, Hinweis am Stapel), dann den
+// Scanner mit ?stapel= aufrufen. Liefert der Scanner nichts, wird der leere
+// Stapel wieder gelöscht. Bei einer Zeitüberschreitung bleibt er stehen: Der
+// Scanner arbeitet weiter, die Ruhezeit des Stapels fängt das Ende ab.
+async function scanneStapel(req, res, endpoint, userHinweis) {
+  const caps = await getScannerCapabilities().catch(() => ({ hasAdf: false }));
+  if (!caps.hasAdf) {
+    return res.status(400).json({ error: 'Der Dokumentenstapel braucht einen Scanner mit Einzug.' });
+  }
+  let stapelId;
+  try {
+    stapelId = await starteStapel({ duplex: endpoint.endsWith('duplex'), hinweis: userHinweis || null });
+  } catch (err) {
+    if (err instanceof StapelGrenzeError) return res.status(429).json({ error: err.message });
+    console.error('POST /api/import/scan (Dokumentenstapel) error:', err);
+    return res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+  try {
+    const ok = await proxyScannerCall(req, res, { sichtbar: true, stapelId });
+    if (!ok && !req._scanTimeout) await verwirfLeerenStapel(stapelId, 'Der Scanner hat den Dokumentenstapel nicht geliefert.');
+  } catch (err) {
+    await verwirfLeerenStapel(stapelId, 'Der Scanner hat den Dokumentenstapel nicht geliefert.').catch(() => {});
+    console.error('POST /api/import/scan (Dokumentenstapel) error:', err);
+    appLog('ERROR', 'import', `Scanner-Proxy-Fehler (Dokumentenstapel): ${err.message}`);
+    if (!res.headersSent) res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+}
+
 // POST /api/import/scan-replace — Scan auslösen, dessen Ergebnis das PDF eines
 // existierenden Postbuch-Eintrags ersetzt. Setzt VOR dem Scanner-Aufruf einen
 // "Pending Replace"-Marker, der später vom /webhooks/scan-registered konsumiert
@@ -260,6 +333,9 @@ router.post('/scan-replace', async (req, res) => {
   const { postid } = req.body || {};
   if (!postid || !POSTID_RE.test(postid)) {
     return res.status(400).json({ error: 'Ungültige oder fehlende PostID' });
+  }
+  if (STAPEL_SCAN_ENDPOINTS.has(req.body?.endpoint)) {
+    return res.status(400).json({ error: 'Beim Ersetzen ist kein Dokumentenstapel möglich.' });
   }
   setPendingReplace(postid);
   appLog('INFO', 'import', `Scanner-Replace vorbereitet für ${postid}`,
@@ -307,7 +383,7 @@ router.post('/upload', async (req, res) => {
 
     appLog('INFO', 'import', `Upload empfangen: ${safeName} (${(pdfBuffer.length / 1024).toFixed(1)} KB)`);
 
-    enqueueDocument({ pdfBuffer, filename: safeName, ...(userHinweis ? { userHinweis } : {}) }, jobId, 0, {
+    await reiheDauerhaftEin({ pdfBuffer, filename: safeName, ...(userHinweis ? { userHinweis } : {}) }, jobId, 0, {
       batchSize: batchCount,  // Mehrfach-Upload meldet die Gesamtanzahl → Auto-Cache ab Datei 1
       onError: (err) => {
         console.error(`[import] Upload-Verarbeitung fehlgeschlagen für ${safeName}: ${err.message}`);
@@ -319,6 +395,47 @@ router.post('/upload', async (req, res) => {
   } catch (err) {
     console.error('POST /api/import/upload error:', err);
     appLog('ERROR', 'import', `Upload-Fehler: ${err.message}`);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// ── Upload: eine PDF als Dokumentenstapel (Modus „Stapel auftrennen“) ─────────────
+// Mehrseitig → Dokumentenstapel im Eingang (KI schlägt die Trennung vor).
+// Einseitig gibt es nichts zu trennen → normal in die Pipeline.
+
+router.post('/upload-stapel', async (req, res) => {
+  try {
+    const { filename, dataB64, hinweis } = req.body || {};
+    const userHinweis = typeof hinweis === 'string' ? hinweis.trim().slice(0, 1000) || undefined : undefined;
+    let pdfBuffer;
+    let seiten;
+    try {
+      pdfBuffer = decodeBase64Pdf(dataB64);
+      seiten = await countPdfPages(pdfBuffer);
+    } catch (err) {
+      return res.status(400).json({ error: `Die PDF ist nicht lesbar: ${err.message}` });
+    }
+    const safeName = sanitizeFilename(filename);
+
+    if (seiten >= 2) {
+      const { id, blaetter, ohneText } = await stapelAusPdf({ pdfBuffer, hinweis: userHinweis });
+      appLog('INFO', 'import', `Upload als Dokumentenstapel: ${safeName}, ${blaetter} Seiten`, { entity: 'stapel', entityId: id });
+      return res.json({ stapel: id, seiten: blaetter, ohneText, filename: safeName });
+    }
+
+    const jobId = tracker.create('doc-process', safeName, 10);
+    appLog('INFO', 'import', `Upload empfangen (einseitig, kein Stapel): ${safeName}`);
+    await reiheDauerhaftEin({ pdfBuffer, filename: safeName, ...(userHinweis ? { userHinweis } : {}) }, jobId, 0, {
+      onError: (err) => {
+        appLog('ERROR', 'import', `Upload-Verarbeitung fehlgeschlagen: ${safeName}: ${err.message}`);
+      },
+    });
+    res.json({ jobId, seiten, filename: safeName });
+  } catch (err) {
+    if (err instanceof StapelGrenzeError) return res.status(429).json({ error: err.message });
+    if (err?.status === 400) return res.status(400).json({ error: err.message });
+    console.error('POST /api/import/upload-stapel error:', err);
+    appLog('ERROR', 'import', `Stapel-Upload-Fehler: ${err.message}`);
     res.status(500).json({ error: 'Interner Serverfehler' });
   }
 });
@@ -352,7 +469,7 @@ router.post('/upload-merged', async (req, res) => {
 
     appLog('INFO', 'import', `Merge & Upload empfangen: ${safeName} aus ${files.length} Datei(en), ${(merged.length / 1024).toFixed(1)} KB`);
 
-    enqueueDocument({ pdfBuffer: merged, filename: safeName, ...(userHinweis ? { userHinweis } : {}) }, jobId, 0, {
+    await reiheDauerhaftEin({ pdfBuffer: merged, filename: safeName, ...(userHinweis ? { userHinweis } : {}) }, jobId, 0, {
       onError: (err) => {
         console.error(`[import] Merge-Verarbeitung fehlgeschlagen für ${safeName}: ${err.message}`);
         appLog('ERROR', 'import', `Merge-Verarbeitung fehlgeschlagen: ${safeName}: ${err.message}`);

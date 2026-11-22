@@ -113,10 +113,14 @@ export default function UpdateCard() {
 
   // Ein Lauf, der bereits aktiv ist (etwa nach einem Browser-Reload mitten im
   // Update), öffnet den Fortschrittsdialog von selbst – der Zustand liegt auf
-  // der Platte des Hosts, nicht in diesem Component.
+  // der Platte des Hosts, nicht in diesem Component. Nur Software-Updates:
+  // Host-Aufträge (etwa das Modell der lokalen KI nach der Installation)
+  // zeigen ihren Fortschritt dort, wo sie ausgelöst wurden (Reiter Stack).
+  const laufTyp = data?.lauf?.typ ?? data?.anforderung?.typ ?? 'update';
   useEffect(() => {
+    if (laufTyp !== 'update') return;
     if (data?.lauf?.status === 'laeuft' || data?.anforderung) setLaufOffen(true);
-  }, [data?.lauf?.status, data?.anforderung]);
+  }, [data?.lauf?.status, data?.anforderung, laufTyp]);
 
   const pruefen = useMutation({
     mutationFn: () => api.updates.pruefen(),

@@ -4,11 +4,12 @@
  * Deklarativ, kein Probing (wie CAP_KEYS in registry.js): Adaptive Thinking +
  * `effort` sind laut Anthropic-Doku (Stand 2026-08) nur auf einer kleinen,
  * versionierten Modellliste verfügbar (claude-sonnet-5, claude-opus-5,
- * claude-fable-5, claude-mythos-5 + deren Nachfolger). Auf diesen Modellen
+ * claude-fable-5, claude-mythos-5, claude-haiku-5 + deren Nachfolger; Haiku 5.5
+ * nachgeprüft 2026-11: adaptiv per Default, effort low–max, Default medium). Auf diesen Modellen
  * läuft Thinking serverseitig PER DEFAULT (nur unsichtbar, display:"omitted")
  * — die Policy hier entscheidet nur noch: sichtbar machen + Tiefe drosseln
  * (In-App) oder explizit ausschalten (MCP). Auf allen anderen Modellen
- * (Haiku, OpenAI-kompatibel, ältere Claude-Generationen) bleibt Thinking
+ * (Haiku 4.5, OpenAI-kompatibel, ältere Claude-Generationen) bleibt Thinking
  * unangetastet — dort gibt es serverseitig ohnehin nichts anzuschalten, ein
  * Wire-Feld dorthin zu schicken würde nur unnötig Fehlerfläche schaffen.
  *
@@ -17,7 +18,7 @@
  * Batch-Läufe (z. B. die Kostenträger-Profilierung, `zweck: 'profilierung'`)
  * dürfen höher gehen. Die Begründung für die Deckelung ist die interaktive
  * Antwortzeit; die trägt bei einem einmaligen Hintergrundlauf über wenige
- * PDFs nicht, siehe internaldocs/FEATURE_KOSTENTRAEGER_PROFILE.md Abschnitt 6.
+ * PDFs nicht, siehe internaldocs/archiv/FEATURE_KOSTENTRAEGER_PROFILE.md Abschnitt 6.
  * Der Sonderfall wird als benannter `zweck`-Parameter durchgereicht, nie als
  * freier `effort`-Wert, den jede Aufrufstelle beliebig hochdrehen könnte.
  */
@@ -26,7 +27,7 @@ import pool from '../../db.js';
 
 // Anthropic-Modellfamilien mit Adaptive-Thinking/effort-Unterstützung.
 // Deckt Basisname + optionales Datums-/Versions-Suffix ab (z.B. "-20251001").
-const ADAPTIVE_THINKING_RE = /^claude-(sonnet-5|opus-5|fable-5|mythos-5|mythos-preview)(-\d+)?$/;
+const ADAPTIVE_THINKING_RE = /^claude-(sonnet-5|opus-5|haiku-5|fable-5|mythos-5|mythos-preview)(-\d+)?$/;
 
 export function supportsAdaptiveThinking(model) {
   return ADAPTIVE_THINKING_RE.test(String(model || ''));

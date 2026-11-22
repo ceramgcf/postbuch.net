@@ -7,6 +7,8 @@ export const KI_KATEGORIE_LABEL = {
   positionen_nachlese:         'Einzelpositionen – Nachlese',
   repair:                      'Reparatur',
   erstattungsbescheid:         'Bescheid-Auswertung',
+  duplikat:                    'Duplikatprüfung',
+  stapel:                      'Dokumentenstapel-Trennung',
   kuerzung:                    'Kürzungszerlegung',
   kuerzung_nachlese:           'Kürzungszerlegung – Nachlese',
   embedding:                   'Embedding',

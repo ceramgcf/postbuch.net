@@ -28,9 +28,12 @@ import onedriveAuthRouter from './routes/onedrive-auth.js';
 import settingsRouter from './routes/settings.js';
 import settingsPublicRouter from './routes/settings-public.js';
 import webhooksRouter from './routes/webhooks.js';
+import { internGate } from './middleware/intern-gate.js';
 import abrechnungsperiodeRouter from './routes/abrechnungsperiode.js';
 import personenRouter from './routes/personen.js';
 import importRouter, { raeumeArchivImportTempAuf } from './routes/import.js';
+import eingangRouter from './routes/eingang.js';
+import { starteStapelDienst } from './service/stapel.js';
 import exportRouter from './routes/export.js';
 import disasterRecoveryRouter from './routes/disaster-recovery.js';
 import pushRouter from './routes/push.js';
@@ -56,6 +59,8 @@ import { startFingerprintJob } from './jobs/dr-fingerprint-job.js';
 import { startDuplicateTimeoutJob } from './jobs/duplicate-timeout-job.js';
 import { startReminderJob } from './jobs/reminder-job.js';
 import { startScanRetryJob } from './jobs/scan-retry-job.js';
+import { startLokalKiProviderJob } from './service/lokalki-provider.js';
+import { aufgabentypenUmstellen } from './service/aufgabentypen-umstellung.js';
 import { startCacheModeReaper } from './jobs/cache-mode-reaper.js';
 import { startPostbuchFeedJob } from './jobs/postbuch-feed-job.js';
 import { start as startDiscordGateway } from './lib/discord-gateway.js';
@@ -70,7 +75,9 @@ import {
 } from './service/pipeline-file-journal.js';
 import { starteErstattungsbescheidVerarbeitung } from './service/document-inserter.js';
 import { startHelpEmbeddingJob } from './service/help-corpus.js';
+import { eingebautesEmbeddingAbgleichen, embeddingSchwellenErgaenzen } from './service/embedding-neuberechnung.js';
 import { leseAgentStatus } from './lib/update-agent-datei.js';
+import { startNachRestoreDienste } from './service/stack-profil.js';
 
 function recoverPipeline(settings) {
   return recoverPendingPipelineFiles(settings, {
@@ -168,6 +175,9 @@ app.use(session({
   secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
+  // Gleitende Laufzeit: Jede Anfrage verlängert Cookie und Datenbank-Eintrag
+  // (store.touch) um maxAge. Abgemeldet wird erst nach 7 Tagen ohne Nutzung.
+  rolling: true,
   cookie: {
     httpOnly: true,
     sameSite: 'strict',
@@ -175,7 +185,7 @@ app.use(session({
     // wirklich über HTTPS kam (via trust proxy + X-Forwarded-Proto von Caddy).
     // Hart true würde den direkten LAN-Zugriff über http://<host>:3420 aussperren.
     secure: 'auto',
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 Tage
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 Tage ab der letzten Nutzung
   },
 }));
 
@@ -194,6 +204,10 @@ app.get('/.well-known/assetlinks.json', (req, res) => {
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
 });
+
+// Dienstinterne Routen (/api/internal, /api/webhooks) nie über den Web-Proxy,
+// in keiner Schreibweise. Steht vor jeder Montage dieser Pfade.
+app.use(internGate);
 
 // Schreibende Anfragen, die ein Browser aus einem fremden Kontext auslöst,
 // abweisen (Sec-Fetch-Site). SameSite=strict deckt nur fremde Sites ab;
@@ -319,8 +333,8 @@ app.use('/api/abrechnungsperiode', abrechnungsperiodeRouter);
 app.use('/api/personen', personenRouter);
 app.use('/api/verbleib', verbleibRouter);
 app.use('/api/import', importRouter);
+app.use('/api/eingang', eingangRouter);
 app.use('/api/export', exportRouter);
-app.use('/api/dr', disasterRecoveryRouter);
 app.use('/api/taxonomie', taxonomieRouter);
 
 // Push-Benachrichtigungen
@@ -347,6 +361,10 @@ app.use('/api/updates', requireAdmin, updatesRouter);
 app.use('/api/dev', requireAdmin, devUnlockRouter);
 app.use('/api/einrichtung', requireAdmin, einrichtungRouter);
 app.use('/api/scanner-tuning', requireAdmin, scannerTuningRouter);
+// Notfallwiederherstellung: verknüpft den gesamten Bestand neu mit Dateien
+// eines frei wählbaren Ordners und kann Einträge löschen – wie der
+// Ordner-Umzug eine Systemaktion, nicht die eines vollzugriff-Nutzers.
+app.use('/api/dr', requireAdmin, disasterRecoveryRouter);
 // MCP-Token-Verwaltung: jeder eingeloggte Nutzer verwaltet eigene Tokens
 // (lesezugriff wird durch die Write-Protection oben von POST/DELETE geblockt;
 //  Admin sieht/verwaltet zusätzlich alle — Scoping in der Route).
@@ -367,10 +385,21 @@ app.listen(PORT, () => {
   heileAblageWurzel().catch(err => console.warn('[storage] Pfadgrenze nicht abgleichbar:', err.message));
   // Offene Umstellung des OneDrive-Zugriffs hält die Pipeline weiter an.
   initOnedriveZugriff().catch(err => console.warn('[onedrive] Zugriffsumstellung nicht lesbar:', err.message));
-  // OneDrive-Polling starten (falls in _settings aktiviert)
-  startOnedrivePolling();
+  // Gesicherte Pipeline-Aufträge (Uploads, Scans, zurückgestellte Aufträge)
+  // vor dem Watcher übernehmen: wartende Inbox-Dateien brauchen ihre Sperre,
+  // bevor der erste Poll sie sieht. Danach OneDrive-Polling starten (falls in
+  // _settings aktiviert).
+  pipelineQueue.stelleAuftraegeWiederHer()
+    .catch(err => console.error('[pipeline-queue] Wiederaufnahme fehlgeschlagen:', err.message))
+    .finally(() => startOnedrivePolling());
+  // Dokumentenstapel: Wiederaufnahme nach Neustart und Takt für Ruhezeit,
+  // Countdown und Aufräumen (service/stapel.js).
+  starteStapelDienst();
   // Backup-Cron-Job starten (falls in _settings aktiviert)
   startBackupJob();
+  // Nach einem Einspielen die Dienste wieder anfordern, die das gesicherte
+  // System hatte (Scanner).
+  startNachRestoreDienste();
   backupSchluesseldateiAbgleichen().catch(err => console.warn('[backup] Schlüsseldatei nicht abgleichbar:', err.message));
   // Abgelaufene Abrechnungs-Sessions automatisch aufräumen (alle 15 Minuten).
   // Einmaliger Lauf direkt beim Start deckt den Crash-/Neustart-Fall ab, bei
@@ -385,6 +414,10 @@ app.listen(PORT, () => {
   startReminderJob();
   // Scan-Retry: exponentieller Backoff für fehlgeschlagene Phase-0-Uploads (alle 5 Minuten)
   startScanRetryJob();
+  // Provider „Lokale KI“: aktiv und Kontextfenster laut Heartbeat des Host-Agenten (jede Minute)
+  startLokalKiProviderJob();
+  // Einmalig: einfache Modellwahl auf die zwei Aufgabentypen umstellen
+  aufgabentypenUmstellen().catch((err) => console.error('[aufgabentypen] Umstellung fehlgeschlagen:', err.message));
   // Auch transiente _failed-/Backend-Ausfälle werden ohne weiteren Neustart
   // erneut reconciled. Journalzeilen begrenzen den Lauf auf bekannte Dateien.
   const pipelineRecoveryTimer = setInterval(() => {
@@ -402,7 +435,11 @@ app.listen(PORT, () => {
   // Dokumentationshash werden idempotent abgeglichen. Ohne einsatzbereiten
   // Embedding-Provider bleibt der Job ausstehend und wird beim Konfigurieren
   // desselben über routes/settings.js erneut angestoßen.
-  startHelpEmbeddingJob({ reason: 'app-start' });
+  eingebautesEmbeddingAbgleichen()
+    .catch(err => console.warn('[embedding] Eingebautes Modell nicht abgleichbar:', err.message))
+    .then(() => embeddingSchwellenErgaenzen())
+    .catch(err => console.warn('[embedding] Schwellen nicht ergänzt:', err.message))
+    .finally(() => startHelpEmbeddingJob({ reason: 'app-start' }));
   // Discord-Gateway: Button-Interactions für Duplikat-Entscheidungen (nur wenn Bot konfiguriert)
   setButtonHandler(async (jobId, decision, _interactionId, _token, username) => {
     await resolveDuplicate({ jobId, decision, source: `discord:${username}` });

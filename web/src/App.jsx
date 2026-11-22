@@ -1,5 +1,6 @@
-import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from 'react-router';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useRef } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation, useNavigate } from 'react-router';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { EINRICHTUNG_GATE_QUERY_KEY } from '@/lib/einrichtung-gate';
 import { istSchlankeHilfe } from '@/lib/docs';
@@ -29,6 +30,8 @@ import SaldoDetailPage from '@/pages/SaldoDetailPage';
 import WiedervorlagenPage from '@/pages/WiedervorlagenPage';
 import SettingsPage from '@/pages/SettingsPage';
 import ImportPage from '@/pages/ImportPage';
+import EingangDetailPage from '@/pages/EingangDetailPage';
+import DuplikatVergleichPage from '@/pages/DuplikatVergleichPage';
 import ImportwegePage from '@/pages/ImportwegePage';
 import DecisionPage from '@/pages/DecisionPage';
 import AssistantPage from '@/pages/AssistantPage';
@@ -69,6 +72,24 @@ function EinrichtungsGate({ children }) {
     retry: false,
     staleTime: 5_000,
   });
+  // Nach einer Wiederherstellung, bei der etwas rot ist oder vom gesicherten
+  // System abweicht, einmalig in den Assistenten führen. Das Backend merkt
+  // sich die Einladung, danach bleibt nur die Karte auf dem Dashboard.
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
+  const einladen = Boolean(isAdmin && data?.nachRestoreEinladen && !data?.blockiert);
+  const eingeladen = useRef(false);
+  useEffect(() => {
+    if (!einladen || eingeladen.current) return;
+    eingeladen.current = true;
+    api.einrichtung.nachRestoreEingeladen()
+      .catch(() => null)
+      .finally(() => {
+        queryClient.invalidateQueries({ queryKey: EINRICHTUNG_GATE_QUERY_KEY });
+        queryClient.invalidateQueries({ queryKey: ['einrichtung'] });
+        navigate('/einrichtung/willkommen', { replace: true, state: { from: location.pathname } });
+      });
+  }, [einladen, navigate, queryClient, location.pathname]);
   if (authenticated === true && isLoading) {
     return <div className="flex items-center justify-center h-screen"><Spinner className="h-8 w-8" /></div>;
   }
@@ -161,6 +182,8 @@ export default function App() {
         }>
           <Route index element={<DashboardPage />} />
           <Route path="import" element={<ImportPage />} />
+          <Route path="import/eingang/:schluessel" element={<EingangDetailPage />} />
+          <Route path="import/duplikat/:jobId" element={<DuplikatVergleichPage />} />
           <Route path="importwege" element={<ImportwegePage />} />
           <Route path="postbuch" element={<PostbuchListPage />} />
           <Route path="postbuch/:postid" element={<DocumentDetailPage />} />

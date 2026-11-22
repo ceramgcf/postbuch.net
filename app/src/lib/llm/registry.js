@@ -111,6 +111,20 @@ export const MAX_TOKENS_NOTFALL = 4096;
 export const MAX_TOKENS_OHNE_GRENZE = 64000;
 
 /**
+ * Lehnt der Provider den Aufruf ab, WEIL max_tokens über der Ausgabegrenze des
+ * Modells liegt? Bewusst zweistufig (Feldname UND ein Grenzwort), damit ein
+ * beliebiger Fehlertext, der zufällig „max_tokens" enthält, keinen zweiten
+ * bezahlten Aufruf auslöst. Anthropic nennt die Grenze im Klartext
+ * („… > 8192, which is the maximum allowed number of output tokens"), OpenAI
+ * meldet „max_tokens is too large"; lokale Server variieren.
+ */
+export function istMaxTokensAblehnung(err) {
+  const msg = String(err?.message || '');
+  if (!/max_?tokens|max_completion_tokens/i.test(msg)) return false;
+  return /maximum|too large|too many|exceed|greater than|out of range|zu groß|größer/i.test(msg);
+}
+
+/**
  * Liest aus einer max_tokens-Ablehnung die Ausgabegrenze des Modells, z. B.
  * „max_tokens: 64000 > 32000, which is the maximum …“ oder „… supports at
  * most 16384 completion tokens“. Gewählt wird die größte genannte Zahl
@@ -123,6 +137,26 @@ export function grenzeAusAblehnung(meldung, abgelehnt) {
     .filter((n) => Number.isFinite(n) && n >= MAX_OUTPUT_TOKENS_MIN
       && (!Number.isFinite(abgelehnt) || n < abgelehnt));
   return kandidaten.length ? Math.max(...kandidaten) : null;
+}
+
+// ── Kontextfenster ──────────────────────────────────────────────────────────
+// Harte Obergrenze für jeden Provider, auch für Cloud-Modelle mit größerem
+// Fenster: Jenseits davon nimmt die Antwortqualität spürbar ab, und kein
+// Dokument dieser Anwendung braucht mehr. `undefined` heißt „kein eigener
+// Wert“ und bedeutet diese Grenze. Kleinere Fenster (lokale Modelle) trägt
+// man pro Provider ein; daraus leiten sich Text- und Bildbudget ab.
+export const KONTEXT_TOKENS_GRENZE = 200000;
+export const KONTEXT_TOKENS_MIN = 4096;
+
+export function normalizeKontextTokens(wert) {
+  const n = Math.floor(Number(wert));
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(Math.max(n, KONTEXT_TOKENS_MIN), KONTEXT_TOKENS_GRENZE);
+}
+
+/** Wirksames Kontextfenster eines Providers in Tokens. */
+export function kontextTokensVon(provider) {
+  return normalizeKontextTokens(provider?.kontextTokens) ?? KONTEXT_TOKENS_GRENZE;
 }
 
 export function normalizeMaxOutputTokens(wert) {
@@ -199,7 +233,7 @@ function normalizeCaps(typ, caps) {
 // Reservierte IDs. Sie können im UI bearbeitet (Label, Caps, baseUrl), aber
 // nicht gelöscht oder umbenannt werden — sonst zeigen bestehende
 // llm_model_*-Werte ins Leere.
-export const BUILTIN_PROVIDER_IDS = ['anthropic', 'openai', 'bedrock', 'subscription', 'eingebaut'];
+export const BUILTIN_PROVIDER_IDS = ['anthropic', 'openai', 'bedrock', 'subscription', 'eingebaut', 'lokal'];
 
 /**
  * Der eingebaute Embedding-Dienst (Compose-Dienst `embedding`, Verzeichnis
@@ -212,6 +246,31 @@ export const BUILTIN_PROVIDER_IDS = ['anthropic', 'openai', 'bedrock', 'subscrip
  * und die Schreibroute lehnt ihn ab.
  */
 export const EINGEBAUT_ID = 'eingebaut';
+
+/**
+ * Die eingebaute lokale KI (Compose-Dienst `llm`, Profil lokalki). Aus
+ * demselben Grund wie beim Embedding-Dienst fest verdrahtet. Ob sie aktiv ist
+ * und wie groß ihr Kontextfenster ist, meldet der Host-Agent; der Abgleich
+ * (service/lokalki-provider.js) legt beides in `_settings.lokalki_provider` ab.
+ */
+export const LOKAL_ID = 'lokal';
+/** Kontextfenster, solange der Agent noch keinen Wert gemeldet hat (kleinste Stufe). */
+export const LOKAL_KONTEXT_STANDARD = 32768;
+/** Modellname, unter dem llama.cpp das Modell anbietet (`--alias` in docker-compose.yml). */
+export const LOKAL_MODELL = 'gemma';
+
+/**
+ * Der Alias bleibt bei jedem Modelltausch gleich, damit gespeicherte Modell-
+ * wahlen gültig bleiben. Für Anzeige und Dokument zählt aber, welches Modell
+ * wirklich läuft: dessen Anzeigename aus lokal-modelle.kv (z. B. „Gemma 4 12B“),
+ * vom Abgleich in `_settings.lokalki_provider.modellAnzeige` abgelegt. Andere
+ * Modellnamen kommen unverändert zurück; mit `providerId` nur für die lokale KI.
+ */
+export function modellAnzeigename(model, settings, providerId = LOKAL_ID) {
+  if (model !== LOKAL_MODELL || providerId !== LOKAL_ID) return model;
+  const name = settings?.lokalki_provider?.modellAnzeige;
+  return typeof name === 'string' && name ? name : model;
+}
 
 const BUILTINS = {
   anthropic: {
@@ -240,6 +299,13 @@ const BUILTINS = {
     capsOverride: { pdf: false, vision: false, tools: false, streaming: false, promptCache: false, embeddings: true },
     fest: true,
   },
+  [LOKAL_ID]: {
+    id: LOKAL_ID, typ: 'openai-compatible', label: 'Lokale KI',
+    baseUrl: 'http://llm:8080/v1', legacyKeySetting: null,
+    // llama.cpp nimmt Bilder als data-URL im OpenAI-Format, aber keine PDFs.
+    capsOverride: { pdf: false, vision: true, tools: true, streaming: true, promptCache: false, embeddings: false },
+    fest: true,
+  },
 };
 
 /** Fester Eintrag des eingebauten Embedding-Dienstes (siehe EINGEBAUT_ID). */
@@ -249,6 +315,18 @@ function eingebautEintrag() {
     id: b.id, typ: b.typ, label: b.label, baseUrl: b.baseUrl, dialekt: 'openai',
     aktiv: true, caps: { ...b.capsOverride }, builtin: true,
     nurEmbedding: true, fest: true, erlaubtPrivateZiele: true,
+  };
+}
+
+/** Fester Eintrag der lokalen KI (siehe LOKAL_ID). */
+function lokalEintrag(settings) {
+  const b = BUILTINS[LOKAL_ID];
+  const stand = settings?.lokalki_provider && typeof settings.lokalki_provider === 'object' ? settings.lokalki_provider : {};
+  return {
+    id: b.id, typ: b.typ, label: b.label, baseUrl: b.baseUrl, dialekt: 'openai',
+    aktiv: stand.aktiv === true, caps: { ...b.capsOverride }, builtin: true,
+    kontextTokens: normalizeKontextTokens(stand.kontextTokens) ?? LOKAL_KONTEXT_STANDARD,
+    fest: true, erlaubtPrivateZiele: true,
   };
 }
 
@@ -309,7 +387,7 @@ export function listProviders(settings) {
   for (const id of BUILTIN_PROVIDER_IDS) {
     const b = BUILTINS[id];
     if (b.fest) {
-      byId.set(id, eingebautEintrag());
+      byId.set(id, id === LOKAL_ID ? lokalEintrag(s) : eingebautEintrag());
       continue;
     }
     byId.set(id, {
@@ -349,6 +427,7 @@ export function listProviders(settings) {
       // Logik wie bei isProviderKeySetting (GET **und** PUT).
       rasterMaxSeiten: normalizeRasterMaxSeiten(raw.rasterMaxSeiten),
       maxOutputTokens: normalizeMaxOutputTokens(raw.maxOutputTokens),
+      kontextTokens: normalizeKontextTokens(raw.kontextTokens),
       builtin: !!vorhanden?.builtin,
       // Private Netzwerkziele nur mit ausdrücklichem Opt-in pro Provider.
       erlaubtPrivateZiele: raw.erlaubtPrivateZiele === true,

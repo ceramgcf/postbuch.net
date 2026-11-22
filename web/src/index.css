@@ -9,7 +9,9 @@
   --color-input: oklch(0.91 0.02 280);
   --color-ring: oklch(0.55 0.22 280);
 
-  --color-background: oklch(0.985 0.005 280);
+  /* Grundfläche: Hauch von Elfenbein (warm, sehr wenig gesättigt), damit Lila und
+     Türkis davor ruhig wirken. Karten bleiben reinweiß. */
+  --color-background: oklch(0.993 0.003 88);
   --color-foreground: oklch(0.18 0.02 280);
 
   /* Primary: rich purple */
@@ -28,8 +30,9 @@
   --color-destructive: oklch(0.58 0.24 27);
   --color-destructive-foreground: oklch(0.58 0.24 27);
 
-  /* Muted: very light purple-grey */
-  --color-muted: oklch(0.96 0.012 280);
+  /* Muted: neutrales, leicht warmes Hellgrau passend zur Grundfläche. Flieder
+     bleibt der Sekundärfarbe vorbehalten. */
+  --color-muted: oklch(0.96 0.004 85);
   --color-muted-foreground: oklch(0.50 0.03 280);
 
   /* Cards & popovers */
@@ -39,7 +42,7 @@
   --color-popover-foreground: oklch(0.18 0.02 280);
 
   /* Sidebar-specific */
-  --color-sidebar: oklch(0.97 0.015 280);
+  --color-sidebar: oklch(0.982 0.004 85);
   --color-sidebar-foreground: oklch(0.30 0.04 280);
   --color-sidebar-active: oklch(0.50 0.22 280);
 
@@ -199,6 +202,13 @@ body {
    die Utilities der Seiten überstimmt. */
 .mobil-inhalt > * {
   padding: 0;
+}
+
+/* Feste Statuszeile mobil (lib/ungespeichert.jsx): Hintergrund randlos, Inhalt
+   auf denselben Seitenrändern wie die Karten (px-safe). */
+.mobil-statuszeile .statuszeile-spalte {
+  padding-left: max(env(safe-area-inset-left, 0px), 0.75rem);
+  padding-right: max(env(safe-area-inset-right, 0px), 0.75rem);
 }
 
 /* Bottom-Sheet (mobile Dialoge) gleitet von unten herein */

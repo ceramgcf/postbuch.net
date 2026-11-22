@@ -39,3 +39,20 @@ export async function scannerFetch(pfadMitQuery, options = {}) {
   if (token) headers['X-Scanner-Token'] = token;
   return fetch(`${SCANNER_URL}${pfadMitQuery}`, { ...options, headers });
 }
+
+// Fehlercodes, mit denen fetch scheitert, wenn der Scanner-Dienst gar nicht
+// läuft: Ohne Container löst Docker den Namen „scanner“ nicht auf, ein
+// startender Container nimmt noch keine Verbindung an.
+const DIENST_FEHLT = new Set(['ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED']);
+
+/**
+ * Verständliche Meldung für einen gescheiterten Aufruf des Scanner-Dienstes.
+ * Statt „fetch failed“ sagt sie, dass der Scan-Dienst nicht läuft und wo man
+ * ihn einschaltet; andere Fehler behalten den bisherigen Text.
+ */
+export function scannerFehlertext(err) {
+  if (DIENST_FEHLT.has(err?.cause?.code)) {
+    return 'Der Scan-Dienst läuft auf diesem System nicht. Einschalten unter Einstellungen → Scanner → „Scannerprofil einschalten“.';
+  }
+  return `Scanner nicht erreichbar: ${err?.message || err}`;
+}

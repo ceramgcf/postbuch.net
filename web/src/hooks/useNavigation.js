@@ -2,6 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
 import { api } from '@/api/client';
 import { bildeNavigation } from '@/lib/navigation';
+import { useOffeneEingaenge } from '@/hooks/useOffeneEingaenge';
+import { istDringend } from '@/lib/eingang';
 
 /**
  * Navigation + Branding-Daten für Sidebar und mobile Kopfleiste.
@@ -35,7 +37,11 @@ export function useNavigation() {
     retry: false,
   });
 
+  // Roter Punkt an „Importieren“: nur, wenn ein Eingang auf den Nutzer wartet.
+  const { zaehler } = useOffeneEingaenge();
+
   return {
+    eingangHandlung: istDringend(zaehler),
     ...bildeNavigation({ isAdmin, istEingeschraenkt, navVis, hasInsuredPerson }),
     istEingeschraenkt,
     instanceName: appSettings?.instance_name?.value || '',

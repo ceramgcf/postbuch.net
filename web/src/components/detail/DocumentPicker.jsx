@@ -11,7 +11,7 @@ import { FileText } from 'lucide-react';
 // Dialog zum Auswählen eines Dokuments (auf `arten` oder mit `nurRechnungen` auf
 // Dokumente mit Rechnungsblock eingeschränkt) – per Suche
 // (Nummer/Betreff/Kontakt) ODER per direktem Einfügen eines SymLink-Tokens.
-export function DocumentPicker({ open, onOpenChange, arten, nurRechnungen = false, title, description, onSelect, isPending }) {
+export function DocumentPicker({ open, onOpenChange, arten, nurRechnungen = false, title, description, onSelect, isPending, fehler }) {
   const [q, setQ] = useState('');
   const [items, setItems] = useState([]);
   const [hi, setHi] = useState(0);
@@ -42,7 +42,7 @@ export function DocumentPicker({ open, onOpenChange, arten, nurRechnungen = fals
   const pastedPostid = parsePostidToken(q);
 
   function choose(postid) {
-    onSelect(postid);
+    if (!isPending) onSelect(postid);
   }
 
   function handleKeyDown(e) {
@@ -112,6 +112,7 @@ export function DocumentPicker({ open, onOpenChange, arten, nurRechnungen = fals
         </div>
       </div>
 
+      {fehler && <p role="alert" className="mt-3 text-sm text-destructive">{fehler}</p>}
       <DialogFooter>
         <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={isPending}>Abbrechen</Button>
       </DialogFooter>

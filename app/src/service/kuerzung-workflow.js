@@ -4,7 +4,7 @@
  * Erstattungsbescheid-Einzelpositionen.
  *
  * Bündelt zentrale Validierung, Row Locks, fachliche Fehlercodes (siehe
- * internaldocs/FEATURE_KUERZUNGEN_GESEHEN_PKV_PRUEFUNG_PLAN.md, Abschnitt 6.2)
+ * internaldocs/archiv/FEATURE_KUERZUNGEN_GESEHEN_PKV_PRUEFUNG_PLAN.md, Abschnitt 6.2)
  * und UI-Log, damit Kürzungsseite, Beihilfebescheid und Periodenseite exakt
  * dieselben Regeln verwenden.
  *
@@ -104,16 +104,20 @@ export async function vormerkenFuerAktuellePkvPeriode(ebPostid, ebSubid, kuerzun
     await sperrePerioden(client, vorab.rows.map(({ person }) => ({ person, kostentraeger: 'PKV' })));
 
     const kRes = await client.query(
-      `SELECT ep.behandelte_person AS person
-         FROM erstattungsbescheid_kuerzung k
-         JOIN erstattungsbescheid_einzelposition ep ON ep.postid = k.postid AND ep.subid = k.eb_subid
-        WHERE k.postid = $1 AND k.eb_subid = $2 AND k.kuerzung_id = $3
-        FOR UPDATE OF k`,
+      `SELECT 1 FROM erstattungsbescheid_kuerzung
+        WHERE postid = $1 AND eb_subid = $2 AND kuerzung_id = $3 FOR UPDATE`,
       [ebPostid, ebSubid, kuerzungId]
     );
     if (kRes.rows.length === 0) throw httpError('Kürzung nicht gefunden', 404);
-    const person = kRes.rows[0].person;
+    const { rows: [position] } = await client.query(
+      'SELECT behandelte_person FROM erstattungsbescheid_einzelposition WHERE postid = $1 AND subid = $2',
+      [ebPostid, ebSubid],
+    );
+    const person = position?.behandelte_person;
     if (!person) throw httpError('PERSON_FEHLT_ODER_UNGUELTIG', 422);
+    if (person !== vorab.rows[0]?.person) {
+      throw httpError('Die behandelte Person wurde inzwischen geändert. Bitte versuche es erneut.', 409);
+    }
 
     const bestehend = await client.query(
       `SELECT status, periode FROM beihilfe_kuerzung_pkv_pruefung

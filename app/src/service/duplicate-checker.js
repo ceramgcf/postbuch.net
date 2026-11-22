@@ -1,12 +1,20 @@
 /**
- * service/duplicate-checker.js — Embedding-basierte Duplikaterkennung
+ * service/duplicate-checker.js – Embedding-basierte Duplikaterkennung
  *
- * Ersetzt die alte OCR/SimHash/Levenshtein-Logik komplett.
- *
- * Algorithmus:
- *   1. Cosinus-Ähnlichkeit via HNSW-Index (pgvector <=> Operator) > Threshold (Default 0.9)
- *   2. Strikte Diskriminator-Validierung: Briefdatum + Adressat + fremdesZeichen + Betrag
- *   3. Erster valider Treffer gewinnt
+ * Ablauf (internaldocs/plaene/DUPLIKATPRUEFUNG-PLAN.md):
+ *   1. Kandidaten: alle Bestandsdokumente mit Cosinus-Ähnlichkeit ab der Schwelle
+ *      (Default 0,80), nur technische Obergrenze.
+ *   2. Je Kandidat die Anker zählen: Briefdatum, fremdes Zeichen, Betrag (beidseitig
+ *      gesetzt und gleich). Die Person ist kein Anker.
+ *   3. Voller Treffer (discriminatorsMatchStrict) → Duplikatverdacht ohne KI;
+ *      bei mehreren der ähnlichste.
+ *   4. Sonst, nur wenn eine KI-Prüfung übergeben wurde (Option „KI-Duplikatprüfung
+ *      in Zweifelsfällen“): KI-Urteil, wenn ein Kandidat mindestens einen Anker
+ *      teilt oder das neue Dokument ein Rezept ist. Die KI erhält höchstens drei
+ *      Kandidaten (Anker absteigend, dann Ähnlichkeit) und hat das letzte Wort:
+ *      Duplikatverdacht nur bei einem Ja mit Sicherheit ab 0,9.
+ *   Fehlt die KI oder schlägt sie fehl, besteht kein Verdacht. Ein fälschlich
+ *   gemeldetes Duplikat wiegt schwerer als ein übersehenes.
  */
 
 import pool from '../db.js';
@@ -87,6 +95,59 @@ export function discriminatorsMatchStrict(neu, alt) {
   return true;
 }
 
+/**
+ * Zahl der übereinstimmenden Anker (Briefdatum, fremdes Zeichen, Betrag), je nur
+ * gezählt, wenn beide Seiten einen Wert haben und die Werte gleich sind.
+ * @param {{ briefdatum, fremdesZeichen, betrag }} neu
+ * @param {{ briefdatum, fremdes_zeichen, betrag }} alt  (DB-Row)
+ * @returns {number} 0–3
+ */
+export function zaehleAnker(neu, alt) {
+  const gesetzt = (v) => v != null && v !== '';
+  let n = 0;
+  if (gesetzt(neu.briefdatum) && gesetzt(alt.briefdatum)
+    && toIsoDate(neu.briefdatum) === toIsoDate(alt.briefdatum)) n++;
+  if (gesetzt(neu.fremdesZeichen) && gesetzt(alt.fremdes_zeichen)
+    && eqZeichen(neu.fremdesZeichen, alt.fremdes_zeichen)) n++;
+  if (gesetzt(neu.betrag) && gesetzt(alt.betrag) && eqBetrag(neu.betrag, alt.betrag)) n++;
+  return n;
+}
+
+/**
+ * Auswahl für das KI-Urteil: zuerst die meisten Anker, bei Gleichstand die höhere
+ * Ähnlichkeit; höchstens `max` Kandidaten.
+ * @param {Array<{ anker: number, similarity: number }>} kandidaten
+ */
+export function waehleFuerKi(kandidaten, max = 3) {
+  return [...kandidaten]
+    .sort((a, b) => (b.anker - a.anker) || (Number(b.similarity) - Number(a.similarity)))
+    .slice(0, max);
+}
+
+/** KI fragen? Ja, wenn ein Kandidat mindestens einen Anker teilt oder ein Rezept vorliegt. */
+export function brauchtKi(kandidaten, istRezept) {
+  if (!kandidaten.length) return false;
+  return istRezept || kandidaten.some((k) => k.anker >= 1);
+}
+
+/** Mindestsicherheit eines KI-Ja für einen Duplikatverdacht. */
+export const KI_MIN_SICHERHEIT = 0.9;
+
+/**
+ * Wertet die Urteile der KI aus. Nur ein Ja mit Sicherheit ab 0,9 zählt; bei
+ * mehreren gewinnt das sicherste. Alles andere heißt: kein Duplikat.
+ * @param {Array<{ postid, urteil, sicherheit, grund }>} urteile
+ * @returns {{ postid, sicherheit, grund }|null}
+ */
+export function werteKiUrteileAus(urteile) {
+  if (!Array.isArray(urteile)) return null;
+  const ja = urteile
+    .filter((u) => u && u.postid && u.urteil === 'duplikat'
+      && Number.isFinite(Number(u.sicherheit)) && Number(u.sicherheit) >= KI_MIN_SICHERHEIT)
+    .sort((a, b) => Number(b.sicherheit) - Number(a.sicherheit));
+  return ja[0] ? { postid: ja[0].postid, sicherheit: Number(ja[0].sicherheit), grund: ja[0].grund || '' } : null;
+}
+
 // ── Kandidaten-Query ─────────────────────────────────────────────────────────
 
 const CANDIDATE_QUERY = `
@@ -97,6 +158,7 @@ const CANDIDATE_QUERY = `
     p.fremdes_zeichen,
     p.confidence,
     p.storage_id,
+    p.storage_backend,
     p.link,
     p.status,
     p.dokumentart AS art,
@@ -112,7 +174,7 @@ const CANDIDATE_QUERY = `
     AND p.embedding_signature = $3
     AND (p.embedding <=> $1::halfvec) < $2
   ORDER BY p.embedding <=> $1::halfvec ASC
-  LIMIT 5
+  LIMIT 50
 `;
 
 // ── Hauptfunktion ────────────────────────────────────────────────────────────
@@ -124,16 +186,21 @@ const CANDIDATE_QUERY = `
  * @param {object}      params.extractedData  - LLM-Ergebnis
  * @param {number[]|null} params.embedding    - Vorberechneter Vektor (null → kein OpenAI-Key)
  * @param {string|null} params.modifyPostID   - Korrektur-Modus: skip check
- * @param {number}      [params.threshold]    - Cosinus-Schwelle (default 0.90)
+ * @param {number}      [params.threshold]    - Cosinus-Schwelle (default 0.80)
+ * @param {Function|null} [params.kiPruefung] - async (kandidaten[]) → Urteile
+ *   [{ postid, urteil, sicherheit, grund }] oder null. Nur übergeben, wenn die
+ *   Option „KI-Duplikatprüfung in Zweifelsfällen“ an ist.
  * @param {object}      [pgClient]            - Optionaler PG-Client (default: pool)
  * @returns {Promise<{
  *   isDuplicate: boolean,
  *   matchID: string|null,
  *   finalPostID: string|null,
- *   match: { postid, similarity, confidence, onedriveId, webUrl, status, betreff, art }|null
+ *   match: { postid, similarity, confidence, onedriveId, webUrl, status, betreff, art }|null,
+ *   begruendung?: string,
+ *   quelle?: 'anker'|'ki'
  * }>}
  */
-export async function check({ extractedData, embedding, modifyPostID, threshold = 0.90 }, pgClient) {
+export async function check({ extractedData, embedding, modifyPostID, threshold = 0.80, kiPruefung = null }, pgClient) {
   const client = pgClient || pool;
 
   // Korrektur-Modus: kein Check nötig
@@ -143,7 +210,7 @@ export async function check({ extractedData, embedding, modifyPostID, threshold 
 
   // Kein Embedding → kein Embedding-Provider konfiguriert → Check überspringen
   if (!embedding) {
-    console.warn('[duplicate-checker] Embedding fehlt — Duplikat-Check übersprungen');
+    console.warn('[duplicate-checker] Embedding fehlt – Duplikat-Check übersprungen');
     return { isDuplicate: false, matchID: null, finalPostID: null, match: null };
   }
 
@@ -154,6 +221,14 @@ export async function check({ extractedData, embedding, modifyPostID, threshold 
   const embLiteral = toVectorLiteral(embedding);
   const candidates = await client.query(CANDIDATE_QUERY, [embLiteral, 1 - threshold, signature]);
 
+  return bewerteKandidaten(candidates.rows, extractedData, kiPruefung);
+}
+
+/**
+ * Entscheidung über die Kandidaten aus der Ähnlichkeitssuche (ohne Datenbank,
+ * exportiert für Unit-Tests). `rows` sind nach Ähnlichkeit absteigend sortiert.
+ */
+export async function bewerteKandidaten(rows, extractedData, kiPruefung = null) {
   const pb = extractedData.postbuch || {};
   const neu = {
     briefdatum: pb.briefdatum,
@@ -164,25 +239,50 @@ export async function check({ extractedData, embedding, modifyPostID, threshold 
               ?? extractedData.erstattungsbescheid?.erstattungsbetrag,
   };
 
-  for (const row of candidates.rows) {
+  const treffer = (row, begruendung, quelle) => ({
+    isDuplicate: true,
+    matchID: row.postid,
+    finalPostID: null,
+    match: {
+      postid:      row.postid,
+      similarity:  Number(row.similarity),
+      confidence:  Number(row.confidence),
+      onedriveId:  row.storage_id,
+      webUrl:      row.link,
+      status:      row.status,
+      betreff:     row.betreff,
+      art:         row.art,
+    },
+    begruendung,
+    quelle,
+  });
+
+  // Voller Treffer: Zeilen sind nach Ähnlichkeit sortiert, der erste gewinnt.
+  for (const row of rows) {
     if (discriminatorsMatchStrict(neu, row)) {
-      return {
-        isDuplicate: true,
-        matchID: row.postid,
-        finalPostID: null,
-        match: {
-          postid:      row.postid,
-          similarity:  Number(row.similarity),
-          confidence:  Number(row.confidence),
-          onedriveId:  row.storage_id,
-          webUrl:      row.link,
-          status:      row.status,
-          betreff:     row.betreff,
-          art:         row.art,
-        },
-      };
+      return treffer(row, 'Briefdatum, Person und die übrigen Merkmale stimmen überein.', 'anker');
     }
   }
 
-  return { isDuplicate: false, matchID: null, finalPostID: null, match: null };
+  const keiner = { isDuplicate: false, matchID: null, finalPostID: null, match: null };
+  if (typeof kiPruefung !== 'function') return keiner;
+
+  const kandidaten = rows.map((row) => ({ ...row, anker: zaehleAnker(neu, row) }));
+  const istRezept = String(extractedData.dokumentart || '').toLowerCase() === 'rezept';
+  if (!brauchtKi(kandidaten, istRezept)) return keiner;
+
+  const auswahl = waehleFuerKi(kandidaten);
+  let urteile = null;
+  try {
+    urteile = await kiPruefung(auswahl);
+  } catch (err) {
+    console.warn(`[duplicate-checker] KI-Duplikatprüfung fehlgeschlagen – kein Duplikatverdacht: ${err.message}`);
+    return keiner;
+  }
+  const ja = werteKiUrteileAus(urteile);
+  if (!ja) return keiner;
+  const row = auswahl.find((k) => k.postid === ja.postid);
+  if (!row) return keiner;
+  const pct = Math.round(ja.sicherheit * 100);
+  return treffer(row, `KI-Prüfung (Sicherheit ${pct} %): ${ja.grund || 'dasselbe Schreiben'}`, 'ki');
 }

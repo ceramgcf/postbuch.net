@@ -15,10 +15,10 @@ empfohlen.
 | Eintrag         | Inhalt                                                        |
 | --------------- | ------------------------------------------------------------- |
 | ![Dashboard-Symbol](icons/layout-dashboard.svg) **Dashboard**   | Kennzahlen, offene Entscheidungen, Wiedervorlagen, Warnbanner |
-| ![Import-Symbol](icons/upload.svg) **Importieren** | Scannen, hochladen, Dokumentenübergabe einspielen             |
+| ![Import-Symbol](icons/upload.svg) **Importieren** | Scannen, hochladen, offene Eingänge behandeln                 |
 | ![Dokumente-Symbol](icons/file-text.svg) **Dokumente**   | Die Liste aller Dokumente mit Filtern, Sortierung und Export  |
 | ![Akten-Symbol](icons/folder-open.svg) **Akten**       | Elektronische Akten und die Verwaltung der Sammelmappen       |
-| ![Suche-Symbol](icons/search.svg) **Suche**       | Volltext- und semantische Suche über Dokumente und Akten      |
+| ![Suche-Symbol](icons/search.svg) **Suche**       | Suche nach Stichwort und Inhalt über Dokumente und Akten      |
 | ![Assistent-Symbol](icons/message-circle.svg) **Assistent**   | Chat mit den eigenen Dokumenten                               |
 | ![Logs-Symbol](icons/scroll-text.svg) **Logs**        | Systemprotokolle (für Nicht-Admins ausblendbar)               |
 
@@ -83,12 +83,14 @@ Lösung verlinken:
   Modell wird vom Provider nicht mehr gelistet (der Link führt Admins in die
   KI-Einstellungen)
 - Update verfügbar (nur Admins)
-- fehlgeschlagene Dokumente
+- fehlgeschlagene Dokumente, wenn das Guthaben beim KI-Anbieter aufgebraucht scheint (führt in den
+  [Eingang](dokumente-importieren.md#der-eingang-offene-dokumente))
 - fehlende Embeddings
-- Scan-Wiederholungen
 - Dateiablage (OneDrive/Nextcloud) nicht verbunden
 - Dateiablage-Umzug begonnen, aber nicht abgeschlossen (Mischbestand)
-- offene Duplikat-Entscheidungen
+- **Offene Eingänge**: Anzahl der angenommenen PDFs, die noch kein Dokument sind, je Gruppe – auch Scans, deren Upload wiederholt wird oder gescheitert ist
+  (Handlung nötig, Duplikatverdacht, Wartet, In Verarbeitung) mit Sprung in den
+  [Eingang](dokumente-importieren.md#der-eingang-offene-dokumente)
 
 Darunter die Kennzahlen-Kacheln: **Dokumente gesamt**, **Unbezahlte Rechnungen**
 (mit Summe und nächster Fälligkeit), **Kürzungen gesamt** (nur bei versicherten
@@ -246,7 +248,7 @@ Elf Registerkarten. Für **Admins** sind alle sichtbar. Nicht-Admins sehen nur
 | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
 | ![Persönlich-Symbol](icons/user-round.svg) **Persönlich**     | Eigenes Passwort ändern, Zwei-Faktor-Anmeldung, automatisch folgen beim Import                                                                    | [Sicherheit](sicherheit.md#zwei-faktor-anmeldung) · [Importieren](dokumente-importieren.md#automatisch-folgen) |
 | ![Allgemein-Symbol](icons/globe.svg) **Allgemein**          | Instanzname, Basis-URL, Sichtbarkeit einzelner Menüpunkte, Parallelität der Verarbeitungs-Pipeline, Debug-Modus, Cloud-frei-Check, Update | [Betrieb](betrieb-troubleshooting.md)       |
-| ![KI-Symbol](icons/bot.svg) **KI**                 | Anbieter, Modellwahl und -stufen, Empfehlungen, Embedding-Modell                                                            | [KI-Anbieter](ki-provider.md)               |
+| ![KI-Symbol](icons/bot.svg) **KI**                 | Anbieter, Modellwahl (zwei Aufgabentypen oder jede Aufgabe einzeln), Empfehlungen, Embedding-Modell                                                            | [KI-Anbieter](ki-provider.md)               |
 | ![Scanner-Symbol](icons/scan-line.svg) **Scanner**            | Scanner suchen und einbinden, Auflösung, Farbmodus                                                                           | [Importieren](dokumente-importieren.md)     |
 | ![Ablage-Symbol](icons/hard-drive.svg) **Dateiablage**             | OneDrive/Nextcloud verbinden, Ordner, Umzug                                                                                  | [Dateiablage-Backends](storage-backends.md)      |
 | ![Personen-Symbol](icons/users.svg) **Personen & Zugänge** | Menschen anlegen, Rollen, PKV-/Beihilfe-Sätze, Zwei-Faktor-Pflicht und -Reset                                                | [Sicherheit](sicherheit.md)                 |
@@ -255,6 +257,21 @@ Elf Registerkarten. Für **Admins** sind alle sichtbar. Nicht-Admins sehen nur
 | ![MCP-Symbol](icons/plug.svg) **MCP-Zugriff**        | Tokens für externe Tools                                                                                                     | [MCP](mcp.md)                               |
 | ![Backup-Symbol](icons/archive.svg) **Backup**             | Zeitplan, Aufbewahrung, Wiederherstellung                                                                                    | [Backup](backup-wiederherstellung.md)       |
 | ![Benachrichtigungen-Symbol](icons/bell.svg) **Benachrichtigungen** | PWA-/Browser-Push (empfohlen), Discord (experimentell)                                                                       | [Benachrichtigungen](benachrichtigungen.md) |
+
+### Ungespeicherte Änderungen
+
+Was in einer Karte geändert, aber noch nicht gespeichert ist, meldet eine fest am
+unteren Rand stehende Statuszeile **Ungespeicherte Änderungen** mit den betroffenen Karten sowie den
+Knöpfen **Verwerfen** und **Speichern**. Wer dann eine andere Seite anklickt
+oder die Registerkarte wechselt, bekommt die Rückfrage **Änderungen speichern?**
+mit **Abbrechen**, **Verwerfen** und **Speichern**. Beim Neuladen oder Schließen
+des Browser-Tabs fragt der Browser selbst nach.
+
+Einige Änderungen speichert die Statuszeile nicht im Vorbeigehen, weil sie eine
+eigene Bestätigung brauchen: Backups abschalten, eine neue Ablagestruktur
+(zieht Dateien um), ein Wechsel des Embedding-Modells (berechnet alles neu) und
+ein neues MCP-Token (wird nur einmal angezeigt) und Discord ohne bestätigten Risikohinweis. Dann nennt die Statuszeile die
+Karte, in der die Bestätigung erfolgt.
 
 ---
 

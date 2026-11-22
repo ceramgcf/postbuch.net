@@ -16,7 +16,7 @@ import pool from '../db.js';
 import { getAdapter } from '../lib/storage/index.js';
 import { loadDynamicSettings, getAblageEbenen, getAblagePersonQuelle } from '../config.js';
 import {
-  ensureAblageOrdner, entfernePersonenSchluessel, istPersonenSchluessel, personSchluessel, behandeltePersonSql,
+  mitAblageOrdner, entfernePersonenSchluessel, istPersonenSchluessel, personSchluessel, behandeltePersonSql,
 } from './storage-setup.js';
 import { raeumeOrdnerAuf } from './storage-legacy-cleanup.js';
 import { appLog } from '../app-log.js';
@@ -37,12 +37,13 @@ export async function verschiebeAnSollort(postid, settings = null) {
   if (!row?.storage_id || !row.lebensbereich || !row.dokumentart) return { moved: false, newWebUrl: null };
 
   const s = settings || await loadDynamicSettings();
-  const folderId = await ensureAblageOrdner(s, row, row.storage_backend);
   const storage = getAdapter(row.storage_backend);
   const meta = await storage.getMeta(row.storage_id);
-  if (meta.parentId === folderId) return { moved: false, newWebUrl: null };
+  // mitAblageOrdner() löst eine inzwischen verschwundene Ordner-ID neu auf.
+  const moved = await mitAblageOrdner(s, row, row.storage_backend, (folderId) =>
+    (meta.parentId === folderId ? null : storage.move(row.storage_id, folderId, meta.name)));
+  if (!moved) return { moved: false, newWebUrl: null };
 
-  const moved = await storage.move(row.storage_id, folderId, meta.name);
   if (moved.webUrl) {
     await pool.query('UPDATE postbuch.postbuch SET link = $1 WHERE postid = $2', [moved.webUrl, postid]);
   }

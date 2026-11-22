@@ -25,6 +25,13 @@ const KATALOG = [
     dokument: '',
   },
   {
+    // Voyage 4 (nano, lite, large): dieselben Anweisungen, die die Voyage-API
+    // bei input_type query/document selbst voranstellt.
+    muster: /voyage[-_.]?4/i,
+    anfrage: 'Represent the query for retrieving supporting documents: ',
+    dokument: 'Represent the document for retrieval: ',
+  },
+  {
     muster: /arctic[-_.]?embed/i,
     anfrage: 'query: ',
     dokument: '',

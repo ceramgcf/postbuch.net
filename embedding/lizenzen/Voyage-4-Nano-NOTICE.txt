@@ -1,0 +1,12 @@
+============================================================
+= NOTICE file for voyage-4-nano                                                                       =
+============================================================
+voyage-4-nano
+Copyright (c) 2026 MongoDB, Inc.
+This model builds upon foundational work by the Qwen team at Alibaba Cloud (https://github.com/QwenLM/Qwen). We are grateful for their contributions to the open-source community, which have informed the development of this specialized embedding model.
+The original work is:
+* Qwen 3
+* Copyright (c) 2024-2025 Alibaba Cloud
+* Originally licensed under the Apache License, Version 2.0.
+* URL: https://huggingface.co/Qwen
+The modifications and additional training for the embedding functionality were performed by MongoDB, Inc.

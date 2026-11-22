@@ -1,5 +1,8 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router';
+import EingangGalerie from '@/components/import/EingangGalerie';
+import { useOffeneEingaenge } from '@/hooks/useOffeneEingaenge';
+import { anzahlDringend, anzahlGesamt } from '@/lib/eingang';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { Button } from '@/components/ui/button';
@@ -12,7 +15,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useDarstellung } from '@/hooks/useDarstellung';
 import {
   Upload, Scan, FileText, Trash2, Play, X, CheckCircle2, AlertTriangle, AlertCircle,
-  ArrowUp, ArrowDown, Layers, Inbox, Loader2, StopCircle, GripVertical,
+  ArrowUp, ArrowDown, Layers, Inbox, Loader2, StopCircle, GripVertical, Scissors,
   FileUp, ArrowLeft, Copy, Check, Info, Coins, PackageOpen, Lightbulb, ArrowRight, RefreshCw,
 } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
@@ -26,8 +29,8 @@ import { useSeitenstapel } from '@/components/kamerascan/Seitenstapel';
 // ── Scanner-Konfiguration ───────────────────────────────────────────────────
 
 const SOURCE_OPTIONS = [
-  { id: 'adf',           label: 'ADF',                   desc: 'Mehrere Seiten durch Einzug, ein Dokument',  session: false, size: false, requiresAdf: true },
-  { id: 'adf-batch',     label: 'ADF Stapel',            desc: 'Jedes Blatt wird ein eigenes Dokument; bei Beidseitig entfallen leere Rückseiten automatisch', session: false, size: false, requiresAdf: true, batch: true },
+  { id: 'adf',           label: 'Einzug',                desc: 'Mehrere Seiten durch Einzug, ein Dokument',  session: false, size: false, requiresAdf: true },
+  { id: 'adf-stapel',    label: 'Dokumentenstapel aus dem Einzug', desc: 'Mehrere Dokumente auf einmal einlegen', session: false, size: false, requiresAdf: true, batch: true },
   { id: 'flatbed-single',label: 'Flachbett Einzelseite',desc: 'Eine Seite vom Flachbett',                   endpoint: 'flatbed/single',    session: false, size: true  },
   { id: 'flatbed-multi', label: 'Flachbett Mehrseitig', desc: 'Mehrseitig vom Flachbett (Session)',         endpoint: 'flatbed/session/scan', session: true, size: true },
 ];
@@ -50,7 +53,7 @@ const STANDARD_QUELLE = { aufloesungen: [300, 600], modi: ['gray', 'color'] };
 function endpunktFuerQuelle(sourceOpt, duplex) {
   if (!sourceOpt) return undefined;
   if (sourceOpt.id === 'adf') return duplex ? 'adf/duplex' : 'adf/simplex';
-  if (sourceOpt.id === 'adf-batch') return duplex ? 'adf/batch/duplex' : 'adf/batch/simplex';
+  if (sourceOpt.id === 'adf-stapel') return duplex ? 'adf/stapel/duplex' : 'adf/stapel/simplex';
   return sourceOpt.endpoint;
 }
 
@@ -58,7 +61,7 @@ function endpunktFuerQuelle(sourceOpt, duplex) {
 function quelleFuerEndpunkt(endpunkt) {
   const e = String(endpunkt);
   if (!e.startsWith('adf/')) return 'flatbed';
-  // Deckt sowohl 'adf/duplex' als auch 'adf/batch/duplex' ab.
+  // Deckt 'adf/duplex' ebenso ab wie 'adf/stapel/duplex'.
   return e.endsWith('duplex') ? 'adf-duplex' : 'adf';
 }
 
@@ -338,7 +341,7 @@ function WebhookUrlField({ source, dpi, mode, size }) {
             {source?.batch && (
               <>
                 <br /><br />
-                <span className="font-medium text-foreground">Hinweis:</span> Ein einzelner Aufruf scannt den ganzen Stapel und liefert mehrere Dokumente zurück, ein PDF je Blatt.
+                <span className="font-medium text-foreground">Hinweis:</span> Ein einzelner Aufruf scannt den ganzen Dokumentenstapel. postbuch.net schlägt die Trennung in Dokumente vor; geprüft wird sie im Eingang.
               </>
             )}
           </div>
@@ -424,7 +427,7 @@ function ScannerCard({ replaceForPostId = null, onReplaceComplete }) {
   }, [settings]);
 
   const sourceOptions = useMemo(() => {
-    // ADF-Stapel erzeugt mehrere Dokumente aus einem Scan-Vorgang — das passt
+    // Der Dokumentenstapel erzeugt mehrere Dokumente aus einem Scan-Vorgang – das passt
     // nicht zum Ersetzen-Modus (genau eine Ziel-Datei für einen Eintrag).
     return SOURCE_OPTIONS
       .filter((opt) => !(opt.batch && replaceForPostId))
@@ -629,22 +632,18 @@ function ScannerCard({ replaceForPostId = null, onReplaceComplete }) {
     }
   }
 
-  // ADF-Stapel: eigener Handler statt startSimple(), da die Antwort ein
-  // files-Array statt eines einzelnen Dateinamens liefert und ein Papierstau
-  // mitten im Stapel einen dritten Zustand braucht (Teilerfolg, keine
-  // reine Erfolgs- oder Fehlermeldung).
+  // Dokumentenstapel: eigener Handler statt startSimple(), da die Antwort ein
+  // files-Array (ein PDF je Blatt) liefert und ein Papierstau mitten im
+  // Stapel einen dritten Zustand braucht (Teilerfolg). Die Blätter sammelt
+  // die App zu einem Dokumentenstapel im Eingang; dorthin folgt die Seite.
   async function startBatch(hinweis = '') {
     try {
       const r = await callScan(endpoint, {}, hinweis);
       const anzahl = r.files?.length ?? r.sheets ?? 0;
-      if (r.status === 'partial') {
-        setLastWarning(
-          `${r.msg || 'Teilweise erfolgreich.'} ${anzahl} Dokument${anzahl !== 1 ? 'e' : ''} werden verarbeitet.`,
-        );
-      } else {
-        setLastSuccess(`Scan OK · ${anzahl} Dokument${anzahl !== 1 ? 'e' : ''} aus ${r.pages || 0} Seite${(r.pages || 0) !== 1 ? 'n' : ''} · wird verarbeitet`);
-      }
-      folgeScan(r.files);
+      const text = `${anzahl === 1 ? '1 Blatt' : `${anzahl} Blätter`} eingelesen. Der Dokumentenstapel steht im Eingang, dort prüfst du die Trennung.`;
+      if (r.status === 'partial') setLastWarning(`${r.msg || 'Teilweise erfolgreich.'} ${text}`);
+      else setLastSuccess(`Scan OK · ${text}`);
+      if (r.stapel && leseImportFolgen().scan) navigate(`/import/eingang/${encodeURIComponent(`t:${r.stapel}`)}`);
     } catch (err) {
       setLastError(err.message);
     }
@@ -871,7 +870,7 @@ function ScannerCard({ replaceForPostId = null, onReplaceComplete }) {
         </DialogTitle>
         <DialogDescription>
           Du kannst der KI eine Erläuterung oder einen Kontext mitgeben – das verbessert Klassifizierung und Extraktion. Das Feld kann auch leer bleiben.
-          {hinweisDialog === 'batch' && ' Bei einem ADF-Stapel gilt der Hinweis für jedes der resultierenden Dokumente.'}
+          {hinweisDialog === 'batch' && ' Der Hinweis hilft beim Trennen und gilt für jedes entstehende Dokument.'}
         </DialogDescription>
         <textarea
           className="mt-3 w-full rounded-lg border border-border/60 bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 resize-none"
@@ -964,7 +963,7 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
   // mehreren Quellen gemergt). Batch (jede PDF eigenständig in die Pipeline)
   // ergibt für einen bestehenden Eintrag keinen Sinn und wird ausgeblendet.
   // Sonst ist Batch die Vorgabe.
-  const [mode, setMode] = useState(replaceForPostId ? 'collection' : 'batch'); // 'collection' | 'batch'
+  const [mode, setMode] = useState(replaceForPostId ? 'collection' : 'batch'); // 'batch' | 'collection' | 'stapel'
   const [items, setItems] = useState([]);         // [{ id, file, name, size }]
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState(null); // { type: 'error'|'success', msg }
@@ -998,10 +997,12 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
       const fresh = pdfs
         .filter(f => !existing.has(`${f.name}|${f.size}`))
         .map(alsEintrag);
+      // „Stapel auftrennen“ nimmt genau eine PDF: eine neue ersetzt die alte.
+      if (mode === 'stapel') return fresh.length ? [fresh[fresh.length - 1]] : prev;
       return [...prev, ...fresh];
     });
     setFeedback(null);
-  }, [stapel, replaceForPostId, onReplaceComplete]);
+  }, [stapel, replaceForPostId, onReplaceComplete, mode]);
 
   const onFileInputChange = (e) => {
     addFiles(e.target.files);
@@ -1107,6 +1108,52 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
     }
   }
 
+  // ── Stapel auftrennen: eine PDF, die KI schlägt die Trennung vor ─────────
+
+  async function submitStapel(hinweis = '') {
+    if (items.length !== 1) return;
+    setBusy(true);
+    setFeedback(null);
+    setProgress({ current: 0, total: 1, phase: 'Lese Datei' });
+    try {
+      const dataB64 = await fileToBase64(items[0].file);
+      setProgress({ current: 1, total: 1, phase: 'Sende an Server …' });
+      const res = await api.import.uploadStapel(items[0].name, dataB64, hinweis);
+      setItems([]);
+      if (res.stapel) {
+        // Ohne Textebene kann die KI nicht trennen. Das wird hier gesagt, nicht erst im Eingang.
+        if (res.ohneText > 0) {
+          const alle = res.ohneText >= res.seiten;
+          setFeedback({
+            type: 'warning',
+            msg: alle
+              ? `${res.seiten} Seiten übernommen. Die PDF hat keine Textebene (Scan ohne Texterkennung), deshalb kann die KI keine Trennung vorschlagen. `
+                + 'Alle Seiten liegen vorerst in einem Dokument; die Trennungen setzt du im Eingang von Hand.'
+              : `${res.seiten} Seiten übernommen. ${res.ohneText} davon haben keine Textebene; dort kann die KI die Trennung nicht beurteilen. `
+                + 'Bitte prüfe diese Stellen im Eingang besonders.',
+          });
+          return;
+        }
+        if (leseImportFolgen().datei) {
+          navigate(`/import/eingang/${encodeURIComponent(`t:${res.stapel}`)}`);
+          return;
+        }
+        setFeedback({ type: 'success', msg: `${res.seiten} Seiten übernommen. Der Dokumentenstapel steht im Eingang, dort prüfst du die Trennung.` });
+        return;
+      }
+      if (leseImportFolgen().datei) {
+        navigate(folgenUrl({ jobIds: [res.jobId] }));
+        return;
+      }
+      setFeedback({ type: 'success', msg: `Die PDF hat nur eine Seite und geht als ein Dokument in die Pipeline · Job ${res.jobId.slice(0, 8)}…` });
+    } catch (err) {
+      setFeedback({ type: 'error', msg: err.message });
+    } finally {
+      setBusy(false);
+      setProgress(null);
+    }
+  }
+
   // ── Batch: jede Datei einzeln in die Pipeline ────────────────────────────
 
   async function submitBatch(hinweis = '', liste = items) {
@@ -1166,51 +1213,42 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
         <CardDescription className="text-xs">
           {replaceForPostId
             ? `Lade eine PDF – oder mehrere, die in der gewählten Reihenfolge zu einer Datei zusammengeführt werden – als Ersatz für ${replaceForPostId} hoch. Fotos werden vorher im Scan zu einer PDF aufbereitet. Keine Pipeline, keine KI.`
-            : 'Eine oder mehrere PDFs direkt in die Pipeline geben – entweder als Batch (jede einzeln) oder als Sammlung (in eine Datei gemergt). Fotos öffnen sich im Scan und werden dort wie Kameraaufnahmen zu einer PDF aufbereitet.'}
+            : 'PDFs direkt in die Pipeline geben – als Batch (jede einzeln), als Sammlung (in eine Datei gemergt) oder eine PDF mit mehreren Dokumenten als Stapel auftrennen. Fotos öffnen sich im Scan und werden dort wie Kameraaufnahmen zu einer PDF aufbereitet.'}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Modus-Toggle (im Replace-Modus deaktiviert: nur Sammlung sinnvoll) */}
         {!replaceForPostId && (
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setMode('batch')}
-              disabled={busy}
-              className={[
-                'flex-1 rounded-lg border px-3 py-2 text-left transition-all',
-                mode === 'batch'
-                  ? 'border-primary bg-primary/10 text-primary shadow-sm shadow-primary/10'
-                  : 'border-border/60 bg-background hover:border-primary/40 hover:bg-primary/5',
-              ].join(' ')}
-            >
-              <div className="flex items-center gap-2 font-medium text-sm">
-                <Inbox className="h-4 w-4" />
-                Batch
-              </div>
-              <div className="text-xs text-muted-foreground mt-0.5">
-                Jede PDF einzeln in die Pipeline geben (kein Merge)
-              </div>
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('collection')}
-              disabled={busy}
-              className={[
-                'flex-1 rounded-lg border px-3 py-2 text-left transition-all',
-                mode === 'collection'
-                  ? 'border-primary bg-primary/10 text-primary shadow-sm shadow-primary/10'
-                  : 'border-border/60 bg-background hover:border-primary/40 hover:bg-primary/5',
-              ].join(' ')}
-            >
-              <div className="flex items-center gap-2 font-medium text-sm">
-                <Layers className="h-4 w-4" />
-                Sammlung
-              </div>
-              <div className="text-xs text-muted-foreground mt-0.5">
-                Reihenfolge festlegen, zu einem PDF mergen und verarbeiten
-              </div>
-            </button>
+          <div className="grid gap-2 sm:grid-cols-3">
+            {[
+              { id: 'batch', icon: Inbox, titel: 'Batch', text: 'Jede PDF einzeln in die Pipeline geben (kein Merge).' },
+              { id: 'collection', icon: Layers, titel: 'Sammlung', text: 'Reihenfolge festlegen, zu einem PDF mergen und verarbeiten.' },
+              { id: 'stapel', icon: Scissors, titel: 'Stapel auftrennen', text: 'Eine PDF mit mehreren Dokumenten: Die KI schlägt die Trennung vor, du prüfst sie im Eingang.' },
+            ].map(({ id, icon: Icon, titel, text }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => {
+                  setMode(id);
+                  // Beim Wechsel zum Auftrennen bleibt nur die erste PDF in der Liste.
+                  if (id === 'stapel') setItems((prev) => prev.slice(0, 1));
+                }}
+                disabled={busy}
+                aria-pressed={mode === id}
+                className={[
+                  'flex flex-col justify-start rounded-lg border px-3 py-2 text-left transition-all',
+                  mode === id
+                    ? 'border-primary bg-primary/10 text-primary shadow-sm shadow-primary/10'
+                    : 'border-border/60 bg-background hover:border-primary/40 hover:bg-primary/5',
+                ].join(' ')}
+              >
+                <div className="flex items-center gap-2 font-medium text-sm">
+                  <Icon className="h-4 w-4" />
+                  {titel}
+                </div>
+                <div className="text-xs text-muted-foreground mt-0.5">{text}</div>
+              </button>
+            ))}
           </div>
         )}
 
@@ -1221,7 +1259,7 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
           className="rounded-xl border-2 border-dashed border-border/60 p-6 text-center hover:border-primary/40 hover:bg-primary/[0.02] transition-colors"
         >
           <Upload className="h-8 w-8 mx-auto text-muted-foreground mb-2" />
-          <p className="text-sm font-medium">PDFs oder Fotos hierher ziehen</p>
+          <p className="text-sm font-medium">{mode === 'stapel' ? 'Eine PDF hierher ziehen' : 'PDFs oder Fotos hierher ziehen'}</p>
           <p className="text-xs text-muted-foreground mt-1">oder</p>
           <Button
             variant="outline"
@@ -1230,13 +1268,13 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
             onClick={() => fileInputRef.current?.click()}
             disabled={busy}
           >
-            Dateien auswählen
+            {mode === 'stapel' ? 'PDF auswählen' : 'Dateien auswählen'}
           </Button>
           <input
             ref={fileInputRef}
             type="file"
             accept="application/pdf,.pdf,image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
-            multiple
+            multiple={mode !== 'stapel'}
             className="hidden"
             onChange={onFileInputChange}
           />
@@ -1312,6 +1350,11 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
                       ? `PDF von ${replaceForPostId} ersetzen`
                       : `${items.length} PDFs mergen & ${replaceForPostId} ersetzen`)}
               </Button>
+            ) : mode === 'stapel' ? (
+              <Button onClick={() => setHinweisDialog(true)} disabled={busy}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Scissors className="h-4 w-4" />}
+                {busy ? 'Wird verarbeitet …' : 'Stapel auftrennen'}
+              </Button>
             ) : mode === 'collection' ? (
               <Button onClick={() => setHinweisDialog(true)} disabled={busy}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Layers className="h-4 w-4" />}
@@ -1337,9 +1380,11 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
             'rounded-lg border px-3 py-2 text-sm flex items-start gap-2',
             feedback.type === 'error'
               ? 'bg-destructive/10 border-destructive/30 text-destructive'
-              : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400',
+              : feedback.type === 'warning'
+                ? 'bg-amber-50 border-amber-300 text-amber-900'
+                : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-400',
           ].join(' ')}>
-            {feedback.type === 'error'
+            {feedback.type === 'error' || feedback.type === 'warning'
               ? <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
               : <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" />}
             <span className="whitespace-pre-line">{feedback.msg}</span>
@@ -1370,11 +1415,14 @@ function UploadCard({ replaceForPostId = null, onReplaceComplete }) {
             setHinweisDialog(false);
             setHinweisText('');
             if (mode === 'collection') submitCollection(h);
+            else if (mode === 'stapel') submitStapel(h);
             else submitBatch(h);
           }}>
-            {mode === 'collection'
-              ? (items.length === 1 ? 'In Pipeline geben' : `Mergen & verarbeiten (${items.length})`)
-              : `Alle ${items.length} in Pipeline geben`}
+            {mode === 'stapel'
+              ? 'Stapel auftrennen'
+              : mode === 'collection'
+                ? (items.length === 1 ? 'In Pipeline geben' : `Mergen & verarbeiten (${items.length})`)
+                : `Alle ${items.length} in Pipeline geben`}
           </Button>
         </DialogFooter>
       </Dialog>
@@ -1773,6 +1821,13 @@ export default function ImportPage() {
   const { istTouch } = useDarstellung();
 
   const replaceParam = searchParams.get('replace') || '';
+  const tab = searchParams.get('tab') === 'eingang' ? 'eingang' : 'hochladen';
+  const { zaehler: eingangZaehler } = useOffeneEingaenge();
+  const wechsleTab = (id) => setSearchParams((vorher) => {
+    const n = new URLSearchParams(vorher);
+    if (id === 'eingang') n.set('tab', 'eingang'); else n.delete('tab');
+    return n;
+  }, { replace: true });
   // Ältere Service-Worker-Stände leiten geteilte PDFs noch hierher; die
   // Abholung und Verfolgung sitzt in der Jobs-Ansicht.
   const geteilt = searchParams.get('geteilt');
@@ -1850,37 +1905,69 @@ export default function ImportPage() {
   }
 
   return (
-    <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-6">
+    <div className={`p-4 md:p-6 mx-auto space-y-6 ${tab === 'eingang' ? 'max-w-6xl' : 'max-w-4xl'}`}>
       <div className="flex items-center gap-2">
         <Upload className="h-5 w-5 text-primary" />
         <h1 className="text-xl font-semibold">Dokumentenimport</h1>
       </div>
-      <p className="text-sm text-muted-foreground -mt-2">
-        Neue Dokumente per Kamera, Scanner oder Datei-Upload in die Verarbeitungs-Pipeline geben. Laufende Jobs sind im Task-Monitor in der Seitenleiste sichtbar.
-      </p>
+      <div className="flex flex-wrap gap-1 border-b border-border pb-2" role="tablist" aria-label="Import">
+        {[
+          { id: 'hochladen', label: 'Hochladen' },
+          { id: 'eingang', label: 'Eingang', badge: anzahlDringend(eingangZaehler), weitere: anzahlGesamt(eingangZaehler) - anzahlDringend(eingangZaehler) },
+        ].map((t) => (
+          <button
+            key={t.id} type="button" role="tab" aria-selected={tab === t.id}
+            onClick={() => wechsleTab(t.id)}
+            className={`px-3 py-1.5 text-sm font-medium rounded-md transition-colors
+              ${tab === t.id
+                ? 'bg-primary/10 text-primary'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+              }`}
+          >
+            {t.label}
+            {t.badge > 0 ? (
+              <span className="ml-1.5 inline-flex items-center justify-center rounded-full text-[10px] font-bold min-w-[18px] h-[18px] px-1 bg-destructive/20 text-destructive">
+                {t.badge > 99 ? '99+' : t.badge}
+              </span>
+            ) : t.weitere > 0 && (
+              <span className="ml-1.5 inline-flex items-center justify-center rounded-full text-[10px] font-bold min-w-[18px] h-[18px] px-1 bg-muted text-muted-foreground">
+                {t.weitere > 99 ? '99+' : t.weitere}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
 
-      {/* Diese Seite ist nur einer von sechs Eingangswegen – der überwachte
-          Cloud-Ordner und der Handy-Scan kommen ohne sie aus. */}
-      <Link
-        to="/importwege"
-        className="flex items-center gap-2.5 rounded-lg border border-primary/30 bg-primary/[0.06] px-3.5 py-2.5 text-sm transition-colors hover:bg-primary/10"
-      >
-        <Lightbulb className="h-4 w-4 shrink-0 text-primary" />
-        <span className="min-w-0">
-          <span className="font-medium text-foreground">Es gibt sechs Wege, ein Dokument hereinzubekommen</span>
-          <span className="text-muted-foreground"> – nicht jeder führt über diese Seite.</span>
-        </span>
-        <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-primary" />
-      </Link>
+      {tab === 'eingang' ? <EingangGalerie /> : (
+        <>
+          <p className="text-sm text-muted-foreground">
+            Neue Dokumente per Kamera, Scanner oder Datei-Upload in die Verarbeitungs-Pipeline geben. Laufende Jobs sind im Task-Monitor in der Seitenleiste sichtbar.
+          </p>
 
-      <OffenerScanZeile />
-      <CacheModePanel />
-      {/* Auf Touch-Geräten ist die Kamera der naheliegende Weg, am Rechner nicht. */}
-      {istTouch && <KameraScanKarte />}
-      <ScannerCard />
-      <UploadCard />
-      {!istTouch && <KameraScanKarte />}
-      {isAdmin && <ArchivImportCard />}
+          {/* Diese Seite ist nur einer von sechs Eingangswegen – der überwachte
+              Cloud-Ordner und der Handy-Scan kommen ohne sie aus. */}
+          <Link
+            to="/importwege"
+            className="flex items-center gap-2.5 rounded-lg border border-primary/30 bg-primary/[0.06] px-3.5 py-2.5 text-sm transition-colors hover:bg-primary/10"
+          >
+            <Lightbulb className="h-4 w-4 shrink-0 text-primary" />
+            <span className="min-w-0">
+              <span className="font-medium text-foreground">Es gibt sechs Wege, ein Dokument hereinzubekommen</span>
+              <span className="text-muted-foreground"> – nicht jeder führt über diese Seite.</span>
+            </span>
+            <ArrowRight className="ml-auto h-4 w-4 shrink-0 text-primary" />
+          </Link>
+
+          <OffenerScanZeile />
+          <CacheModePanel />
+          {/* Auf Touch-Geräten ist die Kamera der naheliegende Weg, am Rechner nicht. */}
+          {istTouch && <KameraScanKarte />}
+          <ScannerCard />
+          <UploadCard />
+          {!istTouch && <KameraScanKarte />}
+          {isAdmin && <ArchivImportCard />}
+        </>
+      )}
     </div>
   );
 }

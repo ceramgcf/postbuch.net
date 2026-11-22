@@ -3,7 +3,7 @@
  *
  * Ursprünglich aus n8n-Workflow "Handling Erstattungsbescheide" extrahiert
  * (Nodes: "Parse EB with Sonnet", "Match Kürzungen mit Sonnet"), seit dem
- * Kostenträger-Profil-Feature (internaldocs/FEATURE_KOSTENTRAEGER_PROFILE.md)
+ * Kostenträger-Profil-Feature (internaldocs/archiv/FEATURE_KOSTENTRAEGER_PROFILE.md)
  * in einen absenderneutralen Kern plus optionalen Profilblock aufgeteilt.
  *
  * Verwendet von: service/erstattungsbescheid.js
@@ -187,7 +187,7 @@ Nur validiertes JSON, keine Erklärungen.`;
 
 /**
  * Prompt für die Kostenträger-Profilierung (Schritt IV,
- * internaldocs/FEATURE_KOSTENTRAEGER_PROFILE.md Abschnitt 6). Erhält bis zu
+ * internaldocs/archiv/FEATURE_KOSTENTRAEGER_PROFILE.md Abschnitt 6). Erhält bis zu
  * fünf Erstattungsbescheide DESSELBEN Absenders als PDFs und leitet daraus
  * ein kurzes, rein beschreibendes Layout-Profil ab – nie ein gespeichertes
  * Parse-Ergebnis, sonst schreibt der Profilierer Fehler des bisherigen

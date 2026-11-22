@@ -11,6 +11,10 @@
  * Seiten werden untereinander gestapelt und auf Containerbreite skaliert. Um bei
  * umfangreichen Sammel-PDFs nicht Dutzende Canvas-Elemente auf einmal zu
  * rendern, wachsen sie beim Scrollen nach.
+ *
+ * Für den Duplikat-Vergleich mit synchronem Scrollen: `scrollerRef` erhält das
+ * scrollende Element, `onScroll` meldet jede Scrollbewegung, `ersteSeiten`
+ * rendert mehr Seiten sofort (damit die Gesamthöhe von Anfang an stimmt).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Document, Page } from 'react-pdf';
@@ -44,13 +48,21 @@ function LadeAnzeige() {
   );
 }
 
-export function PdfInlineViewer({ file, className, style, fehlerText = 'PDF konnte nicht geladen werden.' }) {
+export function PdfInlineViewer({
+  file, className, style, fehlerText = 'PDF konnte nicht geladen werden.',
+  scrollerRef = null, onScroll = undefined, ersteSeiten = ERSTE_SEITEN,
+}) {
   const scrollRef = useRef(null);
+  const setzeScroller = useCallback((el) => {
+    scrollRef.current = el;
+    if (typeof scrollerRef === 'function') scrollerRef(el);
+    else if (scrollerRef) scrollerRef.current = el;
+  }, [scrollerRef]);
   const messRef = useRef(null);
   const sentinelRef = useRef(null);
   const [breite, setBreite] = useState(0);
   const [seitenGesamt, setSeitenGesamt] = useState(0);
-  const [sichtbareSeiten, setSichtbareSeiten] = useState(ERSTE_SEITEN);
+  const [sichtbareSeiten, setSichtbareSeiten] = useState(ersteSeiten);
 
   // Cookie-Auth: react-pdf lädt das PDF per XHR, ohne credentials käme 401 zurück.
   const options = PDFJS_DOCUMENT_OPTIONS;
@@ -58,9 +70,9 @@ export function PdfInlineViewer({ file, className, style, fehlerText = 'PDF konn
   // Neues Dokument → wieder oben und nur die ersten Seiten rendern.
   useEffect(() => {
     setSeitenGesamt(0);
-    setSichtbareSeiten(ERSTE_SEITEN);
+    setSichtbareSeiten(ersteSeiten);
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
-  }, [file]);
+  }, [file, ersteSeiten]);
 
   // Seitenbreite folgt dem Container (contentRect misst ohne Scrollbalken).
   useEffect(() => {
@@ -91,14 +103,15 @@ export function PdfInlineViewer({ file, className, style, fehlerText = 'PDF konn
 
   const onLoadSuccess = useCallback(({ numPages }) => {
     setSeitenGesamt(numPages);
-    setSichtbareSeiten(Math.min(ERSTE_SEITEN, numPages));
-  }, []);
+    setSichtbareSeiten(Math.min(ersteSeiten, numPages));
+  }, [ersteSeiten]);
 
   return (
     <div
-      ref={scrollRef}
+      ref={setzeScroller}
       className={cn('relative overflow-y-auto overflow-x-hidden rounded-lg border bg-muted/30', className)}
       style={style}
+      onScroll={onScroll}
     >
       {seitenGesamt > 0 && (
         <div className="sticky top-2 z-10 flex justify-end pr-2">

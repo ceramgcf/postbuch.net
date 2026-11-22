@@ -15,7 +15,7 @@ Compose-Profile zugeschaltet.
 | `postgres` | PostgreSQL 18 + pgvector | Alle Daten außer den PDFs selbst | `127.0.0.1:5433` – nur lokal |
 | `app` | Node.js 24, Express 5 | API, Dokumenten-Pipeline, Hintergrundjobs | keiner |
 | `web` | nginx + gebautes React-Bundle | Weboberfläche, Reverse-Proxy vor `app` | `3420` (konfigurierbar) |
-| `embedding` | Python | Eingebauter Embedding-Dienst (Snowflake Arctic Embed M v2.0) | keiner (Profil `embedding`) |
+| `embedding` | Python | Eingebauter Embedding-Dienst (Snowflake Arctic Embed M v2.0, Voyage 4 Nano, EmbeddingGemma 2) | keiner (Profil `embedding`) |
 | `scanner` | Python | eSCL-Webhook zum Netzwerkscanner | `${SCANNER_PORT}` (Profil `scanner`) |
 | `cleaner` | Python | OCR und Bildbereinigung der Scans | keiner (Profil `scanner`) |
 | `caddy` | Caddy | HTTPS-Terminierung mit automatischem Zertifikat | `80`, `443` (Profil `caddy`) |
@@ -39,21 +39,22 @@ PostgreSQL-Hauptversion (siehe
 ## Weg eines Dokuments durch die Pipeline
 
 Jedes Dokument durchläuft dieselbe Kette, egal wie es hereinkommt. Es gibt
-genau zwei Eingänge: eine Datei, die bereits in der Dateiablage liegt (Upload,
-überwachter Ordner), oder ein PDF direkt im Speicher (Scanner). Ab Phase 1
-sind beide Wege identisch.
+genau zwei Eingänge: eine Datei, die bereits in der Dateiablage liegt
+(überwachter Ordner, Wiederverarbeitung), oder ein PDF, das die App selbst
+entgegennimmt (Upload und Zusammenführen über „Importieren“, Scanner). Ab
+Phase 1 sind beide Wege identisch.
 
 | Phase | Was passiert | Wenn es schiefgeht |
 |---|---|---|
-| 0 | Upload in die Dateiablage (nur beim Scanner-Weg) | Retry mit wachsendem Abstand, alle 5 Minuten |
+| 0 | Upload in die Dateiablage (nur bei PDFs, die die App selbst entgegennimmt) | Retry mit wachsendem Abstand, alle 5 Minuten |
 | 1 | Datei aus der Dateiablage laden | Job scheitert, Datei bleibt liegen |
-| 2 | KI-Analyse: Typ, Absender, Betreff, Datum, Beträge | siehe [KI-Anbieter](ki-provider.md) |
+| 2 | KI-Analyse: Typ, Absender, Betreff, Datum, Beträge | Antwortet kein Modell der Kette, wird der Job zurückgestellt (siehe unten). Fehlt in der Antwort der Fachblock, wird er leer angelegt und das Dokument auf **Review nötig** gesetzt |
 | 3 | Duplikatprüfung gegen den Bestand (berechnet dabei das Embedding) | – |
 | 4 | Duplikat-Entscheidung | Job wird ausgesetzt und wartet auf dich |
 | 5 | Einsortieren in den Zielordner der Dateiablage | – |
 | 6 | Push und experimentelle Discord-Benachrichtigung, falls eingerichtet | wird übersprungen |
 | 7 | PDF-Rotation (Seiten aufrichten) | – |
-| 8 | Anlegen des Datensatzes in der Datenbank, Embedding wird mit gespeichert | Schlug das Embedding in Phase 3 fehl, entsteht der Datensatz trotzdem – er ist dann nur noch nicht semantisch suchbar |
+| 8 | Anlegen des Datensatzes in der Datenbank, Embedding wird mit gespeichert | Schlug das Embedding in Phase 3 fehl, entsteht der Datensatz trotzdem – er ist dann vorerst nur über den Wortlaut suchbar |
 | 9 | PDF im Cache ablegen | wird protokolliert, hält die Pipeline aber nicht auf |
 
 Der Fortschritt ist während des Laufs im Import-Bereich sichtbar; die
@@ -62,12 +63,48 @@ menschliche Entscheidung wartet – solche Jobs bleiben sichtbar stehen, bis du
 entscheidest oder die Frist abläuft (siehe
 [Dokumente importieren](dokumente-importieren.md)).
 
+### Warteschlange und Parallelität
+
 **Serialisiert wird über eine Warteschlange.** Es laufen höchstens
 `pipeline_max_parallel` Pipelines gleichzeitig (Standard 3, einstellbar 1–10),
-alles Weitere wartet in der Reihenfolge des Eingangs. Ein zweiter Import
+alles Weitere wartet in der Reihenfolge des Eingangs. Unabhängig davon
+begrenzt postbuch.net die gleichzeitigen Aufrufe je KI-Dienst und die
+rechenintensiven Schritte (Seiten rendern, Textebene, QR-Erkennung):
+
+| Einstellung | Standard | Gilt für |
+|---|---|---|
+| KI auf diesem Rechner | 1 | KI-Dienste unter einem Docker-Dienstnamen, `localhost`, `host.docker.internal`, `.local`/`.lan` oder einer privaten IP-Adresse |
+| KI-Dienste im Internet | 6 | alle übrigen KI-Dienste, je Adresse |
+| Bildverarbeitung | Anzahl der Prozessorkerne − 1 | Ghostscript-Läufe |
+
+Wartende Aufrufe belegen nichts. Chat, Suche und Aktenvorschläge kommen vor
+der Dokumentverarbeitung dran, Hintergrundarbeit wie der Hilfekorpus zuletzt;
+wer lange wartet, rückt nach und nach vor. Der Bereinigungs-Container
+`cleaner` bekommt nur den halben CPU-Anteil, wenn er mit der App um die
+Prozessoren konkurriert (`CLEANER_CPU_ANTEIL` in der `.env`, Standard 512).
+
+Ein zweiter Import
 derselben Datei wird erkannt und nicht doppelt gestartet. Während eines
 Dateiablage-Umzugs pausiert die Queue vollständig: Jobs werden angenommen, aber
 nicht gestartet, damit keine Datei noch schnell im alten Backend landet.
+
+### Ausfälle und Neustarts
+
+**Antwortet kein KI-Dienst**, gibt der Job seinen Platz frei und wird
+zurückgestellt. Unter Logs → Jobs steht er dann als *wartet* mit „Wartet bis
+HH:MM – KI-Dienst nicht erreichbar“ und lässt sich dort abbrechen. Die nächsten
+Versuche folgen nach 1, 10 und 60 Minuten; scheitert auch der letzte, landet
+das Dokument wie jeder andere Fehlschlag in `_failed`. Meldet jedes Modell der
+Kette einen dauerhaften Konfigurationsfehler, scheitert der Job sofort.
+
+**Angenommene Dokumente überstehen einen Neustart.** Ein Upload, eine
+Zusammenführung oder ein Scan wird erst bestätigt, wenn das PDF im Puffer
+`data/scan_buffer` auf der Platte liegt und der Auftrag in der Datenbank
+vermerkt ist. Beim Start reiht die App diese Aufträge und alle
+zurückgestellten Jobs wieder ein, bevor sie den überwachten Ordner prüft.
+Dateien aus dem überwachten Ordner brauchen das nicht: Sie liegen noch in der
+Inbox und werden beim nächsten Durchlauf wieder gefunden. Eine laufende
+Wiederverarbeitung wird nach einem Neustart nicht automatisch fortgesetzt.
 
 Nach einem Neustart wird die Pipeline abgeglichen: angefangene, aber nicht
 beendete Jobs werden anhand der Journalzeilen wieder aufgenommen. Dieser

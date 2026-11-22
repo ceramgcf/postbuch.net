@@ -5,7 +5,7 @@
  * Kostenträger-Absenders (z. B. Debeka, eine Beihilfestelle) und wird dem
  * generischen EB-Parse-Prompt optional beigelegt (siehe
  * prompts/erstattungsbescheid.js, buildProfilBlock). Plan:
- * internaldocs/FEATURE_KOSTENTRAEGER_PROFILE.md.
+ * internaldocs/archiv/FEATURE_KOSTENTRAEGER_PROFILE.md.
  *
  * Höchstens 5 Profile dürfen gleichzeitig aktiv sein (Prompt-Länge). Es gibt
  * bewusst keine Bearbeiten-Funktion: Der Korrekturpfad für ein schlechtes

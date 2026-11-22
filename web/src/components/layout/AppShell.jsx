@@ -11,6 +11,7 @@ import { useScrollWiederherstellung } from '@/hooks/useScrollWiederherstellung';
 import { useBackButtonGuard } from '@/hooks/useBackButtonGuard';
 import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { STATUSLEISTE_ID } from '@/lib/ungespeichert';
 
 export function AppShell() {
   const [pdfPostId, setPdfPostId] = useState(null);
@@ -62,7 +63,9 @@ export function AppShell() {
     });
   }, []);
 
-  const isDetailPage = /^\/postbuch\/[^/]+/.test(location.pathname);
+  // Detailseiten und die Trennansicht eines Dokumentenstapels haben eine eigene untere Leiste.
+  const isDetailPage = /^\/postbuch\/[^/]+/.test(location.pathname)
+    || /^\/import\/eingang\/t(:|%3a)/i.test(location.pathname);
 
 
   const exitDialog = (
@@ -96,6 +99,8 @@ export function AppShell() {
             >
               <Outlet context={outletContext} />
             </main>
+            {/* Feste Statuszeile am Rahmen (z. B. ungespeicherte Einstellungen, lib/ungespeichert.jsx) */}
+            <div id={STATUSLEISTE_ID} className="mobil-statuszeile empty:hidden" />
             <FavoritenLeiste sichtbar={!isDetailPage && !menueOffen} />
             <MobilMenue offen={menueOffen} onSchliessen={schliesseMenue} />
             {exitDialog}
@@ -123,9 +128,13 @@ export function AppShell() {
             />
           </div>
           <Sidebar />
-          <main className="flex-1 overflow-auto min-w-0" style={{ position: 'relative', zIndex: 1 }}>
-            <Outlet context={outletContext} />
-          </main>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <main className="flex-1 overflow-auto min-w-0" style={{ position: 'relative', zIndex: 1 }}>
+              <Outlet context={outletContext} />
+            </main>
+            {/* Feste Statuszeile am Rahmen (z. B. ungespeicherte Einstellungen, lib/ungespeichert.jsx) */}
+            <div id={STATUSLEISTE_ID} className="empty:hidden overflow-hidden [scrollbar-gutter:stable]" style={{ position: 'relative', zIndex: 1 }} />
+          </div>
           {pdfOpen && pdfPostId && (
             <PdfPanel
               postid={pdfPostId}

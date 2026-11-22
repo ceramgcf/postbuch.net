@@ -20,7 +20,7 @@ import { useUpdateStatus, leiteLaufPhaseAb } from '@/hooks/useUpdateStatus';
 import { CheckCircle, AlertTriangle, RefreshCw, Clock } from 'lucide-react';
 
 export default function UpdateLaufDialog({ open, onOpenChange, erwarteteNonce = null }) {
-  const { daten, unerreichbar } = useUpdateStatus(open);
+  const { daten, unerreichbar, langeUnerreichbar } = useUpdateStatus(open);
   const [log, setLog] = useState('');
   const [logOffen, setLogOffen] = useState(false);
   const [zuruecknehmen, setZuruecknehmen] = useState(false);
@@ -47,6 +47,18 @@ export default function UpdateLaufDialog({ open, onOpenChange, erwarteteNonce = 
     : statusPhase;
 
   const fertig = ['erfolgreich', 'fehlgeschlagen', 'abgelehnt'].includes(phase.art);
+  // Ab Agent mit `fehler-vor-start`/`fehler-nach-start` steht in der Phase,
+  // ob das Update schon Container angefasst hat (`##PHASE:up`). Ältere Agenten
+  // schreiben nur `fehler`; dann hilft das Protokoll, sofern sein sichtbarer
+  // Schwanz noch den Anfang dieses Laufs enthält.
+  const fehlerPhase = laufPasst ? daten?.lauf?.phase : null;
+  const updateFehler = phase.art === 'fehlgeschlagen' && !istHostauftrag;
+  const logVollstaendig = Boolean(erwarteteNonce) && logGehoertZumLauf;
+  const fehlschlagVorStart = updateFehler && (fehlerPhase === 'fehler-vor-start'
+    || (fehlerPhase === 'fehler' && logVollstaendig && !/##PHASE:up/.test(log)));
+  const fehlschlagNachStart = updateFehler && (fehlerPhase === 'fehler-nach-start'
+    || (fehlerPhase === 'fehler' && logVollstaendig && /##PHASE:up/.test(log)));
+  const startetNicht = phase.art === 'neustart' && langeUnerreichbar && !istHostauftrag;
   const wartetAufAgenten = phase.art === 'wartet' || phase.art === 'nicht_abgeholt';
 
   // Der Dialog bleibt beim Schließen gemountet. Ohne Reset würde ein neuer
@@ -127,7 +139,7 @@ export default function UpdateLaufDialog({ open, onOpenChange, erwarteteNonce = 
                 Begonnen: {new Date(daten.lauf.seit).toLocaleString('de-DE')}
               </p>
             )}
-            {phase.art === 'neustart' && (
+            {phase.art === 'neustart' && !startetNicht && (
               <p className="text-xs text-muted-foreground mt-1">
                 Die Verbindung zur Anwendung ist unterbrochen. Das ist während des Neuaufbaus
                 normal und kein Fehler.
@@ -146,6 +158,20 @@ export default function UpdateLaufDialog({ open, onOpenChange, erwarteteNonce = 
               {zuruecknehmen ? 'Nehme zurück …' : 'Anforderung zurücknehmen'}
             </Button>
           </div>
+        )}
+
+        {fehlschlagVorStart && (
+          <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 p-3">
+            <p className="text-xs">
+              {fehlerPhase !== 'fehler-vor-start' && 'Die bisherige Version läuft unverändert weiter. '}
+              Das Update hat noch nichts ausgetauscht, es ist nichts zurückzunehmen. Ist die
+              Ursache behoben, lässt sich das Update erneut starten.
+            </p>
+          </div>
+        )}
+
+        {(startetNicht || fehlschlagNachStart) && (
+          <RueckwegHinweis startetNicht={startetNicht} />
         )}
 
         {phase.art === 'erfolgreich' && !istHostauftrag && (
@@ -179,5 +205,38 @@ export default function UpdateLaufDialog({ open, onOpenChange, erwarteteNonce = 
         <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Schließen</Button>
       </DialogFooter>
     </Dialog>
+  );
+}
+
+/**
+ * Der Rückweg, wenn die neue Version nicht startet. Die Oberfläche kann ihn
+ * nicht selbst auslösen: Sie ist in diesem Fall ja gerade nicht erreichbar,
+ * und der Rollback fragt vor dem Zurückspielen der Datenbank gesondert nach.
+ */
+function RueckwegHinweis({ startetNicht }) {
+  return (
+    <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 space-y-2 text-xs">
+      <p className="font-medium">
+        {startetNicht
+          ? 'Die Anwendung antwortet seit über zehn Minuten nicht. Vermutlich startet die neue Version nicht.'
+          : 'Die neue Version wurde bereits eingespielt, ist aber nicht sauber gestartet.'}
+      </p>
+      <p>Zurück auf die vorige Version:</p>
+      <ul className="list-disc pl-5 space-y-1">
+        <li>
+          Linux: auf dem Server im Installationsordner{' '}
+          <code className="rounded bg-muted px-1 font-mono">./deploy-pages/install.sh --rollback</code>{' '}
+          ausführen.
+        </li>
+        <li>
+          Windows: Einstellungen → Apps → Installierte Apps → postbuch.net Server → Ändern →
+          „Update rückgängig machen“.
+        </li>
+      </ul>
+      <p>
+        Der Rollback fragt vor dem Zurückspielen der Datenbank gesondert nach. Was schiefging,
+        zeigt <code className="rounded bg-muted px-1 font-mono">docker compose logs app</code>.
+      </p>
+    </div>
   );
 }

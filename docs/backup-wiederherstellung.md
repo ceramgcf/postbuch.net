@@ -75,6 +75,14 @@ Administratoren). Zwei Angaben:
 - **Cron-Ausdruck** – Standard `0 4 * * *`, also täglich um 04:00 Uhr. Zeitzone
   ist fest `Europe/Berlin`. Der Ausdruck wird vor dem Speichern validiert.
 
+Läuft postbuch.net zum eingestellten Zeitpunkt nicht – etwa weil der Rechner
+nachts aus ist oder schläft –, wird die verpasste Sicherung nachgeholt: etwa
+zehn Minuten nach dem Start von postbuch.net, nach dem Aufwachen aus dem
+Ruhezustand spätestens innerhalb einer Stunde. Auch nach mehreren verpassten
+Terminen entsteht dabei nur eine Sicherung. Scheitert ein Lauf, versucht
+postbuch.net es frühestens sechs Stunden später erneut. Der eingestellte
+Zeitpunkt bleibt der reguläre Termin.
+
 Voraussetzung ist ein eingerichteter Backup-Ordner. Er entsteht als
 `<postbuch.net-Wurzelverzeichnis>/_backup` unterhalb des Wurzelordners, sobald
 dessen [Ordnerstruktur angelegt ist](storage-backends.md#die-ordnerstruktur).
@@ -268,6 +276,8 @@ Stammt ein Backup aus einer **neueren** App-Version als der installierten, warnt
 der Bestätigungsdialog. In dem Fall zuerst postbuch.net aktualisieren, dann
 einspielen – ein älteres Schema kann die neueren Daten nicht bedienen.
 
+#### Was beim Einspielen passiert
+
 Der eigentliche Restore läuft in **einer einzigen Transaktion**: das Schema
 `postbuch` wird verworfen, der Dump eingespielt, alles zusammen bestätigt.
 Die Backup-Verschlüsselung dreht ein Restore dabei nicht zurück: Schalter,
@@ -277,6 +287,15 @@ Stand kommen zusätzlich in den Schlüsselbund.
 Enthält das Backup keine Zugangsdaten, weil es unverschlüsselt ist, behält die
 Instanz ihre eigenen: Ablage, KI und Tokens funktionieren nach dem Restore
 weiter. Zugangsdaten, die ein Backup mitbringt, gelten dagegen wie gesichert.
+Basisadresse, DuckDNS-Domain und Port der Weboberfläche gehören zu diesem
+Rechner und bleiben immer die der laufenden Instanz – auch wenn die Sicherung
+von einem anderen System stammt. Was die Instanz davon nicht eingerichtet hat,
+übernimmt sie auch nicht aus der Sicherung; eine fehlende Basisadresse kommt aus
+`APP_BASE_URL` der Installation. Lief das gesicherte System unter einer
+DuckDNS-Adresse, bietet der Hinweis nach dem Einspielen an, sie zu übernehmen
+(siehe [Selbstprüfung](#nach-dem-einspielen-selbstprüfung)).
+Enthält die Datei gar keinen postbuch.net-Datenbestand (etwa ein leerer Dump oder
+der einer anderen Anwendung), bricht das Einspielen mit einer Meldung ab.
 Bricht irgendein Schritt ab, rollt PostgreSQL komplett zurück und die Datenbank
 steht unverändert da. Danach beendet sich der App-Container absichtlich und wird
 von Docker neu gestartet, damit Verbindungen, Sitzungen und Zwischenspeicher
@@ -306,12 +325,33 @@ aktuelle Passwort, weil postbuch.net die Schlüsseldatei dort selbst findet.
 ### Beim Neuaufsetzen
 
 Wird eine Instanz frisch installiert oder neu aufgesetzt, fragt `install.sh`
-ausdrücklich **„Backup einspielen? [j/n]"**. Bei _j_ legt der Installer das
-Admin-Passwort neu fest und blendet nach dem Start eine Adresse ein:
+nach der Betriebsart ausdrücklich **„Backup einspielen? [j/n]"**. Bei _j_ legt der Installer das
+Admin-Passwort neu fest und spielt die Sicherung nach dem Start gleich selbst ein:
+
+- Hat er die Sicherung in einem weiterverwendeten Ablageordner gefunden
+  (Betriebsart **Komplett lokal**, siehe
+  [Installation](installation.md#komplett-lokal)), nennt er sie mit Datum und
+  fragt, ob er sie einspielen soll. Mit _n_ geht es zur nächsten Frage.
+- Sonst fragt er nach dem Pfad zur Sicherungsdatei. Unter Windows geht auch ein
+  Windows-Pfad wie `C:\Users\…\postbuch_….pgdump.gz`.
+- Ist die Sicherung verschlüsselt, fragt er das Backup-Passwort ab und prüft
+  es. Bei einem falschen Passwort fragt er erneut, so oft wie nötig; nach
+  mehreren Fehlversuchen kurz hintereinander bittet er um eine kurze Pause. Bei einer
+  Sicherung aus dem Ablageordner nimmt postbuch.net die `schluessel.json` aus
+  demselben Ordner `_backup` selbst mit.
+
+Eine leere Eingabe beim Pfad oder beim Passwort verschiebt das Einspielen in
+den Browser. Dann blendet der Installer die Adresse ein, unter Windows öffnet
+sie sich gleich im Browser:
 
 ```
 http://<server>:3420/setup/restore
 ```
+
+Eine gefundene Sicherung steht dort oben mit dem Knopf **Diese Sicherung
+einspielen**; ist sie verschlüsselt, steht das Feld **Backup-Passwort** direkt
+darüber. Eine andere Datei lässt sich darunter trotzdem hochladen. Das
+Adminpasswort ist in beiden Fällen nötig.
 
 Diese Seite existiert nur, solange die Wiederherstellung aussteht; danach
 verschwindet sie. Sie ist mit dem Admin-Passwort aus der `.env` geschützt und
@@ -319,6 +359,8 @@ begrenzt Fehlversuche. Nach erfolgreichem Einspielen werden alle im Dump
 enthaltenen Sitzungen verworfen und das Sitzungsgeheimnis der neuen Instanz
 gesetzt – angemeldet wird sich also mit dem Passwort, das beim Installieren
 vergeben wurde, nicht mit dem der alten Instanz.
+
+#### Zugangsdaten und verschlüsselte Backups
 
 Ein unverschlüsseltes Backup bringt keine Zugangsdaten mit. Die neue Instanz
 behält dann ihre eigenen Tokens; Dateiablage, KI-Schlüssel und Discord werden
@@ -359,6 +401,86 @@ ersten Admin-Anmeldung startet der
 
 Das ist der saubere Weg für einen Serverwechsel: neue Maschine, Installer,
 Backup einspielen, Dateiablage verbinden.
+
+### Nach dem Einspielen: Selbstprüfung
+
+Vor jedem Backup hält postbuch.net in der Datenbank fest, auf welchem System es
+entsteht: welche Dateiablage aktiv ist, ob ein Ablageordner auf dem Rechner
+eingerichtet ist und welche Dienste laufen (lokale KI samt Modell, eingebauter
+Embedding-Dienst, Scanner, HTTPS über DuckDNS). Dieses Profil reist im Backup
+mit, verschlüsselt wie unverschlüsselt.
+
+Nach jedem Restore – aus der Liste, aus einer lokalen Datei oder beim
+Neuaufsetzen – vergleicht postbuch.net das gesicherte Profil mit dem System,
+auf dem das Backup jetzt läuft, und prüft zusätzlich die Pflichtpunkte des
+[Einrichtungsassistenten](installation.md#der-einrichtungsassistent)
+(Ablage erreichbar, KI eingerichtet usw.):
+
+- **Ist eine Pflichtprüfung rot,** öffnet sich bei der ersten
+  Admin-Anmeldung nach dem Restore einmalig der Einrichtungsassistent. Im
+  Schritt **Willkommen** steht jede rote Prüfung mit ihrem Befund und einem
+  Link zum Schritt, in dem sie behoben wird, dazu alles, was vom gesicherten
+  System abweicht.
+- **Auf dem Dashboard** steht für Admins die Karte **Nach der
+  Wiederherstellung noch zu prüfen**, sobald etwas vom gesicherten System
+  abweicht. Sie nennt auch die roten Pflichtprüfungen und bleibt, bis der
+  Assistent abgeschlossen oder die Karte mit **Erledigt – Hinweis ausblenden**
+  quittiert ist.
+- **Weicht nichts vom gesicherten System ab,** zeigt das Dashboard keine
+  Karte – auch dann nicht, wenn eine Pflichtprüfung dort schon rot war.
+
+Was im gesicherten System schon entschieden war, bleibt nach dem Restore
+entschieden: Die Backup-Einstellungen gelten als bewusst gewählt, ein
+abgeschlossener Assistent bleibt abgeschlossen, bestandene Tests von Ablage
+und KI gelten weiter.
+
+Erkannt werden:
+
+| Abweichung | Was zu tun ist |
+|---|---|
+| Das Backup nutzte einen Ablageordner auf dem Rechner, hier ist keiner festgelegt | Den Ordner mit den Originalen herüberkopieren und unter **Ablage** festlegen – ohne Host-Agent per Installer, Betriebsart **Komplett lokal**, mit demselben Ordner |
+| Im festgelegten Ablageordner fehlen die Dateien der Dokumente, etwa weil die Sicherung in einen neuen, leeren Ordner eingespielt wurde | Den Ordner mit den Originalen in diesen Ordner kopieren oder ihn unter **Ablage** als Ablageordner festlegen. Bis dahin lassen sich die Dokumente nicht öffnen; ihre Verknüpfungen bleiben erhalten |
+| Dieses System hat einen Ablageordner, das gesicherte System hatte keinen und nutzte OneDrive oder Nextcloud | Optional: mit **Umzug vorbereiten** alle Dokumente per [Ablage-Umzug](storage-backends.md#umzug-zwischen-den-dateiablagen) in den Ordner auf diesem Rechner kopieren |
+| Lokale KI oder Embedding-Dienst liefen im gesicherten System, hier nicht | Auf geeigneter Hardware unter [Einstellungen → Stack](betrieb-troubleshooting.md#der-stack) einschalten. Wenn die lokale KI auf diesem Rechner nicht läuft, im Assistenten unter **KI** einen erreichbaren Anbieter einrichten und dessen Modelle den Aufgaben zuordnen |
+| Der Scanner-Dienst lief im gesicherten System, hier nicht | Nichts: postbuch.net schaltet ihn nach dem Einspielen selbst wieder ein, die Einstellungen des Scanners kommen aus der Sicherung. Der Hinweis bleibt nur stehen, wenn das scheitert; den Stand zeigt [Einstellungen → Stack](betrieb-troubleshooting.md#der-stack) |
+| HTTPS lief im gesicherten System, hier nicht, und die DuckDNS-Adresse ist dieselbe | Im Assistenten unter **Instanz** einrichten |
+| Das gesicherte System war unter einer DuckDNS-Adresse mit HTTPS erreichbar, die dieses System nicht nutzt | Ein einziger Hinweis **HTTPS-Adresse … übernehmen?**, auch wenn HTTPS hier noch gar nicht läuft. Mit **Adresse übernehmen** öffnet sich im Assistenten unter **Instanz** das Feld **TLS über DuckDNS** mit der bisherigen Domain. Das DuckDNS-Token steht nicht in der Sicherung: Es steht auf duckdns.org nach der Anmeldung oben auf der Seite. Den alten Rechner vorher abschalten oder dort HTTPS abschalten. Nach **TLS aktivieren** trägt postbuch.net die [Heimnetz-Adresse dieses Rechners](installation.md#neue-heimnetz-adresse-des-rechners) selbst bei DuckDNS ein |
+| Der Host-Agent meldet sich nicht | Installer erneut ausführen (**Update**); ohne Agent lassen sich die Dienste nicht vergleichen |
+| Zugangsdaten, die im gesicherten System eingetragen waren, fehlen hier (OneDrive-Anmeldung, Nextcloud-App-Passwort, KI-Schlüssel, Discord) – typisch nach einem unverschlüsselten Backup | Mit **Neu eintragen** im Assistenten unter **Ablage** bzw. **KI** neu eintragen und testen, Discord unter Einstellungen → Benachrichtigungen |
+
+Das Profil nennt nur, welche Zugangsdaten eingetragen waren, nie ihre Werte.
+Backups aus Versionen vor der Selbstprüfung enthalten kein Profil. Dann prüft
+postbuch.net nur die Pflichtpunkte und die DuckDNS-Adresse.
+
+### Zwischen „Komplett lokal“ und „Klassisch“
+
+Ein Backup bringt die Einstellungen der alten Instanz vollständig mit,
+darunter die gewählte Dateiablage und die KI-Anbieter. Die
+[Betriebsart](installation.md#komplett-lokal), die der Installer anbietet, gilt
+nur für eine leere Instanz; ein eingespieltes Backup hat Vorrang.
+
+- **Backup einer klassischen Instanz auf einem PC mit „Komplett lokal“:**
+  Die Dokumente bleiben in OneDrive bzw. Nextcloud und sind nach dem Verbinden
+  wieder da. Der lokale Ablageordner bleibt zunächst ungenutzt; die
+  [Selbstprüfung](#nach-dem-einspielen-selbstprüfung) bietet an, die Dokumente
+  per Ablage-Umzug dorthin zu kopieren. Die eingebaute lokale KI
+  lässt sich unter [Einstellungen → Stack](betrieb-troubleshooting.md#der-stack)
+  einschalten und den Modellklassen zuordnen.
+- **Ablage auf einem Rechner an einen anderen Rechner umziehen**, etwa vom
+  Windows-PC auf einen Raspberry Pi: Den ganzen Ablageordner samt `_backup` auf
+  den neuen Rechner kopieren und dort den Installer starten. Bei
+  „Backup einspielen?“ **n** antworten, als Betriebsart **Komplett lokal**
+  wählen und als Ablageordner den kopierten Ordner angeben. Der Installer
+  erkennt die Ablage und bietet an, sie
+  [weiterzuverwenden und die neueste Sicherung daraus einzuspielen](installation.md#komplett-lokal).
+  Hat der neue Rechner keine passende Grafikkarte, lehnst du die lokale KI ab
+  und wählst danach unter `Einstellungen → KI` einen anderen Anbieter; erst
+  dann werden neue Dokumente verarbeitet.
+- Spielst du das Backup einer Instanz mit lokaler Ablage dagegen in eine
+  Installation ohne Ablageordner ein, geht nichts verloren, aber die Dokumente
+  lassen sich nicht öffnen, und neue können nicht abgelegt werden. Die
+  Selbstprüfung meldet das nach dem Restore. Installiere dann neu wie im
+  vorigen Punkt.
 
 ### Von Hand
 
@@ -431,6 +553,17 @@ ist kein Backup. Er wird zwar weder von postbuch.net noch von OneDrive oder
 Nextcloud automatisch geleert, liegt aber in derselben synchronisierten Dateiablage
 und schützt deshalb nicht vor Kontoverlust, Verschlüsselung oder einem
 versehentlichen Löschen des gesamten Wurzelordners.
+
+### Bei einem Ordner auf diesem Rechner
+
+Liegt die Ablage in einem [Ordner auf dem Rechner](storage-backends.md#ordner-auf-diesem-rechner),
+liegen Originale und Datenbank-Sicherungen (`_backup`) auf derselben Platte.
+Fällt sie aus oder trifft ein Verschlüsselungstrojaner den PC, ist beides weg.
+Die Schritte 1 und 2 unten entfallen dann; nimm den ganzen Ablageordner direkt
+in ein Backup auf einem **anderen** Datenträger oder in einer Cloud deiner Wahl
+auf, mit Versionsständen und automatisch, etwa mit dem Dateiversionsverlauf von
+Windows auf eine externe Platte. Für Schritt 4 und die Nebenwirkungen unten gilt
+dasselbe.
 
 ### Der empfohlene Weg
 

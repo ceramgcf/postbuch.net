@@ -14,6 +14,7 @@
 import { createHash } from 'crypto';
 import { erkenneScanMitTextebene, countPdfPages, extractTextLayer, renderPdfToImages } from './pdf.js';
 import { callLLM, buildCostMap, calculateCost, resolveKlassenModell, capsForRef, providerForRef, kannPdfEmpfangen } from './llm.js';
+import { rasterSeitenImBudget } from './llm/kontext-budget.js';
 import { loadDynamicSettings } from '../config.js';
 import pool from '../db.js';
 
@@ -55,7 +56,7 @@ async function visionKontext(settings) {
   const pdfFaehig = kannPdfEmpfangen(caps);
   const prov = providerForRef(s, cfg);
   const bilderFaehig = !pdfFaehig && caps?.vision === true && prov?.typ === 'openai-compatible';
-  const rasterLimit = bilderFaehig ? (prov.rasterMaxSeiten ?? VISION_MAX_PAGES) : VISION_MAX_PAGES;
+  const rasterLimit = bilderFaehig ? rasterSeitenImBudget(prov, prov.rasterMaxSeiten ?? VISION_MAX_PAGES) : VISION_MAX_PAGES;
   return { s, cfg, pdfFaehig, bilderFaehig, seitenLimit: Math.min(VISION_MAX_PAGES, rasterLimit) };
 }
 

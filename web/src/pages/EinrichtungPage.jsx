@@ -13,12 +13,12 @@
  *    mitsamt Umzug des gesamten Bestands dorthin. Ist ein Wert unbekannt,
  *    bleibt das Feld leer und sagt das auch.
  */
-import { useEffect, useRef, useState } from 'react';
-import { Navigate, useNavigate, useParams } from 'react-router';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, ArrowLeft, ArrowRight, BellRing, BookOpen, Bot, Check, CheckCircle2, Circle,
-  Cloud, Eye, EyeOff, FolderOpen, Globe, KeyRound, Lock, Network, Pencil, RefreshCw,
+  Cloud, Eye, EyeOff, FolderOpen, Globe, HardDrive, KeyRound, Lock, Network, Pencil, RefreshCw,
   ScanLine, Server, ShieldCheck, Sparkles, Users, Wand2, X,
 } from 'lucide-react';
 import { api } from '@/api/client';
@@ -39,12 +39,15 @@ import ScannerDiscoveryCard from '@/components/settings/ScannerDiscoveryCard';
 import MenschenCard from '@/components/settings/MenschenCard';
 import OneDriveSection from '@/components/settings/OneDriveSection';
 import NextcloudCard from '@/components/settings/NextcloudCard';
+import LokalAblageCard from '@/components/settings/LokalAblageCard';
 import ProviderCard from '@/components/settings/ProviderCard';
 import EmpfehlungenCard from '@/components/settings/EmpfehlungenCard';
 import ModelSelector from '@/components/settings/ModelSelector';
 import { MODEL_CLASSES, modellwahlAus, klassenFuer } from '@/components/settings/modelClasses';
 import { ModellwahlAuswahl } from '@/components/settings/ModellwahlAuswahl';
-import { WurzelordnerFeld, useAppOrdner, standardWurzel, wurzelLabel, pfadUnterWurzel } from '@/components/settings/WurzelordnerFeld';
+import { WurzelordnerFeld, useAppOrdner, useWurzelVorbelegung, wurzelLabel, pfadUnterWurzel } from '@/components/settings/WurzelordnerFeld';
+import PasswortHinweis from '@/components/settings/PasswortHinweis';
+import { NachRestoreInhalt } from '@/components/dashboard/NachRestoreHinweis';
 
 /**
  * `pruefungen` verknüpft den Schritt mit den serverseitigen Istprüfungen aus
@@ -58,7 +61,7 @@ const SCHRITTE = [
   { id: 'ablage',      label: 'Dateiablage',     icon: Cloud,       titel: 'Dateiablage verbinden',            unter: 'Wo die Originaldateien liegen.', pruefungen: ['ablage'] },
   { id: 'ordner',      label: 'Ordner',     icon: FolderOpen,  titel: 'Ordnerstruktur',              unter: 'Wurzelordner festlegen, Ordnerstruktur anlegen und die Dateiablage optional durchtesten.', pruefungen: ['ordner', 'ablageSelbsttest'] },
   { id: 'ki',          label: 'KI',         icon: Bot,         titel: 'KI und Embeddings',           unter: 'Provider verbinden und das Embedding-Modell wählen.', pruefungen: ['kiLlm', 'kiEmbedding'] },
-  { id: 'scanner',     label: 'Scanner',    icon: ScanLine,    titel: 'Scanner einrichten',          unter: 'Optional – für Papier, das direkt ins Postbuch soll.', pruefungen: ['scanner'] },
+  { id: 'scanner',     label: 'Scanner',    icon: ScanLine,    titel: 'Scanner einrichten',          unter: 'Optional – für Papier, das direkt in postbuch.net landen soll.', pruefungen: ['scanner'] },
   { id: 'benachrichtigungen', label: 'Benachrichtigungen', icon: BellRing, titel: 'Benachrichtigungen', unter: 'Push auf diesem Gerät einrichten.', pruefungen: [] },
   { id: 'backup',      label: 'Backup',     icon: ShieldCheck, titel: 'Backup',                       unter: 'Sicherung aktivieren oder bewusst ohne Backup fortfahren.', pruefungen: ['backup'] },
   { id: 'abschluss',   label: 'Abschluss',  icon: Wand2,       titel: 'Abschlussprüfung',            unter: 'Alle Prüfungen auf einen Blick.', pruefungen: [] },
@@ -145,6 +148,8 @@ function StatusZeilen({ status, nur, aktuellerSchritt, onSchritt }) {
           <>
             {p.ok
               ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+              : p.laedt
+                ? <Spinner className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
               : p.pflicht
                 ? <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-500" />
                 : <Circle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />}
@@ -152,7 +157,7 @@ function StatusZeilen({ status, nur, aktuellerSchritt, onSchritt }) {
               <p className="text-sm">{p.text}</p>
               {!p.ok && (
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  {p.pflicht ? 'Pflicht für den Abschluss' : 'Optional – der Assistent lässt sich auch so abschließen'}
+                  {p.laedt ? 'Wird vorbereitet – du musst nichts tun' : p.pflicht ? 'Pflicht für den Abschluss' : 'Optional – der Assistent lässt sich auch so abschließen'}
                 </p>
               )}
             </div>
@@ -164,6 +169,7 @@ function StatusZeilen({ status, nur, aktuellerSchritt, onSchritt }) {
           </>
         );
         const farbe = p.ok ? 'border-emerald-500/30 bg-emerald-500/[0.06]'
+          : p.laedt ? 'border-border/60'
           : p.pflicht ? 'border-amber-500/40 bg-amber-500/[0.06]'
             : 'border-border/60';
         return springbar ? (
@@ -204,9 +210,56 @@ function Rueckfrage({ text, frage, bestaetigen, abbrechen, onBestaetigen, onAbbr
 const DUCKDNS_HALT = new Set(['kein_eintrag', 'andere_adresse', 'rebind']);
 
 /** Eingabe tolerant annehmen: klein, ohne Schema, Pfad und Leerzeichen. */
+// Zeigt die DuckDNS-Domain noch auf diesen Rechner? Der Host-Agent prüft das
+// alle fünf Minuten und trägt eine neue Heimnetz-Adresse selbst nach – aber nur
+// einen Eintrag, den dieser Rechner hält und nur, solange das Nachführen in den
+// Einstellungen eingeschaltet ist (scripts/postbuch-update-agent.sh).
+function DuckdnsIpZeile({ ip }) {
+  const domain = ip?.domain;
+  if (!ip || !domain || ip.stand === 'unbekannt') return null;
+  const datum = (iso) => (iso ? new Date(iso).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) : '');
+  if (ip.stand === 'aus') {
+    const passt = ip.dns && ip.dns === ip.eigene;
+    return (
+      <p className={passt || !ip.eigene ? 'text-xs text-muted-foreground' : 'rounded-lg border border-amber-500/40 bg-amber-500/[0.07] p-3 text-sm'}>
+        {passt ? `${domain} zeigt auf diesen Rechner (${ip.eigene}). ` : ip.eigene ? `${domain} zeigt auf ${ip.dns || 'keine Adresse'}, dieser Rechner hat ${ip.eigene}. ` : ''}
+        Das automatische Nachführen der Adresse ist ausgeschaltet (Einstellungen → Allgemein → Erreichbarkeit).
+        {!passt && ip.eigene ? ` Soll die Domain hierher zeigen: auf duckdns.org ${ip.eigene} eintragen und „update ip“ klicken.` : ''}
+      </p>
+    );
+  }
+  if (ip.stand === 'ok' || ip.stand === 'aktualisiert') {
+    return (
+      <p className="text-xs text-muted-foreground">
+        {domain} zeigt auf diesen Rechner ({ip.eigene}).
+        {ip.stand === 'aktualisiert' && ip.aktualisiertAm ? ` Die Adresse wurde am ${datum(ip.aktualisiertAm)} automatisch bei DuckDNS nachgetragen.` : ''}
+        {' '}Bekommt er im Heimnetz eine neue Adresse, trägt postbuch.net sie selbst bei DuckDNS ein.
+      </p>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-amber-500/40 bg-amber-500/[0.07] p-3 text-sm">
+      {ip.stand === 'fehler' ? (
+        <>DuckDNS hat die neue Adresse {ip.eigene} für {domain} nicht angenommen. Stimmt das hinterlegte Token noch? Der nächste Versuch folgt in wenigen Minuten.</>
+      ) : (
+        <>
+          {ip.dns ? <>{domain} zeigt auf {ip.dns}</> : <>{domain} hat bei DuckDNS keine Adresse</>}, dieser Rechner hat {ip.eigene}. Diesen Eintrag hat nicht dieser Rechner
+          gesetzt, deshalb ändert postbuch.net ihn nicht – womöglich nutzt ein anderer Rechner die Domain. Soll sie hierher zeigen:
+          auf duckdns.org bei der Domain {ip.eigene} eintragen und „update ip“ klicken. Danach hält postbuch.net die Adresse selbst aktuell.
+        </>
+      )}
+    </div>
+  );
+}
+
 function duckdnsEingabe(wert) {
   return wert.toLowerCase().replace(/\s+/g, '').replace(/^https?:\/\//, '').replace(/\/.*$/, '');
 }
+
+// Im gespiegelten WSL-Netz gibt eine Firewall-Regel von install.ps1 die Ports
+// fürs Heimnetz frei. Weder der Host-Agent noch install.sh können sie ändern
+// (sie braucht Administratorrechte unter Windows).
+const WINDOWS_PORT_HINWEIS = 'Unter Windows gilt ein neuer Port am PC selbst sofort. Für andere Geräte im Heimnetz gibt ihn erst der Installationsbefehl in PowerShell frei: ihn erneut ausführen, „Ports ändern“ wählen und die angezeigten Ports mit Enter übernehmen.';
 
 function DuckdnsPruefHinweis({ pruefung, laeuft, onErneut, onTrotzdem }) {
   const { ergebnis, domain, lanIp, oeffentlich = [] } = pruefung;
@@ -232,9 +285,19 @@ function DuckdnsPruefHinweis({ pruefung, laeuft, onErneut, onTrotzdem }) {
         <p className="text-xs">
           <code className="font-mono">{domain}</code> zeigt auf <code className="font-mono">{oeffentlich.join(', ')}</code>,
           dieser Server hat {ip}.
-          {pruefung.oeffentlicheAdresse && ' Das ist vermutlich deine öffentliche Internet-Adresse, die DuckDNS beim Anlegen automatisch einträgt.'}
-          {' '}Trage auf duckdns.org bei dieser Domain {ip} ein und klicke „update ip“. Die Änderung ist meist
-          nach spätestens einer Minute sichtbar.
+          {pruefung.oeffentlicheAdresse ? (
+            <>
+              {' '}Das ist vermutlich deine öffentliche Internet-Adresse, die DuckDNS beim Anlegen automatisch einträgt.
+              {' '}Trage auf duckdns.org bei dieser Domain {ip} ein und klicke „update ip“. Die Änderung ist meist
+              nach spätestens einer Minute sichtbar.
+            </>
+          ) : (
+            <>
+              {' '}Das ist eine Adresse im Heimnetz, vermutlich ein anderer Rechner mit postbuch.net. Mit „Trotzdem
+              aktivieren“ übernimmt dieser Rechner die Domain und trägt {ip} selbst bei DuckDNS ein. Den anderen
+              Rechner vorher abschalten.
+            </>
+          )}
         </p>
       )}
       {ergebnis === 'rebind' && (
@@ -258,6 +321,14 @@ function DuckdnsPruefHinweis({ pruefung, laeuft, onErneut, onTrotzdem }) {
 export default function EinrichtungPage() {
   const { schritt } = useParams();
   const navigate = useNavigate();
+  // Nach einer Wiederherstellung bietet der Hinweis an, die DuckDNS-Adresse des
+  // gesicherten Systems zu übernehmen (service/stack-profil.js): Er verlinkt
+  // hierher mit ?duckdns=<domain>. Das Token steht nicht in der Sicherung.
+  const [suchParameter] = useSearchParams();
+  const duckVorschlag = (() => {
+    const d = String(suchParameter.get('duckdns') || '').toLowerCase();
+    return /^[a-z0-9-]{1,63}\.duckdns\.org$/.test(d) ? d : '';
+  })();
   const qc = useQueryClient();
   const index = SCHRITTE.findIndex((s) => s.id === schritt);
   const aktuell = index >= 0 ? index : 0;
@@ -265,14 +336,22 @@ export default function EinrichtungPage() {
 
   const statusQuery = useQuery({ queryKey: ['einrichtung'], queryFn: () => api.einrichtung.status(), retry: false });
   const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: () => api.settings.getAll(), retry: false });
-  const wurzelQuery = useQuery({ queryKey: ['ablage-wurzel'], queryFn: () => api.onedrive.folderRoot(), retry: false });
 
   const status = statusQuery.data;
   const settings = settingsQuery.data;
   const hostconfig = status?.hostconfig;
   const agent = status?.pruefungen?.hostAgent;
-  const backend = settings?.storage_backend?.value === 'nextcloud' ? 'nextcloud' : 'onedrive';
+  const backend = ['nextcloud', 'lokal'].includes(settings?.storage_backend?.value) ? settings.storage_backend.value : 'onedrive';
+  const lokalQuery = useQuery({ queryKey: ['lokal-ablage-status'], queryFn: () => api.storage.lokalStatus(), retry: false });
+  // Angeboten, wenn der Ordner bereitsteht oder noch festgelegt werden kann.
+  const lokalVerfuegbar = !!lokalQuery.data?.verfuegbar || lokalQuery.data?.festgelegt === false;
   const appOrdner = useAppOrdner(backend);
+  // Je Backend abfragen und erst mit geladenen Einstellungen: vorher stünde
+  // `backend` nur auf dem Ersatzwert 'onedrive'.
+  const wurzelQuery = useQuery({
+    queryKey: ['ablage-wurzel', backend], queryFn: () => api.onedrive.folderRoot(backend),
+    enabled: !!settings, retry: false,
+  });
   // Der Server beantwortet dieselbe Frage in `pruefungen.ablage.gewaehlt` und
   // ist die Wahrheit – sonst zeigte das UI nach einer zurückgenommenen Wahl
   // weiter die Backend-Karte, weil noch eine Client-ID im Formular steht.
@@ -285,15 +364,16 @@ export default function EinrichtungPage() {
   const [instanz, setInstanz] = useState('');
   const [basisUrl, setBasisUrl] = useState('');
   const [port, setPort] = useState('');
-  const [duckDomain, setDuckDomain] = useState('');
+  const [duckDomain, setDuckDomain] = useState(duckVorschlag);
   const [duckToken, setDuckToken] = useState('');
-  const [duckTokenBearbeiten, setDuckTokenBearbeiten] = useState(false);
+  const [duckTokenBearbeiten, setDuckTokenBearbeiten] = useState(!!duckVorschlag);
   const [tlsAusFrage, setTlsAusFrage] = useState(false);
   const [duckPruefung, setDuckPruefung] = useState(null);
   // Der Instanzschritt ist im Regelfall reine Information: install.sh hat Name,
   // Adresse, Port und TLS bereits gesetzt. Bearbeiten ist die Ausnahme und
   // beginnt deshalb mit einem ausdrücklichen Klick.
-  const [betriebBearbeiten, setBetriebBearbeiten] = useState(false);
+  const [betriebBearbeiten, setBetriebBearbeiten] = useState(!!duckVorschlag);
+  const tlsFeldRef = useRef(null);
   const [letzterAuftrag, setLetzterAuftrag] = useState(null);
   const [hostAuftragInfo, setHostAuftragInfo] = useState(null);
   // Leer starten, NICHT 'postbuch': der Wurzelordner wird aus der Instanz
@@ -325,19 +405,21 @@ export default function EinrichtungPage() {
     setScannerUrl((alt) => alt || settings.scanner_device_url?.value || '');
   }, [settings]);
 
+  // Mit Vorschlag direkt zum TLS-Feld, sobald es da ist (es steht weit unten).
+  const tlsFeldDa = !!agent?.vorhanden;
+  useEffect(() => {
+    if (duckVorschlag && tlsFeldDa) tlsFeldRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [duckVorschlag, tlsFeldDa]);
+
   useEffect(() => {
     if (!hostconfig) return;
     setDuckDomain((alt) => alt || hostconfig.duckdns?.domain || '');
     setPort((alt) => alt || (hostconfig.port?.wert ? String(hostconfig.port.wert) : ''));
   }, [hostconfig]);
 
-  useEffect(() => {
-    const w = wurzelQuery.data;
-    if (!w || !settings || !appOrdner.bereit) return;
-    // rootPath === null heißt: auf dieser Instanz ist noch nichts eingerichtet.
-    // Nur dann gilt die Vorgabe: direkt im App-Ordner bzw. 'postbuch'.
-    setRootPath((alt) => alt || w.rootPath || standardWurzel(appOrdner));
-  }, [wurzelQuery.data, settings, appOrdner.bereit, appOrdner.aktiv]);
+  // rootPath === null heißt: auf dieser Instanz ist noch nichts eingerichtet.
+  // Nur dann gilt die Vorgabe: direkt im App- bzw. Ablageordner oder 'postbuch'.
+  useWurzelVorbelegung(wurzelQuery.data, appOrdner, setRootPath);
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['einrichtung'] });
@@ -400,6 +482,19 @@ export default function EinrichtungPage() {
     retry: false,
     refetchInterval: 2000,
   });
+  // Ist der verfolgte Auftrag fertig, die Prüfungen neu holen: sonst stünde
+  // neben der Erfolgsmeldung weiter der alte Zustand (etwa „Scan-Dienst läuft nicht“).
+  const vollzugEnde = hostVollzug.data?.lauf?.nonce === hostAuftragInfo?.nonce
+    && ['erfolgreich', 'fehlgeschlagen', 'abgelehnt'].includes(hostVollzug.data?.lauf?.status)
+    ? hostVollzug.data.lauf.status : null;
+  useEffect(() => {
+    if (vollzugEnde) refresh();
+  }, [vollzugEnde, hostAuftragInfo?.nonce]);
+  // Schaltet gerade ein Auftrag den Scan-Dienst ein, zeigt der Scanner-Schritt
+  // dessen Fortschritt; „Scan-Dienst läuft nicht“ wäre bis dahin ein Fehlalarm.
+  const scanDienstKommt = (hostAuftrag.isPending && hostAuftrag.variables?.wert === 'scanner:an')
+    || (hostAuftragInfo?.wert === 'scanner:an' && !hostAuftrag.isError
+      && vollzugEnde !== 'fehlgeschlagen' && vollzugEnde !== 'abgelehnt');
   const ordnerAnlegen = useMutation({
     mutationFn: (bestaetigt = false) => api.onedrive.setupWizard(rootPath.trim(), bestaetigt, true),
     onMutate: () => {
@@ -423,13 +518,23 @@ export default function EinrichtungPage() {
   const scannerSpeichern = useMutation({
     mutationFn: async (url) => {
       const ziel = (url ?? scannerUrl).trim();
-      await api.settings.update('scanner_device_url', ziel);
+      const gespeichert = await api.settings.update('scanner_device_url', ziel);
       const result = await api.settings.scannerCapabilities(ziel);
       setScannerErgebnis(result);
-      return result;
+      return { result, autoAuftrag: gespeichert?.hostAuftrag || null };
     },
     onMutate: () => setScannerErgebnis(null),
-    onSuccess: () => {
+    onSuccess: ({ autoAuftrag }) => {
+      // Eine neue Adresse schaltet das Profil schon serverseitig ein. Diesen
+      // Auftrag verfolgen; ein zweiter liefe nur auf „bereits in Arbeit“.
+      if (autoAuftrag?.nonce) {
+        hostAuftrag.reset();
+        setLetzterAuftrag('module');
+        setHostAuftragInfo({ ...autoAuftrag, angefordertAt: Date.now() });
+        qc.invalidateQueries({ queryKey: ['updates'] });
+        refresh();
+        return;
+      }
       // Ein Scanner, der antwortet, soll auch benutzt werden können. Das
       // Scannerprofil hinterher von Hand einzuschalten war ein zweiter Knopf
       // für eine Entscheidung, die mit dem erfolgreichen Test längst gefallen
@@ -582,6 +687,9 @@ export default function EinrichtungPage() {
   function inhaltWillkommen() {
     return (
       <div className="space-y-4">
+        {status?.nachRestore && (
+          <NachRestoreInhalt nachRestore={status.nachRestore} pflichtOffen={status.pflichtOffen || []} pruefungen={status.pruefungen || {}} imAssistenten />
+        )}
         <p className="text-sm text-muted-foreground">
           Der Assistent geht die fachliche Einrichtung Schritt für Schritt durch. Alles, was hier
           eingestellt wird, steht danach genauso in den Einstellungen – der Assistent gibt eine
@@ -656,6 +764,8 @@ export default function EinrichtungPage() {
               )}
             </div>
 
+            <DuckdnsIpZeile ip={agent?.duckdnsIp} />
+
             <Button variant="outline" onClick={() => setBetriebBearbeiten(true)}>
               <Pencil className="h-4 w-4 mr-1.5" />Ändern
             </Button>
@@ -665,23 +775,30 @@ export default function EinrichtungPage() {
         </div>
       );
     }
-    // Die beiden Aufträge sind bewusst getrennt: `duckdns` schreibt Domain,
-    // Token und Caddyfile, `netzwerk` schreibt APP_BASE_URL und app_host.
-    // Wer nur die Domain wechselt, hat danach ein Zertifikat für die neue
-    // Adresse, während App-Links und die OneDrive-Redirect-URI weiter auf die
-    // alte zeigen. Zusammenlegen geht nicht – der Host-Agent nimmt immer nur
-    // einen Auftrag an (429, solange einer offen ist). Also: darauf hinweisen
-    // und das jeweils andere Feld auf einen Klick nachziehbar machen.
+    // `duckdns` schreibt Domain, Token und Caddyfile und zieht eine
+    // Basisadresse auf Web-Port oder DuckDNS-Domain selbst nach; eine eigene
+    // Adresse schreibt nur `netzwerk`. Der Host-Agent nimmt immer nur einen
+    // Auftrag an (429, solange einer offen ist). Also: bei eigener Adresse
+    // darauf hinweisen und das andere Feld auf einen Klick nachziehbar machen.
     const basisZiel = (() => {
       try {
         const u = new URL(basisUrl.trim());
-        return { host: u.hostname.toLowerCase(), https: u.protocol === 'https:' };
+        return { host: u.hostname.toLowerCase(), https: u.protocol === 'https:', port: u.port };
       } catch { return null; }
     })();
     const duckGueltig = /^[a-z0-9-]{1,63}\.duckdns\.org$/.test(duckDomain);
-    const adresseAbweichend = duckGueltig && basisZiel && basisZiel.host !== duckDomain;
-    const adresseUnverschluesselt = duckGueltig && basisZiel && !adresseAbweichend && !basisZiel.https;
     const basisIstDuckdns = !!basisZiel && /^[a-z0-9-]{1,63}\.duckdns\.org$/.test(basisZiel.host);
+    const httpsPort = hostconfig?.httpsPort || 443;
+    const duckAdresse = `https://${duckDomain}${httpsPort === 443 ? '' : `:${httpsPort}`}`;
+    // Dieselbe Regel wie im Host-Agenten (postbuch-hostconfig.sh, Auftrag
+    // duckdns): Zeigt die Basisadresse auf den Web-Port oder auf eine
+    // DuckDNS-Domain, stellt der TLS-Auftrag sie selbst um. Nur eine eigene
+    // Adresse bleibt stehen.
+    const adresseZiehtMit = duckGueltig && (!basisUrl.trim()
+      || (basisZiel && !basisZiel.https && !!hostconfig?.port?.wert && basisZiel.port === String(hostconfig.port.wert))
+      || (basisZiel?.https && basisIstDuckdns));
+    const adresseAbweichend = duckGueltig && basisZiel && !adresseZiehtMit && basisZiel.host !== duckDomain;
+    const adresseUnverschluesselt = duckGueltig && basisZiel && !adresseZiehtMit && !adresseAbweichend && !basisZiel.https;
     return (
       <div className="space-y-4">
         <Abschnitt icon={Globe} titel="Instanz" beschreibung="Name und Basisadresse dieser Installation. Beides steht in Benachrichtigungen und Links.">
@@ -726,9 +843,9 @@ export default function EinrichtungPage() {
               {kann('port') && (
                 <Feld
                   label="Port der Weboberfläche"
-                  hinweis={hostconfig?.port?.wert
+                  hinweis={`${hostconfig?.port?.wert
                     ? `Zuletzt an den Host übergeben: ${hostconfig.port.wert}.`
-                    : 'Der Host-Agent meldet den aktuell aktiven Port nicht zurück. Das Feld bleibt deshalb leer, bis hier einmal einer gesetzt wurde – der Standard der Installation ist 3420.'}
+                    : 'Der Host-Agent meldet den aktuell aktiven Port nicht zurück. Das Feld bleibt deshalb leer, bis hier einmal einer gesetzt wurde – der Standard der Installation ist 3420.'} Der Port muss frei sein und darf keiner der HTTP-/HTTPS-Ports sein. Enthält die Basisadresse den bisherigen Port, zieht sie mit.${hostconfig?.windows ? ` ${WINDOWS_PORT_HINWEIS}` : ''}`}
                 >
                   <div className="flex flex-wrap gap-2">
                     <Input type="number" min="1024" max="65535" className="w-40" placeholder="3420" value={port} onChange={(e) => setPort(e.target.value)} />
@@ -756,10 +873,22 @@ export default function EinrichtungPage() {
                     {auftragMeldung('netzwerk')}
                   </Feld>
 
+                  <div ref={tlsFeldRef} />
                   <Feld
                     label="TLS über DuckDNS"
                     hinweis="Jede Änderung an Domain oder Zertifikat braucht den Token erneut."
                   >
+                    {duckVorschlag && duckDomain === duckVorschlag && (
+                      <div className="rounded-lg border border-primary/30 bg-primary/[0.05] p-3 text-xs space-y-1">
+                        <p className="font-medium">Adresse aus der Sicherung: {duckVorschlag}</p>
+                        <p>
+                          Den alten Rechner vorher abschalten oder dort HTTPS abschalten, sonst beanspruchen beide
+                          dieselbe Adresse. Das DuckDNS-Token steht nicht in der Sicherung: Es steht auf duckdns.org
+                          nach der Anmeldung oben auf der Seite. Nach „TLS aktivieren“ trägt postbuch.net die
+                          Heimnetz-Adresse dieses Rechners selbst bei DuckDNS ein.
+                        </p>
+                      </div>
+                    )}
                     <div className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
                       <Input
                         placeholder="name.duckdns.org"
@@ -813,9 +942,9 @@ export default function EinrichtungPage() {
                         <p className="text-xs">
                           {adresseAbweichend ? (
                             <>Die Basisadresse zeigt auf <code className="font-mono">{basisZiel.host}</code>,
-                            das Zertifikat entstünde für <code className="font-mono">{duckDomain}</code>. Der
-                            TLS-Auftrag ändert die Basisadresse nicht – Links in Benachrichtigungen und die
-                            OneDrive-Redirect-URI blieben auf der alten Adresse.</>
+                            das Zertifikat entstünde für <code className="font-mono">{duckDomain}</code>. Eine
+                            eigene Basisadresse lässt der TLS-Auftrag stehen – Links in Benachrichtigungen und
+                            die OneDrive-Redirect-URI blieben auf ihr.</>
                           ) : (
                             <>Die Basisadresse beginnt mit <code className="font-mono">http://</code>. Mit
                             aktivem TLS gehört <code className="font-mono">https://</code> davor, sonst passt
@@ -826,8 +955,8 @@ export default function EinrichtungPage() {
                           Reihenfolge: erst TLS aktivieren, dann die Basisadresse auf dem Host anwenden.
                         </p>
                         <div className="flex flex-wrap gap-2">
-                          <Button size="sm" variant="outline" onClick={() => setBasisUrl(`https://${duckDomain}`)}>
-                            Basisadresse auf https://{duckDomain} setzen
+                          <Button size="sm" variant="outline" onClick={() => setBasisUrl(duckAdresse)}>
+                            Basisadresse auf {duckAdresse} setzen
                           </Button>
                           {adresseAbweichend && basisIstDuckdns && (
                             <Button size="sm" variant="ghost" onClick={() => setDuckDomain(basisZiel.host)}>
@@ -837,10 +966,15 @@ export default function EinrichtungPage() {
                         </div>
                       </div>
                     )}
+                    {adresseZiehtMit && (
+                      <p className="text-xs text-muted-foreground">
+                        Die Basisadresse wechselt dabei auf <code className="font-mono">{duckAdresse}</code>.
+                      </p>
+                    )}
                     {auftragMeldung('duckdns')}
                     {tlsAusFrage ? (
                       <Rueckfrage
-                        text="TLS wird abgeschaltet: Domain und Token werden aus der Host-Konfiguration entfernt und der caddy-Container gestoppt."
+                        text={`TLS wird abgeschaltet: Domain und Token werden aus der Host-Konfiguration entfernt und der caddy-Container gestoppt. Danach erreichst du postbuch.net nur noch ohne Verschlüsselung über ${agent?.lanIp && hostconfig?.port?.wert ? `http://${agent.lanIp}:${hostconfig.port.wert}` : 'die IP-Adresse dieses Rechners und den Port der Weboberfläche'}; Lesezeichen und installierte Apps mit der https-Adresse funktionieren nicht mehr. War die Oberfläche nur über HTTPS erreichbar, wird sie dabei wieder für das Heimnetz geöffnet.`}
                         frage="Soll die Instanz wirklich wieder ohne TLS laufen?"
                         bestaetigen="Ja, TLS abschalten"
                         abbrechen="Abbrechen"
@@ -848,7 +982,9 @@ export default function EinrichtungPage() {
                         onBestaetigen={() => hostAuftrag.mutate({ typ: 'duckdns', wert: 'aus' })}
                         onAbbrechen={() => setTlsAusFrage(false)}
                       />
-                    ) : (
+                    ) : (hostconfig?.duckdns?.domain || hostconfig?.duckdns?.tokenVorhanden) && (
+                      // Nur bei eingerichtetem TLS; nach dem Abschalten meldet
+                      // leseHostconfig weder Domain noch Token.
                       <button type="button" className="text-xs text-muted-foreground underline hover:text-foreground" onClick={() => setTlsAusFrage(true)}>
                         TLS wieder abschalten
                       </button>
@@ -885,6 +1021,12 @@ export default function EinrichtungPage() {
         ) : !backendGewaehlt ? (
           <Abschnitt icon={Cloud} titel="Dateiablage wählen" beschreibung="Diese einmalige Wahl ist auf der leeren Instanz noch kein Umzug. Spätere Wechsel laufen geführt und kopieren den Bestand.">
             <div className="grid gap-3 sm:grid-cols-2">
+              {lokalVerfuegbar && (
+                <Button variant="outline" className="h-auto justify-start py-4 sm:col-span-2" onClick={() => backendWaehlen.mutate('lokal')} disabled={backendWaehlen.isPending}>
+                  <HardDrive className="h-4 w-4 mr-2" />Ordner auf diesem Rechner
+                  <span className="ml-2 text-xs text-muted-foreground font-normal">{lokalQuery.data?.festgelegt === false ? 'Ordner im nächsten Schritt festlegen' : lokalQuery.data?.pfad}</span>
+                </Button>
+              )}
               <Button variant="outline" className="h-auto justify-start py-4" onClick={() => backendWaehlen.mutate('onedrive')} disabled={backendWaehlen.isPending}>
                 <Cloud className="h-4 w-4 mr-2" />OneDrive
               </Button>
@@ -896,12 +1038,12 @@ export default function EinrichtungPage() {
           </Abschnitt>
         ) : (
           <>
-            {backend === 'nextcloud' ? <NextcloudCard /> : <OneDriveSection settings={settings} onSaved={refresh} />}
+            {backend === 'lokal' ? <LokalAblageCard /> : backend === 'nextcloud' ? <NextcloudCard /> : <OneDriveSection settings={settings} onSaved={refresh} />}
             {status?.pruefungen?.ablage?.wechselMoeglich && (
               <Abschnitt
                 icon={Cloud}
                 titel="Doch die andere Dateiablage?"
-                beschreibung={`Aktuell gewählt: ${backend === 'nextcloud' ? 'Eigene Nextcloud / WebDAV' : 'OneDrive'}. Solange nichts verbunden und kein Ordner angelegt ist, ist diese Wahl folgenlos und lässt sich zurücknehmen.`}
+                beschreibung={`Aktuell gewählt: ${backend === 'lokal' ? 'Ordner auf diesem Rechner' : backend === 'nextcloud' ? 'Eigene Nextcloud / WebDAV' : 'OneDrive'}. Solange nichts verbunden und kein Ordner angelegt ist, ist diese Wahl folgenlos und lässt sich zurücknehmen.`}
               >
                 <Button variant="outline" onClick={() => backendZuruecknehmen.mutate()} disabled={backendZuruecknehmen.isPending}>
                   <ArrowLeft className="h-4 w-4 mr-1.5" />
@@ -939,7 +1081,7 @@ export default function EinrichtungPage() {
               ? 'Der eingerichtete Wurzelordner wird aus der Dateiablage gelesen…'
               : eingerichtet
                 ? `Diese Instanz arbeitet derzeit in „${wurzelLabel(eingerichtet, appOrdner)}".`
-                : appOrdner.aktiv
+                : appOrdner.aktiv || appOrdner.lokal
                   ? 'Auf dieser Instanz ist noch keine Struktur angelegt.'
                   : 'Auf dieser Instanz ist noch keine Struktur angelegt. „postbuch" ist die Vorgabe.'}
           >
@@ -1059,9 +1201,18 @@ export default function EinrichtungPage() {
             <Input className="font-mono" value={scannerUrl} onChange={(e) => setScannerUrl(e.target.value)} placeholder="http://192.168.x.x:80/eSCL" />
           </Feld>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={() => scannerSpeichern.mutate()} disabled={scannerSpeichern.isPending || !scannerUrl.trim()}>
-              <ScanLine className="h-4 w-4 mr-1.5" />{scannerSpeichern.isPending ? 'Wird getestet…' : 'Speichern und testen'}
-            </Button>
+            {/* Steht die gespeicherte, getestete Adresse im Feld, gibt es nichts
+                zu speichern – dann nur noch ein unauffälliges „Erneut testen“. */}
+            {(() => {
+              const unveraendert = !!p?.konfiguriert
+                && scannerUrl.trim() === String(settings?.scanner_device_url?.value || '').trim();
+              return (
+                <Button variant={unveraendert ? 'outline' : 'default'} onClick={() => scannerSpeichern.mutate()} disabled={scannerSpeichern.isPending || !scannerUrl.trim()}>
+                  <ScanLine className="h-4 w-4 mr-1.5" />
+                  {scannerSpeichern.isPending ? 'Wird getestet…' : (unveraendert ? 'Erneut testen' : 'Speichern und testen')}
+                </Button>
+              );
+            })()}
           </div>
           {scannerErgebnis && (
             <Testergebnis status="erfolg">
@@ -1074,6 +1225,19 @@ export default function EinrichtungPage() {
               durchläuft, will scannen. Der Rückweg steht unter
               Einstellungen → Scanner, dort hinter einer Rückfrage. */}
           {scannerSpeichern.isError && <Testergebnis status="fehler">{scannerSpeichern.error.message}</Testergebnis>}
+          {/* Der Scanner antwortet, aber der Scan-Dienst dieses Systems läuft
+              nicht (etwa nach einer Wiederherstellung auf einem neuen Stack):
+              dann kommt kein Scan an, auch wenn die Prüfung grün ist. */}
+          {p?.konfiguriert && p?.profilAktiv === false && !scanDienstKommt && (
+            <div className="space-y-2">
+              <Testergebnis status="fehler">Der Scan-Dienst läuft auf diesem System nicht. Bis er läuft, kommen keine Scans an.</Testergebnis>
+              {p.profilSteuerbar && (
+                <Button onClick={() => hostAuftrag.mutate({ typ: 'module', wert: 'scanner:an' })} disabled={hostAuftrag.isPending}>
+                  Scan-Dienst einschalten
+                </Button>
+              )}
+            </div>
+          )}
           {auftragMeldung('module')}
         </Abschnitt>
       </div>
@@ -1123,8 +1287,12 @@ export default function EinrichtungPage() {
             </p>
             <p>
               <span className="font-medium">Was nicht:</span> die Dokumente selbst. Die liegen als Dateien
-              in deiner Dateiablage und werden von dort nicht kopiert – sie sind ohnehin schon in der Cloud.
-              Ohne Datenbanksicherung wären sie zwar noch da, aber ohne alles, was postbuch.net über sie weiß.
+              in deiner Dateiablage und werden von dort nicht kopiert
+              {backend === 'lokal'
+                ? <>. Sie liegen auf derselben Platte wie die Sicherung – kopiere den ganzen Ablageordner
+                  regelmäßig auf ein anderes Laufwerk (<Link className="underline underline-offset-2" to="/hilfe/backup-wiederherstellung#bei-einem-ordner-auf-diesem-rechner">so geht’s</Link>).</>
+                : <> – sie liegen ohnehin schon in der Cloud.</>}
+              {' '}Ohne Datenbanksicherung wären sie zwar noch da, aber ohne alles, was postbuch.net über sie weiß.
             </p>
           </div>
           {p?.backupEntschieden && p?.backupAktiv && <Testergebnis status="erfolg">Tägliche Sicherung ist aktiv (04:00 Uhr).</Testergebnis>}
@@ -1175,7 +1343,7 @@ export default function EinrichtungPage() {
                 <Testergebnis status="erfolg">
                   Backup-Verschlüsselung ist aktiv. Passwort ändern oder einsehen: Einstellungen → Backup.
                 </Testergebnis>
-              ) : p?.verschluesselungEntschieden && !nachtraeglichVerschluesseln ? (
+              ) : p?.verschluesselungAbgelehnt && !nachtraeglichVerschluesseln ? (
                 <>
                   <Testergebnis>
                     Backups werden bewusst unverschlüsselt und ohne Zugangsdaten gespeichert. Lässt sich jederzeit unter
@@ -1228,10 +1396,7 @@ export default function EinrichtungPage() {
                       className="h-9 text-sm"
                       autoComplete="new-password"
                     />
-                    {verschluesselungPasswort && verschluesselungPasswortWiederholung
-                      && verschluesselungPasswort !== verschluesselungPasswortWiederholung && (
-                      <p className="text-xs text-destructive">Passwörter stimmen nicht überein.</p>
-                    )}
+                    <PasswortHinweis passwort={verschluesselungPasswort} wiederholung={verschluesselungPasswortWiederholung} />
                   </div>
 
                   <div className="flex flex-wrap gap-2">
@@ -1255,7 +1420,7 @@ export default function EinrichtungPage() {
                     >
                       Ohne Verschlüsselung fortfahren
                     </Button>
-                    {p?.verschluesselungEntschieden && (
+                    {p?.verschluesselungAbgelehnt && (
                       <Button
                         variant="ghost"
                         onClick={() => {
@@ -1272,7 +1437,7 @@ export default function EinrichtungPage() {
 
                   {ohneVerschluesselungFrage && (
                     <Rueckfrage
-                      text="Backups liegen dann unverschlüsselt in deiner Dateiablage (OneDrive/Nextcloud) – wer Zugriff auf dieses Konto hat, kann sie lesen. Zugangsdaten wie OneDrive-Anmeldung und KI-Schlüssel enthalten sie dann nicht. Die Verschlüsselung lässt sich jederzeit später unter Einstellungen → Backup nachholen."
+                      text="Backups liegen dann unverschlüsselt in deiner Dateiablage – wer an diesen Ordner oder dieses Konto kommt, kann sie lesen. Zugangsdaten wie OneDrive-Anmeldung und KI-Schlüssel enthalten sie dann nicht. Die Verschlüsselung lässt sich jederzeit später unter Einstellungen → Backup nachholen."
                       frage="Backups wirklich ohne Verschlüsselung speichern?"
                       bestaetigen="Ja, ohne Verschlüsselung fortfahren"
                       abbrechen="Abbrechen"
@@ -1342,9 +1507,19 @@ export default function EinrichtungPage() {
             className="ml-auto inline-flex h-8 items-center rounded-lg px-3 text-sm font-medium transition-all duration-150 hover:bg-accent hover:text-accent-foreground">
             <BookOpen className="h-4 w-4 sm:mr-1" /><span className="hidden sm:inline">Hilfe</span>
           </a>
-          <Button variant="ghost" size="sm" onClick={() => trotzdemAnsehen.mutate()} disabled={trotzdemAnsehen.isPending}>
-            <X className="h-4 w-4 mr-1" /><span className="hidden sm:inline">Trotzdem ansehen</span>
-          </Button>
+          {/* Nur die Ersteinrichtung nach der Installation sperrt die
+              Oberfläche. Sonst (von Hand oder nach einer Wiederherstellung
+              geöffnet) führt der Ausgang direkt zurück, ohne alle Schritte
+              durchzugehen. */}
+          {status?.sperrt ? (
+            <Button variant="ghost" size="sm" onClick={() => trotzdemAnsehen.mutate()} disabled={trotzdemAnsehen.isPending}>
+              <X className="h-4 w-4 mr-1" /><span className="hidden sm:inline">Trotzdem ansehen</span>
+            </Button>
+          ) : (
+            <Button variant="outline" size="sm" onClick={() => navigate('/')}>
+              <X className="h-4 w-4 mr-1" />Zur Übersicht
+            </Button>
+          )}
         </div>
         <div className="h-0.5 w-full bg-muted">
           <div className="h-full bg-primary transition-all duration-300" style={{ width: `${fortschritt}%` }} />
@@ -1474,6 +1649,15 @@ function KiSchritt({ status, pruefen, onSchritt }) {
   const { data: settings, isLoading: settingsLoading } = useQuery({ queryKey: ['settings'], queryFn: () => api.settings.getAll(), retry: false });
   const [modelValues, setModelValues] = useState({});
   const [modelSaved, setModelSaved] = useState(false);
+  // Beim Betreten einmal echt testen: Die Providerliste oben fragt die Dienste
+  // live an, die Stufen darunter lesen den gespeicherten Nachweis. Ohne
+  // frischen Test stand oben „erreichbar“ und unten „antwortet noch nicht“.
+  const getestet = useRef(false);
+  useEffect(() => {
+    if (getestet.current || pruefen.isPending) return;
+    getestet.current = true;
+    pruefen.mutate(false);
+  }, [pruefen]);
 
   const providers = (providerData?.providers || []).map((p) => ({
     ...p,
@@ -1483,6 +1667,45 @@ function KiSchritt({ status, pruefen, onSchritt }) {
 
   const llmPruefung = status?.pruefungen?.kiLlm;
   const embPruefung = status?.pruefungen?.kiEmbedding;
+  // Starten die eingebauten Dienste noch (Download, Modell laden), zeigt der
+  // Assistent das offen an und testet von selbst weiter, bis alles bereit ist.
+  const ladendLokal = llmPruefung?.laedt || null;
+  const ladendEmbedding = embPruefung?.laedt || null;
+  const ladend = !!(ladendLokal || ladendEmbedding);
+  // Hängt die Einrichtung der lokalen KI seit einer Stunde ohne jede Änderung,
+  // gibt der Assistent die Einstellungen wieder frei (z. B. für einen
+  // Cloud-Anbieter) – der Kasten oben bleibt mit einer klaren Warnung stehen.
+  const sperrtLokal = !!ladendLokal && !ladendLokal.haengt;
+  // Providerliste und Health-Bericht sind eigene Abfragen. Nach jeder Prüfung
+  // müssen sie nachziehen, sonst steht dort noch „Fehler“ oder „inaktiv“,
+  // während die Stufen längst „bereit“ melden.
+  const listeAktualisieren = useCallback(async () => {
+    await qc.invalidateQueries({ queryKey: ['ai-providers'] });
+    await refetchHealth();
+  }, [qc, refetchHealth]);
+  // Solange etwas lädt, liest der Assistent alle fünf Sekunden den Stand
+  // (leichtgewichtig). Ist ein Dienst bereit und wartet nur noch auf seinen
+  // Test, testet er echt – erst das schaltet die Stufen frei.
+  const nurNochTesten = ladend
+    && (!ladendLokal || ladendLokal.dauer === false)
+    && (!ladendEmbedding || ladendEmbedding.dauer === false);
+  useEffect(() => {
+    if (!ladend) return undefined;
+    const t = setInterval(async () => {
+      if (pruefen.isPending) return;
+      if (nurNochTesten) await pruefen.mutateAsync(false).catch(() => null);
+      else await qc.invalidateQueries({ queryKey: ['einrichtung'] });
+    }, 5000);
+    return () => clearInterval(t);
+  }, [ladend, nurNochTesten, pruefen, qc]);
+  // Einmal beim Übergang „lädt“ → „bereit“ (und wenn sich die Zahl der
+  // antwortenden Provider ändert) alles neu lesen.
+  const antwortend = (llmPruefung?.workingProviders || []).join(',');
+  const zuvor = useRef(null);
+  useEffect(() => {
+    if (zuvor.current !== null && zuvor.current !== `${ladend}|${antwortend}`) listeAktualisieren();
+    zuvor.current = `${ladend}|${antwortend}`;
+  }, [ladend, antwortend, listeAktualisieren]);
   const llmBereit = (llmPruefung?.llmProviders || []).length > 0;
 
   const klassenStatus = llmPruefung?.modellklassen || [];
@@ -1533,6 +1756,11 @@ function KiSchritt({ status, pruefen, onSchritt }) {
 
   return (
     <div className="space-y-4">
+      {ladend && <HintergrundEinrichtung lokal={ladendLokal} embedding={ladendEmbedding} />}
+      {/* Wird die lokale KI noch eingerichtet, gibt es hier nichts zu
+          entscheiden: Jede Einstellung wäre vorläufig und jeder Zustand
+          darunter irreführend. Die Seite baut sich auf, sobald sie bereit ist. */}
+      {!sperrtLokal && <>
       <StatusZeilen status={status} nur={['kiLlm', 'kiEmbedding']} aktuellerSchritt="ki" onSchritt={onSchritt} />
       <Testergebnis>
         Gebraucht wird ein Sprachmodell-Provider, etwa ein Entwicklerkonto bei einem
@@ -1545,7 +1773,12 @@ function KiSchritt({ status, pruefen, onSchritt }) {
         titel="KI-Provider verbinden"
         beschreibung="Zugangsdaten eintragen und testen. Erst ein bestandener Test schaltet die nächsten Stufen frei."
       >
-        <ProviderCard health={health} onChanged={nachProviderAenderung} />
+        <ProviderCard
+          health={health}
+          ladend={{ lokal: !!ladendLokal, eingebaut: !!ladendEmbedding }}
+          sprachmodellBereit={llmBereit}
+          onChanged={nachProviderAenderung}
+        />
       </Stufe>
 
       <Stufe
@@ -1614,7 +1847,62 @@ function KiSchritt({ status, pruefen, onSchritt }) {
         </Button>
       </div>
       {pruefen.isError && <Testergebnis status="fehler">{pruefen.error.message}</Testergebnis>}
+      </>}
     </div>
+  );
+}
+
+/**
+ * Hinweis ganz oben im KI-Schritt, solange eingebaute Dienste im Hintergrund
+ * heruntergeladen, installiert oder gestartet werden – mit genauem Stand.
+ */
+function HintergrundEinrichtung({ lokal, embedding }) {
+  const zeilen = [
+    lokal && { key: 'lokal', titel: 'Lokale KI', ...lokal },
+    embedding && { key: 'embedding', titel: 'Embedding-Dienst', ...embedding },
+  ].filter(Boolean);
+  const haengt = !!lokal?.haengt;
+  const stunden = Math.floor((lokal?.unveraendertSeitMin || 0) / 60);
+  return (
+    <section
+      className={`rounded-xl border-2 p-4 shadow-sm ${haengt ? 'border-amber-500/60 bg-amber-500/10' : 'border-primary/40 bg-primary/5'}`}
+      aria-live="polite"
+    >
+      <div className="flex items-start gap-3">
+        {haengt
+          ? <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+          : <Spinner className="mt-0.5 h-5 w-5 shrink-0 text-primary" />}
+        <div className="min-w-0 flex-1 space-y-3">
+          <div>
+            <p className="text-sm font-semibold">
+              {haengt ? 'Die Einrichtung der lokalen KI kommt nicht voran' : 'Im Hintergrund wird noch eingerichtet'}
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {haengt
+                ? `Seit über ${stunden <= 1 ? 'einer Stunde' : `${stunden} Stunden`} hat sich am Stand nichts geändert. Details stehen unter Einstellungen → Stack. Die KI-Einstellungen sind darunter wieder freigegeben: Du kannst weiter warten oder die KI anders einrichten, etwa mit einem Cloud-Anbieter.`
+                : lokal
+                  ? 'Bitte warte, bis das abgeschlossen ist. Die KI-Einstellungen erscheinen hier von selbst, sobald die lokale KI bereit ist – vorher gibt es nichts zu prüfen.'
+                  : 'Bitte warte, bis das abgeschlossen ist, und prüfe erst danach die Einstellungen. Die Seite aktualisiert sich von selbst.'}
+            </p>
+          </div>
+          {zeilen.map((z) => (
+            <div key={z.key} className="space-y-1.5">
+              <p className="text-sm"><span className="font-medium">{z.titel}:</span> {z.text}</p>
+              {Number.isFinite(z.prozent) && (
+                <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                  <div className={`h-full rounded-full transition-all ${haengt && z.key === 'lokal' ? 'bg-amber-500' : 'bg-primary'}`} style={{ width: `${Math.max(2, z.prozent)}%` }} />
+                </div>
+              )}
+            </div>
+          ))}
+          {lokal?.dauer && !haengt && (
+            <p className="text-xs text-muted-foreground">
+              Das kann je nach Internetverbindung und Rechner einige Minuten, bei langsamer Leitung auch mehrere Stunden dauern – das Modell ist rund 9 GB groß. Du kannst die Seite offen lassen oder später wiederkommen.
+            </p>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -1642,7 +1930,7 @@ function EingebautesEmbedding({ pruefung, onChanged }) {
       ) : (
         <>
           {pruefung?.embeddingEingebaut && (
-            <Testergebnis status={pruefung.ok ? 'erfolg' : 'fehler'}>{pruefung.text}</Testergebnis>
+            <Testergebnis status={pruefung.ok ? 'erfolg' : (pruefung.laedt ? undefined : 'fehler')}>{pruefung.text}</Testergebnis>
           )}
           {/* Gewählt und betriebsbereit braucht keinen weiteren Knopf. */}
           {!(pruefung?.embeddingEingebaut && pruefung.ok) && (

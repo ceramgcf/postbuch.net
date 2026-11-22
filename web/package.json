@@ -9,11 +9,11 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@mmote/niimbluelib": "0.48.0",
-    "@tanstack/react-query": "^5.107.0",
+    "@mmote/niimbluelib": "0.49.1",
+    "@tanstack/react-query": "^5.107.1",
     "@techstark/opencv-js": "5.0.0-release.1",
     "clsx": "^2.1.1",
-    "lucide-react": "^1.70.0",
+    "lucide-react": "^1.72.0",
     "qrcode": "^1.5.4",
     "qrcode.react": "^4.2.0",
     "react": "^19.0.0",
@@ -25,12 +25,12 @@
     "tailwind-merge": "^3.7.0"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.3",
+    "@tailwindcss/vite": "^4.3.5",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^6.1.2",
+    "@vitejs/plugin-react": "^6.3.0",
     "postcss": "^8.5.32",
     "tailwindcss": "^4.3.3",
-    "vite": "^8.3.6"
+    "vite": "^8.3.8"
   }
 }

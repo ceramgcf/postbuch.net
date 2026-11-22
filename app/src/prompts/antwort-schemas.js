@@ -91,3 +91,21 @@ export const ZERLEGUNG_SCHEMA = objekt({
     })),
   })),
 });
+
+/** prompts/stapel-trennung.js */
+export const STAPEL_TRENNUNG_SCHEMA = objekt({
+  grenzen: liste(objekt({
+    nach_blatt: { type: 'integer' },
+    trennen: { type: 'boolean' },
+    sicherheit: { type: 'string', enum: ['sicher', 'wahrscheinlich', 'unklar'] },
+    grund: { type: 'string' },
+  })),
+  seiten: liste(objekt({
+    seite: { type: 'integer' },
+    rolle: { type: 'string', enum: ['anlage', 'vorblatt', 'duplikat', 'beilage', 'fortsetzung', 'leer_oder_werbung'] },
+  })),
+  dokumente: liste(objekt({
+    art: { type: 'string' },
+  })),
+  eindeutig: { type: 'boolean' },
+});

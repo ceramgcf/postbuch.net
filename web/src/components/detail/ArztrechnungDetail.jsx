@@ -671,6 +671,15 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
                 inputClassName="w-full max-w-full"
               />
             </div>
+            <div className="col-span-2 md:col-span-3">
+              <EditableField
+                label="Leistung der Rechnung"
+                postid={data.postid}
+                field="leistung"
+                value={data.leistung}
+                inputClassName="w-full max-w-full"
+              />
+            </div>
             <EinreichungSeitenField
               postid={data.postid}
               von={data.einreichung_seite_von}
@@ -817,7 +826,10 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
                         <button
                           type="button"
                           title="Zuordnung lösen"
-                          onClick={() => setConfirmErstattungDetach({ eb_postid: eb.eb_postid, eb_subid: eb.eb_subid })}
+                          onClick={() => {
+                            setErstattungZuordnung.reset();
+                            setConfirmErstattungDetach({ eb_postid: eb.eb_postid, eb_subid: eb.eb_subid });
+                          }}
                           disabled={setErstattungZuordnung.isPending}
                           className="text-destructive/40 hover:text-destructive transition-colors disabled:opacity-40"
                         >
@@ -986,8 +998,11 @@ export function ArztrechnungDetail({ data, istTier: istTierProp = false }) {
         <p className="text-sm text-muted-foreground">
           Position {confirmErstattungDetach?.eb_subid} von Bescheid{' '}
           <span className="font-mono">{confirmErstattungDetach?.eb_postid}</span> wird von dieser Rechnung gelöst.
-          Zugehörige Kürzungen verlieren ihren Positions-Bezug.
+          Zugehörige Kürzungen verlieren ihren Positions-Bezug. Betroffene Abrechnungsperioden werden neu bewertet.
         </p>
+        {setErstattungZuordnung.error && (
+          <p role="alert" className="mt-3 text-sm text-destructive">{setErstattungZuordnung.error.message}</p>
+        )}
         <DialogFooter>
           <Button variant="ghost" onClick={() => setConfirmErstattungDetach(null)}>Abbrechen</Button>
           <Button

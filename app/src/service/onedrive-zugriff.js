@@ -135,11 +135,11 @@ async function pruefeVoraussetzungen() {
  * @returns {boolean} true, wenn diese Umstellung die Pause gesetzt hat
  */
 async function pausiere() {
-  const eigenePause = !pipelineQueue.isPaused();
+  const eigenePause = !pipelineQueue.isPaused(PAUSE_GRUND);
   pipelineQueue.pause(PAUSE_GRUND);
   const leer = await pipelineQueue.warteAufLeerlauf(60000);
   if (!leer) {
-    if (eigenePause) pipelineQueue.resume();
+    if (eigenePause) pipelineQueue.resume(PAUSE_GRUND);
     throw fehler('Es laufen noch Verarbeitungen. Bitte in einer Minute erneut versuchen.');
   }
   return eigenePause;
@@ -361,7 +361,7 @@ export async function starteUmstellung(ziel) {
     }
     return getStatus();
   } catch (err) {
-    if (eigenePause) pipelineQueue.resume();
+    if (eigenePause) pipelineQueue.resume(PAUSE_GRUND);
     throw err;
   } finally {
     _laeuft = false;
@@ -407,7 +407,7 @@ export async function setzeFort() {
     z.fehler = null;
     if (z.phase === 'abgeschlossen') z.abgeschlossenAm = new Date().toISOString();
     await schreibeZustand(z);
-    pipelineQueue.resume();
+    pipelineQueue.resume(PAUSE_GRUND);
     appLog('INFO', 'onedrive', z.phase === 'abgeschlossen'
       ? 'Umstellung des OneDrive-Zugriffs abgeschlossen'
       : 'App-Ordner aktiv, aber Microsoft erlaubt noch Zugriff außerhalb – Widerruf im Microsoft-Konto nötig');

@@ -27,6 +27,7 @@ import { Router } from 'express';
 import { loadDynamicSettings, getFolders, getActiveBackendName } from '../config.js';
 import { ermittleWurzelPfad, WURZEL_DIREKT } from '../service/storage-setup.js';
 import * as onedrive from '../lib/storage/onedrive.js';
+import * as lokal from '../lib/storage/lokal.js';
 import db from '../db.js';
 import { appLog } from '../app-log.js';
 import { requireAdmin } from '../middleware/auth.js';
@@ -81,7 +82,14 @@ router.get('/', async (req, res) => {
 // Information, dass die betreibende Person noch einrichtet.
 router.get('/einrichtung-gate', async (req, res) => {
   try {
-    const bild = await einrichtungGesamtbild();
+    let bild = await einrichtungGesamtbild();
+    // Ob nach einem Restore eingeladen wird, entscheidet einmalig der echte
+    // KI-Test: Ein fehlender Nachweis allein (etwa aus einem unverschlüsselten
+    // Backup) ist noch keine rote Prüfung.
+    if (req.session?.role === 'admin' && bild.nachRestore && !bild.nachRestore.eingeladenAm
+      && bild.pflichtOffen.length > 0) {
+      bild = await einrichtungGesamtbild({ aiPruefen: true });
+    }
     // Gesperrt wird ausschließlich eine Instanz, die der Installer als echte
     // Erstinstallation markiert hat (`bild.sperrt`). Ein nachträglich von Hand
     // geöffneter Assistent darf eine laufende Instanz — und erst recht ein
@@ -89,10 +97,17 @@ router.get('/einrichtung-gate', async (req, res) => {
     const blockiert = bild.sperrt
       && bild.pflichtOffen.length > 0
       && req.session?.einrichtungBypass !== true;
+    // Nach einem Restore einmal in den Assistenten einladen, aber nur, wenn
+    // eine Pflichtprüfung wirklich rot ist. Bloße Abweichungen vom Stack der
+    // Sicherung stehen auf der Karte im Dashboard.
+    const nr = bild.nachRestore;
+    const nachRestoreEinladen = !blockiert && !!nr && !nr.eingeladenAm
+      && bild.pflichtOffen.length > 0;
     res.json({
       status: bild.status,
       blockiert,
       pflichtOffen: blockiert ? bild.pflichtOffen : [],
+      nachRestoreEinladen,
     });
   } catch (err) {
     console.error('[settings-public] einrichtung-gate Fehler:', err);
@@ -177,6 +192,12 @@ router.get('/importwege', async (_req, res) => {
         if (backend === 'onedrive' && onedrive.zugriffsModusAus(settings) === 'appordner') {
           inboxPfad = `Apps/${(await onedrive.getAppOrdnerGemerkt()).name}/${inboxPfad}`;
         }
+        // Lokal: der Pfad, wie ihn der Nutzer auf seinem Rechner sieht.
+        if (backend === 'lokal') {
+          const basis = lokal.wurzelAnzeige().replace(/[\\/]+$/, '');
+          const sep = basis.includes('\\') ? '\\' : '/';
+          inboxPfad = [basis, ...inboxPfad.split('/')].join(sep);
+        }
       }
     } catch {
       // Backend gerade nicht erreichbar — die Seite kommt ohne Pfad aus.
@@ -236,8 +257,9 @@ router.get('/ai/tier-models', async (req, res) => {
     }
     const subscriptionEnabled =
       subscriptionFeatureUnlocked() && settings.llm_claude_subscription_enabled === true;
-    // In der einfachen Modellwahl zeigen alle Stufen auf das Analysemodell;
-    // der Dialog bietet dann keine Stufenwahl an.
+    // In der einfachen Modellwahl zeigen die Stufen auf die beiden
+    // Aufgabentypen (schwierig = „Anspruchsvoll & Komplex“, mit dem jedes
+    // Dokument analysiert wird); der Dialog bietet dann keine Stufenwahl an.
     res.json({ tiers, modellwahl: modellwahl(settings), subscription: { enabled: subscriptionEnabled } });
   } catch (err) {
     console.error('[settings-public] ai/tier-models Fehler:', err);

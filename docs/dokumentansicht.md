@@ -27,7 +27,7 @@ bleibt dabei erhalten.
 
 Fehlt einem Dokument das semantische Embedding, steht darüber ein gelber Hinweis
 samt Knopf ![Wiederholen-Symbol](icons/refresh-cw.svg) **Embedding nachholen**;
-solange es fehlt, findet die semantische Suche dieses Dokument nicht.
+solange es fehlt, findet die Suche dieses Dokument nur über den Wortlaut.
 
 ## Status und Freigabe
 
@@ -101,7 +101,7 @@ Erstattung unterwegs ist, bleibt das Dokument aktuell.
 | Ort                                                                             | Wirkung                                                                                                   |
 | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | ![Dokumente-Symbol](icons/file-text.svg) **Dokumentliste**                      | ausgeblendet, bis der Archiv-Schalter oben rechts eingeschaltet wird                                      |
-| ![Suche-Symbol](icons/search.svg) **Suche** (Volltext _und_ semantisch)         | ausgeblendet, bis der Archiv-Schalter über der Trefferliste eingeschaltet wird                            |
+| ![Suche-Symbol](icons/search.svg) **Suche**                                     | ausgeblendet, bis der Archiv-Schalter über der Trefferliste eingeschaltet wird                            |
 | ![Dashboard-Symbol](icons/layout-dashboard.svg) **Dashboard**                   | zählt nicht mit – weder in „Dokumente gesamt" noch in den Verteilungen nach Lebensbereich und Dokumentart |
 | **Offene Rechnungen**                                                           | bleiben im Fälligkeitskalender sichtbar                                                                   |
 | ![Analyse-Symbol](icons/circle-alert.svg) **Analyse → Unbezahlt, Kürzungen**    | bleiben außen vor                                                                                         |
@@ -170,8 +170,9 @@ Stellschrauben:
    Anbieter; Stufen, deren Modell weder PDFs noch Bilder verarbeiten kann, sind
    mit **nur Text** gekennzeichnet. Bei jeder festen Stufe entfällt die
    Voranalyse – das gewählte Modell wird direkt verwendet. Die Stufen gibt es
-   nur bei gestaffelter [Modellwahl](ki-provider.md#modellwahl); mit einem
-   Modell für alles steht hier nur _Auto_ mit dem Analysemodell.
+   nur bei der Einzelwahl ([Modellwahl](ki-provider.md#modellwahl)); mit zwei
+   Aufgabentypen steht hier nur _Auto_ mit dem Modell für **Anspruchsvoll &
+   Komplex**.
 3. **Eingescannten Text verwerfen (nur das Bild an die KI geben)** – erscheint
    nur, wenn das PDF überhaupt eine Textebene hat. postbuch.net kreuzt das
    Kästchen von sich aus an, wenn es eine automatisch erkannte OCR-Textebene
@@ -338,9 +339,23 @@ ein Eingabefeld mit ![Speichern-Symbol](icons/check.svg) **Speichern**,
 wieder her; der Verlauf fasst die letzten zehn Schreibaktionen und lebt nur im
 aktuellen Browser-Tab.
 
+### Dateiname in der Ablage
+
+Klein und grau im Fuß der Metadatenkarte, neben **QR-Codes erneut suchen**,
+steht hinter „Datei:“ der **Dateiname in der Ablage**. Er besteht aus einem frei
+wählbaren Namen, der Kennung des Dokuments und der Endung, zum Beispiel
+`Stromabrechnung P000123.pdf`. Beim Ablegen bildet postbuch.net ihn aus dem
+Briefdatum und einem kurzen, sprechenden Namen, den die KI vorschlägt, etwa
+`2026-03-01 Stadtwerke Stromabrechnung P000123.pdf`; ohne erkanntes Datum
+beginnt er mit `[undatiert]`. Ein langer Name wird in der Zeile abgekürzt; der
+volle Name erscheint beim Darüberfahren. Mit Schreibrecht öffnet der Stift das
+Namensfeld; **Umbenennen** benennt die Datei in der Dateiablage um. Kennung und
+Endung bleiben immer erhalten. Unzulässige Zeichen werden entfernt, ein sehr
+langer Name wird gekürzt – die Zeile zeigt danach den tatsächlichen Namen.
+
 ### Erkannte QR-Codes
 
-postbuch.net liest beim Einlesen jedes Dokuments automatisch bis zu fünf Seiten
+postbuch.net liest beim Einlesen jedes Dokuments automatisch bis zu 40 Seiten
 lokal nach QR-Codes ab – ohne KI, rein bildbasiert. Typischer Fund bei
 privatärztlichen Rechnungen: ein **GiroCode** (Überweisungs-QR nach
 EPC-Standard) und ein Link ins **Patientenportal** des Abrechners, beide auf dem
@@ -497,6 +512,18 @@ Ein Dokument mit Rechnungsblock nimmt damit an allem teil, was postbuch.net übe
 offene Beträge weiß: Es taucht in ![Analyse-Symbol](icons/circle-alert.svg)
 **Analyse → Unbezahlt** auf, zählt in die Summe offener Beträge auf dem
 Dashboard und erscheint im Fälligkeitskalender.
+
+#### Rechnungsblock manuell hinzufügen
+
+Eine Arztrechnung hat einen eigenen Pflichtblock. Fehlt er in einem älteren
+Eintrag, wähle **Arztrechnungsblock ergänzen**. Bei einem vorhandenen allgemeinen
+Rechnungsblock überträgt **In Arztrechnungsblock übernehmen** die Rechnungsdaten
+samt Zahlungen. Danach kannst du auch die Leistung und die Einzelpositionen
+der Arztrechnung erfassen.
+
+Bei einem allgemeinen Dokument ohne Rechnungsdaten wähle **Rechnungsblock
+hinzufügen**. Die Felder bearbeitest du über das Stift-Symbol. Am Handy stehen
+die Aktionen unter **Daten**. Du brauchst Schreibrechte.
 
 #### Was im Rechnungsblock steht
 
@@ -762,8 +789,9 @@ Rechnungsblock entfernt:
 - **Sonstige Rechnung** (Block _Rechnungsdetails_) bei einer Dokumentart, die
   keine Rechnung sein muss – etwa _Mitteilung_ oder _Korrespondenz_: In der
   Kopfzeile des Blocks steht ![Löschen-Symbol](icons/trash-2.svg)
-  **Rechnungsblock löschen**. Ein Klick, Dialog bestätigen, fertig. Kein
-  KI-Lauf, keine Kosten, alles andere am Dokument bleibt, wie es ist.
+  **Rechnungsblock löschen**. Bestätige das Löschen im Dialog. Zahlungen,
+  ein Bezahldatum, ein offener Streitfall oder die Verknüpfung mit einer
+  Korrekturrechnung sperren das Löschen.
 - **Arztrechnung, Handwerkerrechnung, Dokumentart _Rechnung_ oder _Kaufbeleg_:**
   Hier hängt der Block an der Einordnung – ein Fachblock ohne passende
   Dokumentart wäre ein Widerspruch. Deshalb steht im Menü
@@ -782,18 +810,20 @@ Rechnungsblock entfernt:
     der Fortschritt steht in der Aufgabenleiste unten.
 
   **Verloren gehen dabei die Rechnungsdaten** – Beträge, Fälligkeit,
-  Einzelpositionen, Lohnanteil und ein von der KI übernommenes Bezahldatum.
+  Einzelpositionen und Lohnanteil.
   **Erhalten bleiben** Postnummer, Notiz, Wiedervorlagen, Aktenzugehörigkeit,
   Originalverbleib und der Archivstatus.
 
-  **Abgelehnt wird die Invalidierung**, solange am Dokument ein von Hand
-  erfasstes Bezahldatum, eine Teilzahlung oder ein Streitfall hängt, es mit
+  **Abgelehnt wird die Invalidierung**, solange am Dokument ein Bezahldatum,
+  eine Zahlung oder ein Streitfall hängt, es mit
   einer anderen Rechnung durch eine Ersetzung verbunden ist, an einer
   Abrechnungsperiode bzw. einem Satz-Override klebt, ein Erstattungsbescheid
   darauf verweist oder gerade eine Dateiablage-Migration läuft. Die Meldung
   nennt den Grund. Das ist Absicht: Eine bereits bezahlte oder eingereichte
   Rechnung ist kein Fall für die Invalidierung – gibt es eine Korrekturrechnung,
   ist die Ersetzung der richtige Weg, denn sie nimmt die Zahlungen mit.
+
+#### Warum nicht archivieren, löschen oder bestreiten?
 
 **Warum Archivieren allein nicht genügt.** Archivieren setzt nur eine
 Markierung. Ohne Ersetzung oder Invalidierung bleibt das Dokument eine
@@ -904,13 +934,10 @@ eine Position. Unter dieser Position klappt ein Klick auf den Belegnamen die
 Mehrwertsteuer des Belegs als eigene Zeile. Übernommen werden die Belegzeilen
 nur, wenn sie zusammen genau den Betrag der Position ergeben. Sie schlüsseln die
 Position nur auf: Summe, Abweichung und Kürzungen rechnen weiter mit dem Betrag
-der Position, die Belegzeilen zählen nie zusätzlich. Von Hand bearbeiten lassen
-sie sich nicht; nach einer Wiederverarbeitung liest die KI sie neu.
+der Position. Die Belegzeilen kannst du im Dialog der Position pflegen.
 
-Fehlt der KI beim Lesen etwas, etwa weil die Positionen nicht den
-Rechnungsbetrag ergeben, liest ein zweites Modell nach (siehe
-[Arztrechnungen und Nachlese](ki-provider.md#arztrechnungen-und-nachlese)).
-Bleiben danach Zweifel, stehen die Befunde als Warnung am Dokument.
+Bei Abweichungen liest ein [zweites Modell](ki-provider.md#arztrechnungen-und-nachlese)
+nach. Offene Befunde stehen als Warnung am Dokument.
 
 Positionen, die in einem Erstattungsbescheid **gekürzt** wurden, erscheinen
 **rot**. Das ist der schnellste Weg zu sehen, woran eine Erstattung gescheitert
@@ -924,6 +951,8 @@ von Hand richtigstellen (nicht mit Lesezugriff):
 
 - **Bearbeiten** – das Stift-Symbol am Zeilenende öffnet einen Dialog mit
   Datum, Ziffer, Leistung, Weitere Angaben, Faktor, Betrag und Begründung.
+  Klappe darin **Belegzeilen** auf, um Belegangaben zu ändern, hinzuzufügen
+  oder zu entfernen. **Speichern** übernimmt Position und Belegzeilen gemeinsam.
 - **Hinzufügen** – **Position hinzufügen** oben rechts in der Karte legt eine
   neue Position an. Sie bekommt die nächste freie Nummer; vorhandene Nummern
   ändern sich nie, weil Kürzungen und SymLinks auf sie verweisen.
@@ -932,7 +961,8 @@ von Hand richtigstellen (nicht mit Lesezugriff):
   Symbol ausgegraut: erst die Kürzungszuordnung im Bescheid lösen.
 
 Jede dieser Änderungen steht im Rückgängig-Verlauf. Eine gelöschte und per
-**Strg+Z** zurückgeholte Position erhält dabei eine neue Nummer.
+**Strg+Z** zurückgeholte Position erhält dabei eine neue Nummer und enthält
+wieder ihre Belegzeilen.
 
 ##### Abweichung zum Rechnungsbetrag
 
@@ -1095,13 +1125,12 @@ Handwerk ist, bekommt den allgemeinen Block **Rechnungsdetails**: Absender,
 Re-Nr., Rechnungsdatum, Fälligkeit, Bezahlt am, Streitfall, Gesamtbetrag und die
 Überweisungsdaten. Einzelpositionen gibt es hier nicht.
 
-Weil dieser Block an der Einschätzung der KI hängt und nicht an der Dokumentart,
-entsteht er gelegentlich zu Unrecht – etwa bei einem Schreiben, das nur Beträge
-referiert. Deshalb steht in seiner Kopfzeile
-![Löschen-Symbol](icons/trash-2.svg) **Rechnungsblock löschen**. Der Dialog ist
-deutlich: Der Block wird **dauerhaft** entfernt und lässt sich nur über eine
-[Wiederverarbeitung](#wiederverarbeiten) neu erzeugen; der Rückgängig-Verlauf
-hilft hier nicht.
+Bei Mitteilungen oder Korrespondenz kann ein optionaler Block entfallen,
+etwa wenn das Schreiben nur Beträge referiert. Wähle in seiner Kopfzeile
+![Löschen-Symbol](icons/trash-2.svg) **Rechnungsblock löschen**. Sind Zahlungen,
+ein Bezahldatum, ein Streitfall oder eine Ersetzung hinterlegt, zeigt der Dialog
+die Sperre an. Nach erfolgreichem Löschen kannst du einen leeren
+[Rechnungsblock hinzufügen](#rechnungsblock-manuell-hinzufügen).
 
 Der zweite Anwendungsfall ist eine [stornierte Forderung ohne neue
 Rechnung](#rechnung-invalidieren): Ohne Block kann sie auch nach einem
@@ -1130,11 +1159,16 @@ Abgleich fertig ist". Einfach stehen lassen; die Seite füllt sich von selbst.
 
 Der Kopfblock zeigt **Kostenträger**, **Bescheiddatum** und den
 **Erstattungsbetrag** (grün, hervorgehoben), dazu die **Hinweise** aus dem
-Schreiben und die **Matching-Zusammenfassung**, also das Protokoll dessen, was
-postbuch.net beim automatischen Zuordnen entschieden hat. Anders als bei
-Rechnungen sind diese Felder **nicht** einzeln bearbeitbar – was hier falsch
-steht, wird über eine [Wiederverarbeitung](#wiederverarbeiten) korrigiert,
-solange noch keine Handarbeit daran hängt.
+Schreiben. Mit **Bearbeiten** kannst du diese Angaben korrigieren. Sobald der
+Bescheid mit Rechnungen oder einer Abrechnungsperiode verbunden ist, ist der
+Kostenträger gesperrt. Eine vorgemerkte oder eingereichte PKV-Prüfung schützt
+auch das für das Vorblatt verwendete Bescheiddatum.
+Die **Matching-Zusammenfassung** protokolliert den automatischen Abgleich.
+
+Wurde ein Bescheid ohne KI [manuell abgelegt](dokumente-importieren.md#manuell-ablegen),
+steht an der Stelle des Blocks der gelbe Hinweis **Fachdaten fehlen**:
+Mit Schreibrecht kannst du dort **Bescheiddaten erfassen** oder **Mit KI
+auswerten** wählen.
 
 #### Die Positionen des Bescheids
 
@@ -1144,6 +1178,16 @@ Darunter steht jede Bescheidposition als eigener Kasten: **Position _n_**, dazu
 Person, Arzt, Rechnungsbetrag und der erstattete Betrag in Grün. Rechts oben
 sitzt die Zuordnung zur Rechnung – siehe
 [Erstattungen von Hand verknüpfen](#erstattungen-von-hand-verknüpfen).
+
+Mit **Position hinzufügen** trägst du eine fehlende Position nach. Über den
+Stift bearbeitest du Person, Kostenart, Bezugsdatum, Belegnummer und Beträge.
+Bei einer vorgemerkten oder eingereichten PKV-Prüfung sind Person und
+Belegnummer geschützt. Vor dem Löschen löst du die Rechnungszuordnung und
+entfernst die zugehörigen Kürzungen.
+
+Die Erfassung und Korrektur der Felder lässt die Abrechnungsperioden bestehen.
+Erst wenn du eine Rechnung zuordnest oder ihre Zuordnung löst, prüft
+postbuch.net die Perioden erneut.
 
 #### Kürzungen bearbeiten
 
@@ -1238,8 +1282,17 @@ zwei Spalten: **Normbefunde** links, **Pathologische Befunde** rechts und rot.
 Ist eine Seite leer, steht dort „Keine Normbefunde erfasst" bzw. „Keine
 pathologischen Befunde".
 
-Dieser Block ist **reine Anzeige** – kein Stift, kein Speichern. Was dort falsch
-steht, wird über eine [Wiederverarbeitung](#wiederverarbeiten) korrigiert.
+Alle vier Felder lassen sich mit Vollzugriff direkt bearbeiten: Der Stift neben
+der Überschrift öffnet ein Eingabefeld, bei den Befunden ein mehrzeiliges
+Textfeld; **Speichern** übernimmt den Text, ein geleertes Feld wird gelöscht.
+Ändert sich die behandelte Person und bestimmt sie in der Ablagestruktur den
+Personenordner, zieht postbuch.net die Datei in den neuen Ordner nach. Alternativ korrigiert eine
+[Wiederverarbeitung](#wiederverarbeiten) den ganzen Block.
+
+Hat die KI den Arztbericht-Block gar nicht geliefert, legt
+postbuch.net ihn leer an, setzt das Dokument auf **Review nötig** und nennt
+das in den Warnungen der Kopfzeile („… wurde leer angelegt – bitte
+nachtragen“). Die Felder lassen sich dann wie oben beschrieben ausfüllen.
 
 > [!CAUTION]
 >

@@ -8,6 +8,8 @@
  *   - pg_dump (plain SQL format)     → komprimieren → auf OneDrive hochladen
  *   - Retention-Policy: täglich / wöchentlich / monatlich / halbjährlich
  *   - Steuerbar über _settings.backup = { enabled: true, cron: "0 4 * * *" }
+ *   - Verpasste Termine (Rechner aus oder im Ruhezustand) werden nachgeholt,
+ *     siehe jobs/backup-nachholen.js
  *
  * Selbst ausgelöste Backups ("Jetzt sichern", Zwangssicherung vor einem Restore)
  * landen im Unterordner `_backup/user`. Sie sind damit aus der Retention heraus —
@@ -37,11 +39,20 @@ import { backupExcludeArgs } from './backup-policy.js';
 import { aktuellerSchluesselbund, sidecarAbgleichen } from '../lib/backup-encryption.js';
 import { buildEncryptedFile } from '../lib/backup-crypto.js';
 import { nichtGeheimeSettingKeys } from '../lib/geheime-settings.js';
+import {
+  FAELLIG_KEY, START_VERZOEGERUNG_MS, PRUEF_INTERVALL_MS, istNachzuholen, faelligkeitAusWert,
+} from './backup-nachholen.js';
+import { stackProfilSichern } from '../service/stack-profil.js';
+import { systemOrdnerSicherstellen } from '../service/storage-setup.js';
 
 const execFileAsync = promisify(execFile);
 const gzipAsync = promisify(gzip);
 
 let _cronJob = null;
+let _startTimer = null;
+let _pruefTimer = null;
+let _automatischLaeuft = false;
+let _letzterFehlschlag = 0;
 
 /** Unterordner in `_backup` für selbst ausgelöste Sicherungen. */
 export const USER_BACKUP_ORDNER = 'user';
@@ -153,9 +164,6 @@ async function recordBackupMetadata(backupId, encrypted) {
 }
 
 /**
- * Startet den Backup-Cron-Job, falls in _settings aktiviert.
- */
-/**
  * Gleicht beim App-Start die Schlüsseldatei `_backup/schluessel.json` ab —
  * vor allem nach einer Wiederherstellung, die den Schlüsselbund erweitert hat
  * und danach die App neu startet.
@@ -168,8 +176,84 @@ export async function backupSchluesseldateiAbgleichen() {
   if (geschrieben) appLog('INFO', 'backup', 'Schlüsseldatei der Backup-Verschlüsselung aktualisiert');
 }
 
-export async function startBackupJob() {
+async function faelligkeitLesen() {
+  const { rows } = await db.query('SELECT value FROM postbuch._settings WHERE key = $1', [FAELLIG_KEY]);
+  return faelligkeitAusWert(rows[0]?.value);
+}
+
+async function faelligkeitSetzen(datum) {
+  if (!datum) return;
+  await db.query(
+    `INSERT INTO postbuch._settings (key, value, updated_at)
+     VALUES ($1, $2::jsonb, NOW())
+     ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()`,
+    [FAELLIG_KEY, JSON.stringify(datum.toISOString())]
+  );
+}
+
+/** Nächster Cron-Termin ab jetzt (null, wenn kein Job läuft). */
+function naechsterTermin() {
+  return _cronJob?.getNextRun?.() ?? null;
+}
+
+/**
+ * Ein automatischer Lauf – vom Cron-Termin oder nachgeholt. Nie zwei
+ * gleichzeitig; nach Erfolg rückt der fällige Termin auf den nächsten vor.
+ */
+async function automatischesBackup() {
+  if (_automatischLaeuft) return;
+  _automatischLaeuft = true;
   try {
+    const ergebnis = await runBackup();
+    if (ergebnis) {
+      _letzterFehlschlag = 0;
+      await faelligkeitSetzen(naechsterTermin());
+    } else {
+      _letzterFehlschlag = Date.now();
+    }
+  } catch (err) {
+    _letzterFehlschlag = Date.now();
+    console.error('[backup] Backup fehlgeschlagen:', err.message);
+  } finally {
+    _automatischLaeuft = false;
+  }
+}
+
+/** Holt eine verpasste Sicherung nach (Rechner war zum Termin aus oder schlief). */
+async function nachholenPruefen() {
+  if (!_cronJob || _automatischLaeuft) return;
+  try {
+    const faellig = await faelligkeitLesen();
+    if (!faellig) {
+      // Noch kein Termin gemerkt (erster Start mit dieser Version): ab jetzt zählen.
+      await faelligkeitSetzen(naechsterTermin());
+      return;
+    }
+    if (!istNachzuholen(faellig, new Date(), _letzterFehlschlag)) return;
+    appLog('INFO', 'backup', `Verpasste Sicherung (fällig seit ${faellig.toISOString()}) wird nachgeholt`);
+    await automatischesBackup();
+  } catch (err) {
+    console.error('[backup] Nachhol-Prüfung fehlgeschlagen:', err.message);
+  }
+}
+
+function jobsStoppen() {
+  _cronJob?.stop();
+  _cronJob = null;
+  clearTimeout(_startTimer);
+  clearInterval(_pruefTimer);
+  _startTimer = null;
+  _pruefTimer = null;
+}
+
+/**
+ * Startet den Backup-Cron-Job, falls in _settings aktiviert, samt Nachholen
+ * verpasster Termine. `zeitplanNeu`: Der Nutzer hat die Einstellung gerade
+ * gespeichert – der fällige Termin beginnt dann beim nächsten Cron-Termin.
+ */
+export async function startBackupJob({ zeitplanNeu = false } = {}) {
+  try {
+    jobsStoppen();
     const settings = await loadDynamicSettings();
     const backupConfig = settings.backup;
 
@@ -190,16 +274,15 @@ export async function startBackupJob() {
       return;
     }
 
-    if (_cronJob) {
-      _cronJob.stop();
-    }
-
     _cronJob = cron.default.schedule(cronExpr, () => {
-      runBackup().catch(err => {
-        console.error('[backup] Backup fehlgeschlagen:', err.message);
-        appLog('ERROR', 'backup', `Backup fehlgeschlagen: ${err.message}`);
-      });
+      automatischesBackup();
     }, { timezone: 'Europe/Berlin' });
+
+    if (zeitplanNeu) await faelligkeitSetzen(naechsterTermin());
+    _startTimer = setTimeout(nachholenPruefen, START_VERZOEGERUNG_MS);
+    _pruefTimer = setInterval(nachholenPruefen, PRUEF_INTERVALL_MS);
+    _startTimer.unref?.();
+    _pruefTimer.unref?.();
 
     console.log(`[backup] Cron-Job gestartet: ${cronExpr}`);
     appLog('INFO', 'backup', `Backup Cron-Job gestartet: ${cronExpr}`);
@@ -244,7 +327,8 @@ export async function runBackup({ manuell = false } = {}) {
   try {
     const settings = await loadDynamicSettings();
     const storage = getActiveAdapterFor(settings);
-    const backupFolderId = getFolders(settings).backup;
+    // Fehlt `_backup` in der Ablage (gelöscht, verschoben), wird er neu angelegt.
+    const backupFolderId = await systemOrdnerSicherstellen('backup');
 
     if (!backupFolderId) {
       console.warn('[backup] Kein Backup-Ordner konfiguriert (storage_folders.<backend>.backup)');
@@ -269,6 +353,13 @@ export async function runBackup({ manuell = false } = {}) {
     const dek = schluessel?.dek ? Buffer.from(schluessel.dek, 'base64') : null;
     const verschluesselt = settings.backup_encryption?.enabled === true && !!dek;
     const wrappedDekCurrent = schluessel?.wrappedDekCurrent ?? null;
+
+    // Welcher Stack lief? Steht vor der Schlüsselliste unten, damit der
+    // Eintrag auch im unverschlüsselten Backup landet. Nach einem Restore wird
+    // er mit dem Zielsystem verglichen (service/stack-profil.js).
+    await stackProfilSichern().catch((err) => {
+      appLog('WARN', 'backup', `Stack-Profil nicht gesichert: ${err.message}`);
+    });
 
     // Unverschlüsselte Backups enthalten keine Zugangsdaten: pg_dump liest
     // _settings als postbuch_backup, die per Policy (base_schema.sql) nur die

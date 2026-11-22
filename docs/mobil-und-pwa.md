@@ -118,11 +118,22 @@ sichtbar.
 > weil Fehlkonfigurationen sensible Daten offenlegen können. Einrichtung und
 > Ereigniskategorien stehen unter [Benachrichtigungen](benachrichtigungen.md).
 
-**Voraussetzung ist eine gleichbleibend erreichbare HTTPS-Adresse.** Ändert sich
-die Domain, zeigt die bisherige App weiter auf die alte Adresse und muss über
-die neue Adresse erneut installiert werden. Einen Installationsknopf _innerhalb_
-der App gibt es bewusst nicht: Die Installation läuft immer über das Menü des
-Browsers.
+**Voraussetzung ist eine gleichbleibend erreichbare HTTPS-Adresse.** Einzige
+Ausnahme ist der Rechner, auf dem postbuch.net selbst läuft: Dort gilt
+`http://localhost:<port>` als sichere Adresse, die App lässt sich also auch ohne
+TLS installieren (siehe [Windows](#windows)). Ändert sich die Domain, zeigt die bisherige App weiter auf die alte Adresse und muss über
+die neue Adresse erneut installiert werden.
+
+**Als App registrieren.** In Chrome, Edge und den übrigen Chromium-Browsern
+zeigt die Anmeldeseite unter der Anmeldung den Knopf **Als App registrieren**,
+sobald der Browser die Installation anbietet. Die Anmeldung selbst erscheint
+sofort und wartet nicht darauf. Heruntergeladen wird dabei nichts; der Browser
+legt nur Fenster, Symbol und Teilen-Ziel an. Der Knopf öffnet ein kleines
+Fenster des Browsers; dort **Installieren** klicken, nicht **Jetzt nicht**.
+Bis zur Registrierung bietet das
+Dashboard die App zusätzlich als Kachel an; **Kein Interesse** blendet sie nach
+einer Rückfrage auf diesem Gerät dauerhaft aus. Firefox und Safari kennen diese
+Abfrage nicht, dort bleibt der Weg über das Browsermenü.
 
 | Plattform         | Browser                  | Stand                                   |
 | ----------------- | ------------------------ | --------------------------------------- |
@@ -154,7 +165,8 @@ App, verhält sich aber nicht in allen Punkten wie eine Chrome-Installation.
 
 1. Die eigene postbuch.net-Adresse über `https://` in Chrome (oder Edge/Brave)
    öffnen. Die Anmeldeseite genügt, anmelden ist dafür noch nicht nötig.
-2. Menü (drei Punkte) → **Installieren und Verknüpfung erstellen**.
+2. Auf der Anmeldeseite **Als App registrieren** tippen – oder Menü (drei Punkte)
+   → **Installieren und Verknüpfung erstellen**.
 3. Im folgenden Fenster **Installieren** wählen. Edge, Brave und ältere
    Chrome-Versionen nennen den Menüpunkt **App installieren** bzw. **Zum
    Startbildschirm hinzufügen**.
@@ -178,13 +190,29 @@ erscheint postbuch.net im Teilen-Dialog von Windows, etwa im Explorer oder in
 der Fotos-App. Eine mit Chrome installierte App kann alles andere genauso,
 bietet sich aber nicht als Teilen-Ziel an.
 
-1. Die Adresse in Edge (oder Chrome) öffnen und anmelden.
-2. Rechts in der Adressleiste erscheint ein **Installationssymbol** (Monitor mit
-   Pfeil). Alternativ über das Menü – je nach Browserversion unter **Apps →
+1. Die Adresse in Edge (oder Chrome) öffnen.
+2. Auf der Anmeldeseite **Als App registrieren** klicken bzw. auf dem Dashboard
+   **Registrieren**. Alternativ das **Installationssymbol** rechts in der
+   Adressleiste (Monitor mit Pfeil) oder über das Menü – je nach Browserversion unter **Apps →
    Diese Website als App installieren** (Edge) bzw. **Streamen, Speichern und
    Teilen → Seite als App installieren** (Chrome).
-3. Bestätigen. Die App bekommt einen Startmenü-Eintrag und ein eigenes Fenster
-   ohne Browser-Rahmen; sie lässt sich an die Taskleiste anheften.
+3. Im Fenster des Browsers **Installieren** klicken. Die App bekommt einen
+   Startmenü-Eintrag und ein eigenes Fenster ohne Browser-Rahmen; sie lässt sich
+   an die Taskleiste anheften. Unter „Installierte Apps“ steht sie als eigener
+   Eintrag **postbuch.net** mit der Adresse, etwa „1.0.0.0 | localhost:3420“.
+   Versionsnummer und Name vergibt der Browser. Läuft der Server auf demselben
+   PC, steht er daneben als
+   [postbuch.net Server](installation.md#unter-windows).
+
+Läuft postbuch.net auf demselben Windows-Rechner (Installation mit
+`install.ps1`), genügt dafür die Adresse `http://localhost:<port>`, die auch die
+Desktop-Verknüpfung **postbuch.net** öffnet – ein Zertifikat ist nicht nötig.
+Die Verknüpfung startet den Standardbrowser; ist das nicht Edge, die Adresse
+einmal in Edge öffnen und dort installieren. Die Installation selbst übernimmt
+`install.ps1` nicht: Edge installiert Apps nur auf Klick des Nutzers.
+Die so installierte App ist an diese Adresse gebunden. Wer später TLS mit einer
+DuckDNS-Domain einschaltet, kann die bestehende App weiter benutzen oder sie
+über die neue `https://`-Adresse zusätzlich installieren.
 
 Auf Windows funktioniert auch der [Etikettendruck](etiketten-drucken.md), weil
 Chrome und Edge dort Web Bluetooth unterstützen.

@@ -1,5 +1,5 @@
 /**
- * ModellwahlAuswahl.jsx – einfache oder gestaffelte Modellwahl der Dokumentanalyse
+ * ModellwahlAuswahl.jsx – zwei Aufgabentypen (einfach) oder jede Aufgabe einzeln (gestaffelt)
  *
  * Speichert sofort (`llm_modellwahl`), weil davon abhängt, welche Modellklassen
  * darunter überhaupt angezeigt werden. Die gespeicherten Modelle der jeweils
@@ -10,12 +10,12 @@ import { api } from '@/api/client';
 
 const MODELLWAHLEN = {
   einfach: {
-    titel: 'Ein Modell für alles',
-    text: 'Ein Analysemodell liest jedes Dokument. Keine Voranalyse, Prompt-Caching immer an.',
+    titel: 'Zwei Aufgabentypen',
+    text: 'Ein Modell für Routine, eines für Anspruchsvolles – das deckt alle KI-Aufgaben ab. Keine Voranalyse, Prompt-Caching immer an.',
   },
   gestaffelt: {
-    titel: 'Nach Schwierigkeit gestaffelt',
-    text: 'Eine Voranalyse schätzt jedes Dokument ein und wählt Leicht, Mittel, Schwierig oder Lange Dokumente.',
+    titel: 'Jede Aufgabe einzeln',
+    text: 'Eine Voranalyse wählt je Dokument Leicht, Mittel, Schwierig oder Lange Dokumente. Fallback, Nachlese, Büroassistent und Akten bekommen eigene Modelle.',
   },
 };
 
@@ -35,7 +35,7 @@ export function ModellwahlAuswahl({ wert, onGespeichert, disabled }) {
 
   return (
     <div className="space-y-1.5">
-      <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Modellwahl der Dokumentanalyse">
+      <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Modellwahl">
         {Object.entries(MODELLWAHLEN).map(([id, m]) => (
           <button
             key={id} type="button" role="radio" aria-checked={wert === id}

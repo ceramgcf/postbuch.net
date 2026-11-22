@@ -18,30 +18,47 @@ Handwerkerfunktionen sind außerhalb Deutschlands dagegen ohne Nutzen.
 - **Ein Linux-Server mit `sudo`-Rechten.** Ein Raspberry Pi mit **mindestens 2
   GB RAM** reicht für einen Privathaushalt. Getestet und betrieben wird
   postbuch.net auf einem Raspberry Pi 5 mit Raspberry Pi OS Lite Trixie.
+- **Oder ein Windows-PC:** 64 Bit, Windows 10 ab Version 2004 oder Windows 11,
+  Virtualisierung im BIOS/UEFI eingeschaltet. postbuch.net läuft dort in einer
+  eigenen Linux-Umgebung (WSL 2), die der
+  [Installer für Windows](installation.md#unter-windows) einrichtet. Zugriff von
+  anderen Geräten im Heimnetz, etwa vom Handy, gibt es erst ab Windows 11
+  Version 22H2. Getestet ist Windows 11.
 - **Docker mit Compose-Plugin.** Auf Debian-/Ubuntu-artigen Systemen richtet der
   Installer Docker bei Bedarf selbst ein.
 - **Architektur:** `arm64` und `amd64`.
-- **Cloud-Speicherplatz:** Die PDFs liegen in der Cloud-Dateiablage, nicht auf dem
-  Server. Lokal belegt werden im Wesentlichen die Docker-Images (rund 2 GB, mit
+- **Speicherplatz:** Mit einer Cloud-Dateiablage liegen die PDFs in der Cloud,
+  nicht auf dem Server. Lokal belegt werden im Wesentlichen die Docker-Images (rund 2 GB, mit
   den Scanner-Diensten gut 3 GB), die
   PostgreSQL-Datenbank (wächst mit Metadaten und Embeddings, typischerweise
   einige hundert MB) sowie kurzlebige Zwischendateien während der Verarbeitung.
+  Bei der Betriebsart [Komplett lokal](installation.md#komplett-lokal) kommen
+  die Originale selbst hinzu und für die eingebaute KI rund 10 GB für das Modell.
 - **Der Server sollte durchlaufen.** Überwachte Cloud-Ordner, Backup-Lauf,
   Fristen-Erinnerungen und Token-Erneuerung sind zeitgesteuerte Hintergrundjobs.
   Außerdem möchtest du von verschiedenen Geräten (z. B. deinem Smartphone, Tablet
-  und Notebook) nahtlos auf die Anwendung zugreifen können.
+  und Notebook) nahtlos auf die Anwendung zugreifen können. Ein PC, der nachts
+  ausgeschaltet ist oder schläft, geht auch: Während der Pause ist postbuch.net
+  nicht erreichbar, danach arbeitet es Liegengebliebenes ab und holt eine
+  verpasste automatische Sicherung nach.
 
 > [!IMPORTANT]
 >
 > postbuch.net gehört ins eigene Netz oder hinter ein VPN – nicht offen ins
 > Internet. Siehe [Sicherheit](sicherheit.md).
 
-## Dateiablage: OneDrive **oder** Nextcloud
+## Dateiablage: OneDrive, Nextcloud **oder** ein Ordner auf dem Rechner
 
 Eine funktionsfähige Dateiablage ist **Pflicht**. Ohne sie hat postbuch.net keine
-Dokumentenfunktion. Genau eine Dateiablage ist zu einer Zeit aktiv; beide Wege sind
-gleichwertig unterstützt, ein Wechsel ist später möglich (siehe
+Dokumentenfunktion. Genau eine Dateiablage ist zu einer Zeit aktiv; ein Wechsel
+zwischen OneDrive und Nextcloud ist später möglich (siehe
 [Dateiablage-Backends](storage-backends.md)).
+
+**Ordner auf diesem Rechner** Ohne Konto bei einem Anbieter: Die Originale liegen
+als gewöhnliche PDF-Dateien in einem Ordner des Rechners, auf dem postbuch.net
+läuft. Den Ordner musst du dann selbst auf ein anderes Laufwerk oder in eine
+Cloud deiner Wahl sichern. Siehe
+[Ordner auf diesem Rechner](storage-backends.md#ordner-auf-diesem-rechner).
 
 **OneDrive** Ein Microsoft-Konto plus eine eigene, kostenlose _Azure App
 Registration_. Der Web-Assistent führt nach dem ersten Login durch die
@@ -79,13 +96,25 @@ Die Dokumentverarbeitung nutzt **zwei** Fähigkeiten:
 | Fähigkeit          | Wofür                                        |
 | ------------------ | -------------------------------------------- |
 | Sprachmodell (LLM) | Dokumente lesen, Metadaten extrahieren, Chat |
-| Embeddings         | semantische Suche, Duplikatprüfung           |
+| Embeddings         | Suche nach dem Inhalt, Duplikatprüfung       |
 
 Für die Embeddings bringt postbuch.net einen
 [eigenen Dienst](ki-provider.md#der-eingebaute-embedding-dienst) mit, der auf
 dem Server selbst rechnet. Mitbringen musst du nur einen Anbieter für das
 Sprachmodell, z. B. OpenAI, Anthropic, AWS Bedrock, einen OpenAI-kompatiblen
 Endpunkt oder ein lokal gehostetes Modell über Ollama oder LM Studio.
+
+Ganz ohne Cloud geht es mit der [eingebauten lokalen KI](ki-provider.md#eingebaute-lokale-ki).
+Sie braucht einen PC mit **NVIDIA-Grafikkarte, am besten mit 12 GB
+Grafikspeicher**. Arbeitsspeicher und Grafikspeicher müssen zusammen
+**mindestens 24 GB** ergeben, sonst lässt sich die lokale KI nicht einrichten.
+Unter 8 GB Grafikspeicher läuft sie extrem langsam, ohne NVIDIA-Karte nur auf
+dem Prozessor und dann viele Minuten je Dokument. Für das Modell müssen rund
+9 GB Platz frei sein und danach noch 5 GB übrig bleiben. Unter Windows zählt
+nur der Arbeitsspeicher, den WSL bekommt, standardmäßig die Hälfte; mehr lässt
+sich einstellen. Im Leerlauf entlädt sich das Modell nach 5 Minuten und gibt
+seinen Speicher frei. Wie viel es während der Arbeit belegt, steht unter
+[Wie viel Arbeitsspeicher die lokale KI belegt](ki-provider.md#wie-viel-arbeitsspeicher-die-lokale-ki-belegt).
 
 Details, Modellempfehlungen und der cloudfreie Betrieb stehen in
 [KI-Anbieter](ki-provider.md).
@@ -115,8 +144,9 @@ Details, Modellempfehlungen und der cloudfreie Betrieb stehen in
   `http://localhost` mit einem
   [SSH-Tunnel vom Browser-Rechner](installation.md#localhost-tunnel-von-einem-anderen-rechner).
   Beim Gerätecode entfällt die Callback-URL ganz.
-- **Ports:** Die Oberfläche liegt auf `3420` (per `WEB_PORT` änderbar), Caddy
-  auf `80`/`443`, der Scanner-Webhook auf `8080` (per `SCANNER_PORT`). Die
+- **Ports:** Die Oberfläche liegt auf `3420`, Caddy auf `80`/`443`; alle drei
+  sind frei wählbar (siehe [Ports ändern](installation.md#ports-ändern)). Der
+  Scanner-Webhook auf `8080` (per `SCANNER_PORT`). Die
   Datenbank wird bewusst nur an `127.0.0.1:5433` gebunden und ist von außen
   nicht erreichbar.
 

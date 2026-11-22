@@ -5,6 +5,6 @@
  * heißt das Ding bewusst „WebDAV-Speicher", weil Nextcloud, ownCloud und
  * MagentaCLOUD gleichermaßen darunter fallen.
  */
-export const ABLAGE_LABEL = { onedrive: 'OneDrive', nextcloud: 'WebDAV-Speicher' };
+export const ABLAGE_LABEL = { onedrive: 'OneDrive', nextcloud: 'WebDAV-Speicher', lokal: 'Ordner auf diesem Rechner' };
 
 export const ablageLabel = (backend) => ABLAGE_LABEL[backend] || backend;

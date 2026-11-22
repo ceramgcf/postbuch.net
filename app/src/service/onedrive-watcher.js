@@ -172,6 +172,7 @@ async function pollOnce() {
     enqueueDocument(
       {
         onedriveFileId: file.id,
+        _eingangsname: file.name,
         preclaimedInFlight: true,
         // Aus der Inbox des Backends, das beim Claim aktiv war.
         storageBackend: getActiveAdapterFor(settings).name,

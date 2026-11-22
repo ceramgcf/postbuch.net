@@ -21,7 +21,7 @@ import db from '../db.js';
 import { getAdapter } from '../lib/storage/index.js';
 import * as tracker from '../jobs/tracker.js';
 import { appLog } from '../app-log.js';
-import { istBestaetigterDateiFehlt, markiereDateiFehlend } from './storage-missing.js';
+import { istBestaetigterDateiFehlt, loeseFehlendeOderHalte } from './storage-missing.js';
 
 function sha256Hex(buffer) {
   return createHash('sha256').update(buffer).digest('hex');
@@ -43,11 +43,13 @@ function sha256Hex(buffer) {
  *      storage-missing.js), damit ein wöchentlicher Lauf dasselbe leistet wie
  *      der manuelle "Ablage auf fehlende Dateien prüfen"-Scan, ohne die Ablage
  *      dafür ein zweites Mal komplett abzufragen. Jeder andere Fehler
- *      (Netzwerk/Auth/Timeout) wird nur übersprungen und geloggt.
+ *      (Netzwerk/Auth/Timeout) wird nur übersprungen und geloggt. Gelöst wird
+ *      erst nach dem Lauf und gar nicht, wenn die Mehrheit fehlt
+ *      (loeseFehlendeOderHalte) – dann ist eher die Ablage falsch eingebunden.
  *
  * @param {object}   options
  * @param {string?}  options.jobId    Optionale Job-ID für Fortschrittsanzeige
- * @returns {Promise<{ scanned: number, hashed: number, renamed: number, missing: number, skipped: number, errors: number }>}
+ * @returns {Promise<{ scanned: number, hashed: number, renamed: number, missing: number, zurueckgehalten: number, skipped: number, errors: number }>}
  */
 export async function syncFingerprints({ jobId = null } = {}) {
   const rows = await db.query(
@@ -63,9 +65,9 @@ export async function syncFingerprints({ jobId = null } = {}) {
   let scanned = 0;
   let hashed = 0;
   let renamed = 0;
-  let missing = 0;
   let skipped = 0;
   let errors = 0;
+  const fehlend = [];
 
   for (const row of rows.rows) {
     if (jobId && tracker.isCancelled(jobId)) break;
@@ -104,8 +106,7 @@ export async function syncFingerprints({ jobId = null } = {}) {
       }
     } catch (err) {
       if (istBestaetigterDateiFehlt(err)) {
-        await markiereDateiFehlend(row.postid, 'dr-fingerprint');
-        missing++;
+        fehlend.push(row.postid);
       } else {
         errors++;
         appLog('WARN', 'dr-fingerprint',
@@ -120,7 +121,10 @@ export async function syncFingerprints({ jobId = null } = {}) {
     }
   }
 
-  return { scanned, hashed, renamed, missing, skipped, errors, total };
+  const zurueckgehalten = await loeseFehlendeOderHalte(fehlend, hashed + renamed + skipped, 'dr-fingerprint');
+  const missing = fehlend.length - zurueckgehalten;
+
+  return { scanned, hashed, renamed, missing, zurueckgehalten, skipped, errors, total };
 }
 
 /**

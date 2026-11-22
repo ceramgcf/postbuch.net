@@ -17,25 +17,27 @@ function zeitstempel(req, praefix) {
   return Number(new URL(req.url).pathname.slice(praefix.length).split('-')[0]) || 0;
 }
 
-let laufend = null;
-
-async function holen(praefix = PRAEFIX) {
+// Liefert [{ datei, entfernen }]. Ohne `behalten` ist jede Datei sofort aus dem
+// Cache gelöscht; mit `behalten` erst, wenn der Aufrufer `entfernen()` ruft –
+// so geht eine PDF bei einem gescheiterten Upload nicht verloren.
+async function holen(praefix = PRAEFIX, { behalten = false } = {}) {
   if (typeof caches === 'undefined') return [];
   const cache = await caches.open(GETEILT_CACHE);
   const schluessel = (await cache.keys())
     .filter((req) => new URL(req.url).pathname.startsWith(praefix))
     .sort((a, b) => a.url.localeCompare(b.url, undefined, { numeric: true }));
-  const dateien = [];
+  const eintraege = [];
   for (const req of schluessel) {
     const res = await cache.match(req);
-    await cache.delete(req);
-    if (!res || Date.now() - zeitstempel(req, praefix) > HOECHSTALTER_MS) continue;
+    const entfernen = () => cache.delete(req).catch(() => false);
+    if (!res || Date.now() - zeitstempel(req, praefix) > HOECHSTALTER_MS) { await entfernen(); continue; }
+    if (!behalten) await entfernen();
     const blob = await res.blob();
     let name = praefix === PRAEFIX ? 'geteilt.pdf' : 'geteilt';
     try { name = decodeURIComponent(res.headers.get('X-Dateiname') || name); } catch { /* Rohname behalten */ }
-    dateien.push(new File([blob], name, { type: blob.type || 'application/pdf' }));
+    eintraege.push({ datei: new File([blob], name, { type: blob.type || 'application/pdf' }), entfernen });
   }
-  return dateien;
+  return eintraege;
 }
 
 async function wartet(praefix) {
@@ -47,19 +49,6 @@ async function wartet(praefix) {
   } catch {
     return false;
   }
-}
-
-/**
- * Liefert alle wartenden geteilten Dateien und entfernt sie aus dem Cache.
- * Gleichzeitige Aufrufe (StrictMode-Doppelmount) teilen sich einen Lauf,
- * damit keine Datei zweimal in die Pipeline geht.
- */
-export function geteilteDateienAbholen() {
-  if (!laufend) {
-    laufend = holen().catch(() => []).finally(() => { laufend = null; });
-    return laufend;
-  }
-  return laufend.then(() => []);
 }
 
 /** true, wenn geteilte PDFs auf die Abholung warten. */
@@ -77,7 +66,7 @@ export function hatGeteilteFotos() {
  * Der Aufrufer stellt sicher, dass er nur einmal abholt.
  */
 export function geteilteFotosAbholen() {
-  return holen(PRAEFIX_FOTO).catch(() => []);
+  return holen(PRAEFIX_FOTO).then((e) => e.map((x) => x.datei)).catch(() => []);
 }
 
 function istPdf(f) {
@@ -94,17 +83,31 @@ function alsBase64(file) {
   });
 }
 
+function dauerhaftAbgelehnt(status) {
+  return status >= 400 && status < 500 && ![401, 408, 429].includes(status);
+}
+
+// Eine PDF verlässt den Cache erst nach erfolgreichem Upload. Scheitert er
+// (Server nicht erreichbar, 5xx), bleibt sie liegen und lässt sich erneut
+// einreichen – per Knopf oder beim nächsten Öffnen von postbuch.net.
 async function einreichen() {
-  const dateien = await geteilteDateienAbholen();
-  const pdfs = dateien.filter(istPdf);
-  const ergebnis = { jobIds: [], fehler: [], ohnePdf: dateien.length > 0 && pdfs.length === 0 };
-  for (const f of pdfs) {
+  const eintraege = await holen(PRAEFIX, { behalten: true }).catch(() => []);
+  const pdfs = eintraege.filter((e) => istPdf(e.datei));
+  // Andere Dateitypen lassen sich nie übernehmen – nicht aufbewahren.
+  for (const e of eintraege) if (!istPdf(e.datei)) await e.entfernen();
+  const ergebnis = { jobIds: [], fehler: [], wartend: 0, ohnePdf: eintraege.length > 0 && pdfs.length === 0 };
+  for (const { datei: f, entfernen } of pdfs) {
     try {
       // Gesamtanzahl mitgeben → Auto-Cache springt schon bei der ersten Datei an.
       const res = await api.import.upload(f.name, await alsBase64(f), '', pdfs.length);
       ergebnis.jobIds.push(res.jobId);
+      await entfernen();
     } catch (err) {
       ergebnis.fehler.push(`${f.name}: ${err.message}`);
+      // Abgelehnt (z. B. Lesezugriff, ungültige PDF): ein neuer Versuch ändert
+      // nichts. Nicht erreichbar, 5xx, 401, 408, 429: aufbewahren.
+      if (dauerhaftAbgelehnt(err.status)) await entfernen();
+      else ergebnis.wartend += 1;
     }
   }
   return ergebnis;
@@ -114,8 +117,10 @@ let einreichenLaufend = null;
 
 /**
  * Holt die wartenden geteilten PDFs ab und gibt jede einzeln in die Pipeline
- * (wie ein Batch-Upload ohne KI-Hinweis). Liefert { jobIds, fehler, ohnePdf }.
- * Gleichzeitige Aufrufe teilen sich einen Lauf und dasselbe Ergebnis.
+ * (wie ein Batch-Upload ohne KI-Hinweis). Liefert { jobIds, fehler, wartend, ohnePdf };
+ * `wartend` zählt die PDFs, deren Upload scheiterte und die im Cache bleiben.
+ * Gleichzeitige Aufrufe (StrictMode-Doppelmount) teilen sich einen Lauf und
+ * dasselbe Ergebnis, damit keine Datei zweimal in die Pipeline geht.
  */
 export function geteilteDateienEinreichen() {
   if (!einreichenLaufend) {

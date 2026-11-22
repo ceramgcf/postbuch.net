@@ -20,6 +20,7 @@ import { query as poolQuery, getClient } from '../db.js';
 import { uiLog } from '../log.js';
 import { loadDynamicSettings } from '../config.js';
 import { regenerateEmbedding, embedText } from '../lib/embedding.js';
+import { ohneSuchspalten } from '../lib/suchspalten.js';
 
 export const AKTEID_RE = /^A\d{6}$/;
 export const POSTID_RE = /^P\d{6}$/;
@@ -147,7 +148,7 @@ export async function runAkteOp(op, db = poolQuery) {
          VALUES ($1, $2, $3::text[]) RETURNING *`,
         [betreff, op.beschreibung || null, schlagwoerter],
       );
-      const row = r.rows[0];
+      const row = ohneSuchspalten(r.rows[0]);
       uiLog('CREATE', 'akte', row.akteid, `betreff: ${betreff.slice(0, 80)}`);
       return {
         result: row,
@@ -180,7 +181,7 @@ export async function runAkteOp(op, db = poolQuery) {
       uiLog('UPDATE', 'akte', op.akteid, `fields: ${keys.join(', ')}`);
       if ('betreff' in patch || 'beschreibung' in patch) scheduleAkteEmbedding(op.akteid);
       return {
-        result: r.rows[0],
+        result: ohneSuchspalten(r.rows[0]),
         undo: { type: 'update_akte_metadata', akteid: op.akteid, patch: before },
         description: `Metadaten von Akte ${op.akteid} geändert (${keys.join(', ')})`,
       };
@@ -193,6 +194,7 @@ export async function runAkteOp(op, db = poolQuery) {
       const dokR = await db(`SELECT postid, sort_order, added_at FROM akte_dokument WHERE akteid = $1 ORDER BY sort_order ASC`, [op.akteid]);
       const snapshot = { akte: akteR.rows[0], dokumente: dokR.rows };
       delete snapshot.akte.embedding; // Vektor nicht mitschleppen — wird neu berechnet
+      ohneSuchspalten(snapshot.akte);
       await db(`DELETE FROM akte WHERE akteid = $1`, [op.akteid]);
       uiLog('DELETE', 'akte', op.akteid, 'akte gelöscht');
       return {

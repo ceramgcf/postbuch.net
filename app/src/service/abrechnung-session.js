@@ -32,7 +32,7 @@
  * building→pending geschrieben (write-once-Projektion fürs Frontend) und danach
  * nie wieder als Entscheidungsquelle gelesen — das verhindert De-Sync.
  *
- * Ablauf (siehe internaldocs/FEATURE_KUERZUNGEN_GESEHEN_PKV_PRUEFUNG_PLAN.md, 9):
+ * Ablauf (siehe internaldocs/archiv/FEATURE_KUERZUNGEN_GESEHEN_PKV_PRUEFUNG_PLAN.md, 9):
  *   1-4. beginAbrechnungsSession()            — Ziel sperren, Session 'building',
  *        Ziel-Reservierung — alles in EINER Transaktion.
  *   5-6. buildAbrechnungsSessionArtefakte()    — außerhalb der Transaktion: PDFs
@@ -799,6 +799,14 @@ export async function confirmAbrechnungsperiode(sessionId) {
       .map((k) => k.split('\0'));
     const dPersons = distinctPairs.map((p) => p[0]);
     const dKts = distinctPairs.map((p) => p[1]);
+    // Ohne Kostenträger-Flag (PKV/Beihilfe abgewählt) entsteht nur dann eine
+    // Folgeperiode, wenn unten etwas umzubuchen ist – sonst bliebe es lautlos
+    // in der eingereichten Periode hängen.
+    const umzubuchen = new Set();
+    for (const z of ziel.rows) {
+      if (await hatUmzubuchendes(client, z)) umzubuchen.add(`${z.person}\0${z.kostentraeger}`);
+    }
+    const dErzwingen = distinctPairs.map(([p, kt]) => umzubuchen.has(`${p}\0${kt}`));
 
     await client.query(
       `INSERT INTO abrechnungsperiode_buch (person, kostentraeger, periode, status, satz)
@@ -806,15 +814,17 @@ export async function confirmAbrechnungsperiode(sessionId) {
               CASE ab.kostentraeger WHEN 'PKV' THEN p.pkv_satz ELSE p.beihilfe_satz END
        FROM abrechnungsperiode_buch ab
        JOIN postbuch.mensch p ON p.kurzname = ab.person
-       JOIN (SELECT unnest($1::text[]) AS person, unnest($2::text[]) AS kostentraeger) t
+       JOIN (SELECT unnest($1::text[]) AS person, unnest($2::text[]) AS kostentraeger,
+                    unnest($3::boolean[]) AS erzwingen) t
          ON t.person = ab.person AND t.kostentraeger = ab.kostentraeger
+       WHERE t.erzwingen OR CASE ab.kostentraeger WHEN 'PKV' THEN p.pkv ELSE p.beihilfe END
        GROUP BY ab.person, ab.kostentraeger, p.pkv_satz, p.beihilfe_satz
        HAVING NOT EXISTS (
          SELECT 1 FROM abrechnungsperiode_buch x
          WHERE x.person = ab.person AND x.kostentraeger = ab.kostentraeger AND x.status = 'COLLECTING'
        )
        ON CONFLICT (person, kostentraeger, periode) DO NOTHING`,
-      [dPersons, dKts]
+      [dPersons, dKts, dErzwingen]
     );
 
     // Aus der eben eingereichten (jetzt SUBMITTED) Periode wandert automatisch
@@ -1213,6 +1223,28 @@ async function legacyConfirm(sessionId) {
   appLog('INFO', 'abrechnungsperiode', `Session bestätigt (Legacy): ${sessionId}`);
 }
 
+/**
+ * Liegt in der eben eingereichten Zielperiode etwas, das nach dem Bestätigen
+ * in die Folgeperiode umziehen muss? Dieselben Bedingungen wie die
+ * Umbuchung in confirmSession: bestrittene oder nicht im PDF enthaltene
+ * Rechnungen, noch VORGEMERKTE Prüfvormerkungen bzw. Anpinnungen.
+ */
+async function hatUmzubuchendes(client, z) {
+  const periodeCol = z.kostentraeger === 'PKV' ? 'abrechnungsperiode_pkv' : 'abrechnungsperiode_beihilfe';
+  const r = await client.query(
+    `SELECT EXISTS (SELECT 1 FROM arztrechnung
+                     WHERE behandelte_person = $1 AND ${periodeCol} = $3
+                       AND (bestritten_betrag > 0 OR NOT (postid = ANY($4::text[]))))
+         OR EXISTS (SELECT 1 FROM beihilfe_kuerzung_pkv_pruefung
+                     WHERE person = $1 AND kostentraeger = $2 AND periode = $3 AND status = 'VORGEMERKT')
+         OR EXISTS (SELECT 1 FROM dokument_pin
+                     WHERE person = $1 AND kostentraeger = $2 AND periode = $3 AND status = 'VORGEMERKT')
+       AS ja`,
+    [z.person, z.kostentraeger, z.periode, z.snapshot_postids],
+  );
+  return r.rows[0]?.ja === true;
+}
+
 async function legacyConfirmGruppen(client, groups) {
   for (const group of groups) {
     const kt = group.kostentraeger;
@@ -1230,6 +1262,8 @@ async function legacyConfirmGruppen(client, groups) {
        FROM abrechnungsperiode_buch ab
        JOIN postbuch.mensch p ON p.kurzname = ab.person
        WHERE ab.person = ANY($1::text[]) AND ab.kostentraeger = $2
+         -- Ohne Kostenträger-Flag keine Folgeperiode (hier wird nichts umgebucht).
+         AND CASE ab.kostentraeger WHEN 'PKV' THEN p.pkv ELSE p.beihilfe END
        GROUP BY ab.person, ab.kostentraeger, p.pkv_satz, p.beihilfe_satz
        HAVING NOT EXISTS (
          SELECT 1 FROM abrechnungsperiode_buch x

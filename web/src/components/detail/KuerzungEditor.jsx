@@ -145,8 +145,9 @@ function KuerzungFormDialog({ open, onOpenChange, ebPostid, ep, kuerzung }) {
 // Editor für die Kürzungen einer Erstattungsbescheid-Position (EBP):
 // Anlegen, Bearbeiten (Betrag/Begründung/Position), Löschen. EBP.kuerzungsbetrag
 // wird backend-seitig automatisch als Summe neu berechnet.
-export function KuerzungEditor({ ebPostid, ep, kostentraeger }) {
-  const { canWrite } = useAuth();
+export function KuerzungEditor({ ebPostid, ep, kostentraeger, gesperrt = false }) {
+  const { canWrite: hatSchreibrecht } = useAuth();
+  const canWrite = hatSchreibrecht && !gesperrt;
   const { mutate: del, mutateAsync: delAsync, isPending: delPending } = useDeleteKuerzung();
   const { mutateAsync: addAsync } = useAddKuerzung();
   const { mutateAsync: setGesehenAsync } = useSetKuerzungGesehen();

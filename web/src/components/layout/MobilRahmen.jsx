@@ -120,7 +120,7 @@ export function MobilMenue({ offen, onSchliessen }) {
   const location = useLocation();
   const navigate = useNavigate();
   const { logout } = useAuth();
-  const { haupt, gruppen, fuss, instanceName, updateVerfuegbar, istEingeschraenkt } = useNavigation();
+  const { haupt, gruppen, fuss, instanceName, updateVerfuegbar, eingangHandlung, istEingeschraenkt } = useNavigation();
   const { activeTasks, recentTasks } = useTaskStore();
   const { past, future } = useUndoHistory();
   const zeigeStatus = !istEingeschraenkt && (activeTasks.length + recentTasks.length + past.length + future.length > 0);
@@ -145,7 +145,12 @@ export function MobilMenue({ offen, onSchliessen }) {
 
   const eintrag = ({ to, icon: Icon, label }) => (
     <NavLink key={to} to={to} onClick={onSchliessen} className={eintragKlasse(istAktiv(to, location.pathname))}>
-      <Icon className="h-5 w-5 shrink-0" />
+      <span className="relative shrink-0">
+        <Icon className="h-5 w-5" />
+        {to === '/import' && eingangHandlung && (
+          <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-red-500" title="Ein Eingang braucht eine Handlung" />
+        )}
+      </span>
       <span className="truncate">{label}</span>
     </NavLink>
   );
@@ -172,7 +177,7 @@ export function MobilMenue({ offen, onSchliessen }) {
         {zeigeStatus && (
           <div className="mb-3 space-y-1 rounded-2xl border border-border/60 bg-card p-2 shadow-sm">
             <UndoRedoBar />
-            <TaskStatusBar />
+            <TaskStatusBar aufklappen="unten" />
           </div>
         )}
         <div className="grid gap-0.5 quer:grid-cols-2">{haupt.map(eintrag)}</div>
@@ -233,7 +238,7 @@ function useTastaturOffen() {
  */
 export function FavoritenLeiste({ sichtbar }) {
   const location = useLocation();
-  const { favoriten } = useNavigation();
+  const { favoriten, eingangHandlung } = useNavigation();
   const tastatur = useTastaturOffen();
   const kamera = useKameraFavorit();
   const zeigen = sichtbar && !tastatur && favoriten.length >= 2;
@@ -247,8 +252,11 @@ export function FavoritenLeiste({ sichtbar }) {
           aktiv ? 'text-primary' : 'text-muted-foreground'
         }`}
       >
-        <span className={`flex h-7 w-12 items-center justify-center rounded-full transition-colors ${aktiv ? 'bg-primary/12' : ''}`}>
+        <span className={`relative flex h-7 w-12 items-center justify-center rounded-full transition-colors ${aktiv ? 'bg-primary/12' : ''}`}>
           <Icon className="h-5 w-5" />
+          {to === '/import' && eingangHandlung && (
+            <span className="absolute right-2.5 top-0.5 h-2 w-2 rounded-full bg-red-500" title="Ein Eingang braucht eine Handlung" />
+          )}
         </span>
         {label}
       </NavLink>

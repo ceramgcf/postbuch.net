@@ -80,6 +80,14 @@ const RESERVIERT_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 export const MAX_SEGMENT_BYTES = 200;
 /** Harte Obergrenze — darüber lehnt das Dateisystem ab. */
 export const MAX_SEGMENT_BYTES_HART = 255;
+/**
+ * Dateinamen bleiben deutlich kürzer: Windows begrenzt den ganzen Pfad
+ * standardmäßig auf 260 Zeichen (MAX_PATH), und Explorer wie viele Programme
+ * öffnen längere Pfade nicht – bei der lokalen Ablage und bei synchronisierten
+ * OneDrive-/Nextcloud-Ordnern gleichermaßen. Mit Benutzerordner, Ablagewurzel
+ * und zwei Kategorieebenen bleibt so genug Luft.
+ */
+export const MAX_DATEINAME_BYTES = 120;
 
 const utf8 = new TextEncoder();
 
@@ -168,11 +176,81 @@ export function sanitizeFilename(rawName, fallbackBasename = 'Dokument') {
   const ext = sanitizeSegment(rohExt.replace(/^\./, ''), { maxBytes: 10 });
   const extTeil = ext ? `.${ext}` : '';
 
-  const basis = sanitizeSegment(rohBasis, { maxBytes: MAX_SEGMENT_BYTES - byteLength(extTeil) })
+  const basis = sanitizeSegment(rohBasis, { maxBytes: MAX_DATEINAME_BYTES - byteLength(extTeil) })
     ?? sanitizeSegment(fallbackBasename)
     ?? 'Dokument';
 
   return `${basis}${extTeil}`;
+}
+
+// Platzhalter, die eine KI statt fehlender Angaben in den Namensvorschlag
+// schreibt („null“, „Datum unbekannt“, „Hersteller unbekannt“ …).
+const PLATZHALTER = /(^|\s)(?:null|undefined|n\/a|(?:[A-ZÄÖÜ][\wäöüß-]*\s+)?unbekannt)(?=\s|$)/giu;
+
+function ohnePlatzhalter(text) {
+  if (typeof text !== 'string') return '';
+  let t = text.replace(/\.pdf$/i, '');
+  let vorher;
+  do { vorher = t; t = t.replace(PLATZHALTER, '$1'); } while (t !== vorher);
+  return t.replace(/\s+/g, ' ').trim();
+}
+
+/** Präfix für Dokumente ohne erkanntes Briefdatum. */
+export const PRAEFIX_UNDATIERT = '[undatiert]';
+
+/**
+ * Namensstamm für ein neu analysiertes Dokument: `<Briefdatum> <Name>` bzw.
+ * `[undatiert] <Name>`. Die KI liefert nur den sprechenden Namen; Datum,
+ * PostID und Endung ergänzt der Code. Ein Datum oder Präfix, das die KI
+ * dennoch voranstellt, fällt weg, ebenso Platzhalter. Fehlt der Name, tragen
+ * ihn Kontakt und Betreff, zuletzt „Dokument“.
+ *
+ * @param {{ dateiname?: unknown, briefdatum?: unknown, kontakt?: unknown, betreff?: unknown }} pb
+ * @returns {string}
+ */
+export function namensstammAusAnalyse(pb) {
+  const daten = pb && typeof pb === 'object' ? pb : {};
+  const name = ohnePlatzhalter(daten.dateiname)
+    .replace(/^(?:\[undatiert\]|\d{4}-\d{2}-\d{2})(?:\s+|$)/i, '').trim()
+    || [ohnePlatzhalter(daten.kontakt), ohnePlatzhalter(daten.betreff)].filter(Boolean).join(' ')
+    || 'Dokument';
+  const datum = typeof daten.briefdatum === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(daten.briefdatum)
+    ? daten.briefdatum : PRAEFIX_UNDATIERT;
+  return `${datum} ${name}`;
+}
+
+/**
+ * Dateiname eines abgelegten Dokuments: `<Namensstamm> <PostID>.pdf`.
+ *
+ * Gekürzt wird ausschließlich der Stamm; Kennung und Endung bleiben immer
+ * vollständig, damit die Datei über ihre PostID auffindbar bleibt. Bleibt vom
+ * Stamm nichts Brauchbares übrig, gilt der Ersatzstamm.
+ *
+ * @param {unknown} rohStamm  gewünschter Stamm, mit oder ohne `.pdf`
+ * @param {string} postid
+ * @param {{ ersatz?: string|null }} [opts]  `ersatz: null` liefert null statt
+ *        eines Ersatznamens (für ausdrückliche Benutzereingaben)
+ * @returns {string|null}
+ */
+export function baueDokumentDateiname(rohStamm, postid, opts = {}) {
+  const ersatz = opts.ersatz === undefined ? 'Dokument' : opts.ersatz;
+  const anhang = ` ${postid}.pdf`;
+  const budget = MAX_DATEINAME_BYTES - byteLength(anhang);
+  const roh = typeof rohStamm === 'string' ? rohStamm.trim().replace(/\.pdf$/i, '') : '';
+  const stamm = sanitizeSegment(roh, { maxBytes: budget })
+    ?? (ersatz === null ? null : (sanitizeSegment(ersatz, { maxBytes: budget }) ?? 'Dokument'));
+  return stamm === null ? null : `${stamm}${anhang}`;
+}
+
+/**
+ * Namensstamm eines abgelegten Dokuments: Dateiname ohne Endung und ohne die
+ * angehängte PostID. Namen ohne Kennung bleiben bis auf die Endung unverändert.
+ */
+export function stammAusDateiname(dateiname, postid) {
+  let s = typeof dateiname === 'string' ? dateiname.replace(/\.pdf$/i, '') : '';
+  if (postid && s.endsWith(` ${postid}`)) s = s.slice(0, -(postid.length + 1));
+  else if (postid && s === postid) s = '';
+  return s.trim();
 }
 
 /**

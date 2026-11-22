@@ -51,6 +51,9 @@ BLANK_STDDEV_MAX      = float(os.getenv("BLANK_STDDEV_MAX",    "12"))
 BLANK_MEAN_MIN_SINGLE = int(os.getenv("BLANK_MEAN_MIN_SINGLE", "253"))
 BLANK_STDDEV_MAX_SINGLE = float(os.getenv("BLANK_STDDEV_MAX_SINGLE", "4"))
 DETECT_DPI            = int(os.getenv("DETECT_DPI",            "75"))
+# Lageerkennung (Tesseract-OSD) braucht mehr Auflösung als die Bildanalyse:
+# Bei 75–100 dpi findet sie auf normalen Briefen zu wenig Zeichen oder rät falsch.
+OSD_DPI               = int(os.getenv("OSD_DPI",               "150"))
 
 OCRMYPDF = "/app/.venv/bin/ocrmypdf"
 QPDF = "/usr/bin/qpdf"
@@ -248,7 +251,7 @@ def run_ocr_deskew(src: str, dst: str, auto_rotate: bool = True) -> bool:
     return True
 
 
-def render_pages_to_png(pdf_path: str, out_dir: str) -> list:
+def render_pages_to_png(pdf_path: str, out_dir: str, dpi: int = None) -> list:
     cmd = [
         "gs",
         "-q",
@@ -256,7 +259,7 @@ def render_pages_to_png(pdf_path: str, out_dir: str) -> list:
         "-dBATCH",
         "-dSAFER",
         "-sDEVICE=pnggray",
-        f"-r{DETECT_DPI}",
+        f"-r{dpi or DETECT_DPI}",
         f"-sOutputFile={out_dir}/page_%04d.png",
         pdf_path,
     ]
@@ -384,41 +387,71 @@ def combine_content_masks(png_paths: list):
     return combined
 
 
+OSD_MIN_CONFIDENCE = 3.0
+
+
 def parse_osd_rotation(output: str):
     """Liest Tesseracts benötigte Uhrzeigersinn-Drehung aus der OSD-Ausgabe."""
     match = re.search(r"^Rotate:\s*(0|90|180|270)\s*$", output, re.MULTILINE)
     return int(match.group(1)) if match else None
 
 
-def detect_sheet_rotation(png_paths: list, composite_path: str) -> int:
-    """Ermittelt eine gemeinsame Drehung aus addiertem Vorder-/Rückseiteninhalt."""
-    combined = None
-    for png_path in png_paths:
-        with Image.open(png_path) as img:
-            grey = np.asarray(img.convert("L"), dtype=np.uint8)
-        if combined is None:
-            combined = grey.copy()
-        elif grey.shape != combined.shape:
-            print(
-                f"[ROTATE] Gemeinsame OSD übersprungen: {combined.shape} != {grey.shape}",
-                file=sys.stderr,
-            )
-            return 0
-        else:
-            combined = np.minimum(combined, grey)
+def parse_osd_confidence(output: str):
+    """Liest die Sicherheit der Lageerkennung („Orientation confidence“)."""
+    match = re.search(r"^Orientation confidence:\s*([0-9]+(?:\.[0-9]+)?)\s*$", output, re.MULTILINE)
+    return float(match.group(1)) if match else None
 
-    if combined is None:
+
+def entscheide_blatt_drehung(seiten: list) -> int:
+    """Gemeinsame Drehung eines Blatts aus den Einzelergebnissen seiner Seiten.
+
+    `seiten` enthält je Seite (drehung, sicherheit) oder None. Gedreht wird nur,
+    wenn mindestens eine Seite sicher erkannt ist (Sicherheit ≥ OSD_MIN_CONFIDENCE)
+    und alle sicher erkannten Seiten dieselbe Drehung verlangen. Unsichere
+    Seiten (etwa eine fast leere Rückseite) zählen nicht mit. Widersprechen sich
+    sichere Seiten, bleibt das Blatt, wie es ist.
+    """
+    sicher = [x[0] for x in seiten if x and x[1] is not None and x[1] >= OSD_MIN_CONFIDENCE]
+    if not sicher:
         return 0
-    Image.fromarray(combined, mode="L").save(composite_path)
+    if len(set(sicher)) > 1:
+        return 0
+    return sicher[0]
+
+
+def osd_seite(png_path: str):
+    """Tesseract-OSD für eine Seite: (drehung, sicherheit) oder None."""
     result = subprocess.run(
-        [TESSERACT, composite_path, "stdout", "--psm", "0", "-l", "osd"],
+        [TESSERACT, png_path, "stdout", "--psm", "0", "-l", "osd"],
         capture_output=True, text=True,
     )
-    rotation = parse_osd_rotation(f"{result.stdout}\n{result.stderr}")
-    if rotation is None:
-        print("[ROTATE] Gemeinsame OSD ohne sichere Drehung – Blatt bleibt unverändert")
-        return 0
-    print(f"[ROTATE] Gemeinsame Duplex-Drehung erkannt: {rotation}°")
+    ausgabe = f"{result.stdout}\n{result.stderr}"
+    drehung = parse_osd_rotation(ausgabe)
+    if drehung is None:
+        return None
+    return drehung, parse_osd_confidence(ausgabe)
+
+
+def detect_sheet_rotation(png_paths: list) -> int:
+    """Ermittelt die gemeinsame Drehung eines Duplex-Blatts.
+
+    Jede Seite wird für sich erkannt; ein übereinandergelegtes Mischbild beider
+    Seiten führt Tesseract in die Irre (gespiegelter Text der Rückseite).
+    """
+    seiten = [osd_seite(p) for p in png_paths]
+    for i, ergebnis in enumerate(seiten, start=1):
+        if ergebnis:
+            print(f"[ROTATE] Seite {i}: Drehung {ergebnis[0]}°, Sicherheit {ergebnis[1]}")
+        else:
+            print(f"[ROTATE] Seite {i}: keine Lage erkannt")
+    rotation = entscheide_blatt_drehung(seiten)
+    if rotation:
+        print(f"[ROTATE] Gemeinsame Duplex-Drehung: {rotation}°")
+    elif any(x and x[0] == 0 and (x[1] or 0) >= OSD_MIN_CONFIDENCE for x in seiten) and \
+            all(not x or x[0] == 0 or (x[1] or 0) < OSD_MIN_CONFIDENCE for x in seiten):
+        print("[ROTATE] Blatt steht aufrecht")
+    else:
+        print("[ROTATE] Keine sichere, widerspruchsfreie Drehung – Blatt bleibt unverändert")
     return rotation
 
 
@@ -580,16 +613,14 @@ def process(input_path: str, output_path: str) -> int:
         ocr_input = input_path
 
         # Duplex-Stapel sind ein physisches Blatt. Deshalb wird die Drehung vor
-        # OCR genau einmal aus dem addierten Inhalt beider Rohseiten bestimmt
+        # OCR genau einmal aus den Lageerkennungen beider Rohseiten bestimmt
         # und identisch auf Vorder- und Rückseite angewendet. OCRmyPDF darf die
         # Seiten danach nicht mehr unabhängig gegeneinander drehen.
         if auto_crop_duplex_batch:
             raw_render_dir = os.path.join(tmpdir, "raw-renders")
             os.makedirs(raw_render_dir, exist_ok=True)
-            raw_pngs = render_pages_to_png(input_path, raw_render_dir)
-            rotation = detect_sheet_rotation(
-                raw_pngs, os.path.join(tmpdir, "duplex-composite.png")
-            )
+            raw_pngs = render_pages_to_png(input_path, raw_render_dir, OSD_DPI)
+            rotation = detect_sheet_rotation(raw_pngs)
             if rotation:
                 oriented = os.path.join(tmpdir, "sheet-oriented.pdf")
                 apply_uniform_rotation_to_pdf(input_path, rotation, oriented)

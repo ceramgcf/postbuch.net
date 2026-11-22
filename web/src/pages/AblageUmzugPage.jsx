@@ -34,11 +34,11 @@
  * empfohlenerSchritt() aus dem Server-Zustand, wo es weitergeht.
  */
 import { useEffect, useState } from 'react';
-import { Navigate, useNavigate, useParams } from 'react-router';
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertTriangle, ArrowLeft, ArrowRight, ArrowLeftRight, Ban, Check, CheckCircle2,
-  Cloud, FileX, PauseCircle, PlayCircle, RefreshCw, Server,
+  Cloud, FileX, HardDrive, PauseCircle, PlayCircle, RefreshCw, Server,
   Sparkles, Trash2, Unlink2, Wand2, X, XCircle,
 } from 'lucide-react';
 import { api } from '@/api/client';
@@ -52,6 +52,7 @@ import { Progress } from '@/components/ui/progress';
 import { Spinner } from '@/components/ui/spinner';
 import OneDriveSection from '@/components/settings/OneDriveSection';
 import NextcloudCard from '@/components/settings/NextcloudCard';
+import LokalAblageCard from '@/components/settings/LokalAblageCard';
 import { ablageLabel as label } from '@/lib/ablage';
 
 const SCHRITTE = [
@@ -91,6 +92,11 @@ export function offeneReste(r) {
   return (c.fehler || 0) + (c.hash_konflikt || 0) + (c.quelle_fehlt || 0) + (c.kein_zielordner || 0);
 }
 
+function BackendIcon({ backend, className }) {
+  const Icon = backend === 'lokal' ? HardDrive : backend === 'nextcloud' ? Server : Cloud;
+  return <Icon className={className} />;
+}
+
 /** Rückfrage-Streifen statt window.confirm – gleicher Ton wie der Einrichtungsassistent. */
 function Rueckfrage({ text, frage, bestaetigen, abbrechen, onBestaetigen, onAbbrechen, laeuft, gefahr }) {
   return (
@@ -109,7 +115,10 @@ function Rueckfrage({ text, frage, bestaetigen, abbrechen, onBestaetigen, onAbbr
 
 export default function AblageUmzugPage() {
   const { schritt } = useParams();
+  const [suchParameter] = useSearchParams();
   const navigate = useNavigate();
+  const zielQuery = suchParameter.toString();
+  const schrittPfad = (id) => `/ablage-umzug/${id}${zielQuery ? `?${zielQuery}` : ''}`;
   const qc = useQueryClient();
 
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: () => api.settings.getAll(), retry: false });
@@ -120,9 +129,17 @@ export default function AblageUmzugPage() {
   });
   const { data: ncStatus } = useQuery({ queryKey: ['nextcloud-status'], queryFn: () => api.nextcloud.status(), retry: false });
   const { data: odStatus } = useQuery({ queryKey: ['onedrive-status'], queryFn: () => api.onedrive.status(), retry: false });
+  const { data: lokalStatus } = useQuery({ queryKey: ['lokal-ablage-status'], queryFn: () => api.storage.lokalStatus(), retry: false });
 
   const aktiv = settings?.storage_backend?.value || 'onedrive';
-  const zielVorgabe = aktiv === 'onedrive' ? 'nextcloud' : 'onedrive';
+  // Das Ziel kommt aus dem Umzug-Knopf der Einstellungen (?ziel=…).
+  const zielWunsch = suchParameter.get('ziel');
+  const zielVorgabe = ['onedrive', 'nextcloud', 'lokal'].includes(zielWunsch) && zielWunsch !== aktiv
+    ? zielWunsch
+    : aktiv === 'onedrive' ? 'nextcloud' : 'onedrive';
+  const istBereit = (b) => (b === 'nextcloud' ? !!ncStatus?.connected
+    : b === 'lokal' ? !!lokalStatus?.verfuegbar
+      : !!odStatus?.connected);
   // Ein Lauf, der bereits umgeschaltet UND aufgeräumt ist, ist rein historisch
   // (siehe empfohlenerSchritt()-Kommentar oben) – der gesamte Assistent
   // behandelt ihn ab hier wie „kein Lauf vorhanden", nicht nur die
@@ -136,8 +153,9 @@ export default function AblageUmzugPage() {
   const run = laufHistorisch ? null : runRoh;
   const srcBackend = run ? run.src_backend : aktiv;
   const dstBackend = run ? run.dst_backend : zielVorgabe;
-  const zielVerbunden = dstBackend === 'nextcloud' ? !!ncStatus?.connected : !!odStatus?.connected;
-  const srcVerbunden = srcBackend === 'nextcloud' ? !!ncStatus?.connected : !!odStatus?.connected;
+  const zielVerbunden = istBereit(dstBackend);
+  // Nur eine Cloud-Verbindung lässt sich trennen; der Ordner auf diesem Rechner bleibt eingebunden.
+  const srcVerbunden = srcBackend !== 'lokal' && istBereit(srcBackend);
 
   const index = SCHRITTE.findIndex((s) => s.id === schritt);
   const aktuell = index >= 0 ? index : 0;
@@ -148,7 +166,7 @@ export default function AblageUmzugPage() {
   // veralteten URL-Schritt einfach zu rendern.
   const empfohlen = empfohlenerSchritt(runRoh);
   if (runRoh !== undefined && index < 0) {
-    return <Navigate to={`/ablage-umzug/${empfohlen}`} replace />;
+    return <Navigate to={schrittPfad(empfohlen)} replace />;
   }
 
   const [zielRootPath, setZielRootPath] = useState('');
@@ -205,7 +223,7 @@ export default function AblageUmzugPage() {
   }, [trockenJob?.status]);
   const mStart = useMutation({
     mutationFn: () => api.migration.start(run.id),
-    onSuccess: () => { setFehler(''); setBestaetigt(false); refetch(); navigate('/ablage-umzug/kopieren'); },
+    onSuccess: () => { setFehler(''); setBestaetigt(false); refetch(); navigate(schrittPfad('kopieren')); },
     onError: (e) => setFehler(e.message),
   });
   const mPausieren = useMutation({
@@ -298,7 +316,7 @@ export default function AblageUmzugPage() {
     onSuccess: () => {
       setFehler(''); setNachzuegler(null);
       qc.invalidateQueries({ queryKey: ['migration'] });
-      navigate('/ablage-umzug/kopieren');
+      navigate(schrittPfad('kopieren'));
     },
     onError: (e) => setFehler(e.message),
   });
@@ -308,7 +326,7 @@ export default function AblageUmzugPage() {
       setFehler(''); setUmschaltFrage(false);
       qc.invalidateQueries({ queryKey: ['settings'] });
       qc.invalidateQueries({ queryKey: ['migration'] });
-      navigate('/ablage-umzug/abschluss');
+      navigate(schrittPfad('abschluss'));
     },
     onError: (e) => {
       setUmschaltFrage(false);
@@ -385,7 +403,9 @@ export default function AblageUmzugPage() {
   // brichLaufVollstaendigAb() im Backend, das ab da ohnehin 409 wirft).
   const abbrechenMoeglich = !!run && !run.switched_at && !run.cleaned_at;
 
-  const ZielKarte = dstBackend === 'nextcloud'
+  const ZielKarte = dstBackend === 'lokal'
+    ? <LokalAblageCard />
+    : dstBackend === 'nextcloud'
     ? <NextcloudCard />
     : <OneDriveSection settings={settings} onSaved={() => qc.invalidateQueries({ queryKey: ['settings'] })} />;
 
@@ -396,12 +416,12 @@ export default function AblageUmzugPage() {
       <div className="space-y-4">
         <div className="flex items-center justify-center gap-4 rounded-xl border border-border/60 bg-muted/20 px-4 py-5">
           <div className="flex flex-col items-center gap-1.5">
-            {srcBackend === 'nextcloud' ? <Server className="h-7 w-7 text-muted-foreground" /> : <Cloud className="h-7 w-7 text-muted-foreground" />}
+            <BackendIcon backend={srcBackend} className="h-7 w-7 text-muted-foreground" />
             <span className="text-xs font-medium">{label(srcBackend)}</span>
           </div>
           <ArrowRight className="h-5 w-5 text-muted-foreground" />
           <div className="flex flex-col items-center gap-1.5">
-            {dstBackend === 'nextcloud' ? <Server className="h-7 w-7 text-primary" /> : <Cloud className="h-7 w-7 text-primary" />}
+            <BackendIcon backend={dstBackend} className="h-7 w-7 text-primary" />
             <span className="text-xs font-medium">{label(dstBackend)}</span>
           </div>
         </div>
@@ -413,18 +433,22 @@ export default function AblageUmzugPage() {
         </p>
         {run && (
           <Testergebnis>
-            Es läuft bereits ein Migrationslauf {label(run.src_backend)} → {label(run.dst_backend)}
+            Es läuft bereits ein Migrationslauf {label(run.src_backend)} → {label(run.dst_backend)}{' '}
             (Status: {run.status}). Weiter geht es beim nächsten Schritt.
           </Testergebnis>
         )}
         {!zielVerbunden && (
           <div className="flex gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2.5 text-xs">
             <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
-            <span>Bevor es weitergehen kann, muss {label(dstBackend)} als zweite Dateiablage verbunden sein.</span>
+            <span>
+              {dstBackend === 'lokal'
+                ? <>Bevor es weitergehen kann, muss ein Ablageordner auf diesem Rechner festgelegt sein.</>
+                : <>Bevor es weitergehen kann, muss {label(dstBackend)} als zweite Dateiablage verbunden sein.</>}
+            </span>
           </div>
         )}
         {zielVerbunden && (
-          <Testergebnis status="erfolg">{label(dstBackend)} ist verbunden.</Testergebnis>
+          <Testergebnis status="erfolg">{label(dstBackend)} {dstBackend === 'lokal' ? 'ist bereit' : 'ist verbunden'}.</Testergebnis>
         )}
         {/* Immer sichtbar, nicht nur solange unverbunden: sonst gibt es innerhalb
             des Assistenten keine Möglichkeit mehr, eine (z. B. noch von einem
@@ -698,7 +722,7 @@ export default function AblageUmzugPage() {
         <div className="rounded-lg border border-border/60 px-3 py-2.5 space-y-2">
           <p className="text-xs font-medium">Nachzügler-Prüfung</p>
           <p className="text-xs text-muted-foreground">
-            Unmittelbar vor dem Umschalten wird noch einmal geprüft, ob in {label(run.src_backend)}
+            Unmittelbar vor dem Umschalten wird noch einmal geprüft, ob in {label(run.src_backend)}{' '}
             Dokumente liegen, die nicht Teil dieses Laufs sind (z. B. seither neu gescannt).
           </p>
           {pruefungLaeuft && <div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner className="h-3.5 w-3.5" />wird geprüft…</div>}
@@ -807,10 +831,14 @@ export default function AblageUmzugPage() {
             <AlertTriangle className="h-4 w-4" />Noch zu erledigen: {label(run.src_backend)} selbst leeren
           </p>
           <p className="text-xs leading-relaxed text-amber-700/90 dark:text-amber-400/90">
-            postbuch.net verschiebt Quelldateien nur in den Papierkorb von {label(run.src_backend)} –
-            gelöscht wird dort nie endgültig etwas. Um den Speicherplatz wirklich freizugeben (z. B.
-            den Papierkorb in {label(run.src_backend)} zu leeren oder ein nicht mehr gebrauchtes
-            Konto zu kündigen), musst du selbst in {label(run.src_backend)} aktiv werden.
+            {run.src_backend === 'lokal'
+              ? <>postbuch.net verschiebt Quelldateien nur in den Ordner <span className="font-mono">_trash</span> im
+                Ablageordner – gelöscht wird dort nie endgültig etwas. Um den Speicherplatz freizugeben,
+                lösche den Ordner selbst, sobald du dich überzeugt hast, dass alles im Ziel angekommen ist.</>
+              : <>postbuch.net verschiebt Quelldateien nur in den Papierkorb von {label(run.src_backend)} –
+                gelöscht wird dort nie endgültig etwas. Um den Speicherplatz wirklich freizugeben (z. B.
+                den Papierkorb in {label(run.src_backend)} zu leeren oder ein nicht mehr gebrauchtes
+                Konto zu kündigen), musst du selbst in {label(run.src_backend)} aktiv werden.</>}
           </p>
         </div>
 
@@ -884,7 +912,7 @@ export default function AblageUmzugPage() {
   }
 
   function weiter() {
-    if (aktuell < SCHRITTE.length - 1) navigate(`/ablage-umzug/${SCHRITTE[aktuell + 1].id}`);
+    if (aktuell < SCHRITTE.length - 1) navigate(schrittPfad(SCHRITTE[aktuell + 1].id));
   }
 
   const fortschritt = Math.round(((aktuell + 1) / SCHRITTE.length) * 100);
@@ -957,7 +985,7 @@ export default function AblageUmzugPage() {
               const aktivSchritt = i === aktuell;
               return (
                 <li key={s.id} className="shrink-0 lg:shrink">
-                  <button type="button" onClick={() => navigate(`/ablage-umzug/${s.id}`)} aria-current={aktivSchritt ? 'step' : undefined}
+                  <button type="button" onClick={() => navigate(schrittPfad(s.id))} aria-current={aktivSchritt ? 'step' : undefined}
                     className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${
                       aktivSchritt ? 'bg-primary/10 text-foreground' : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground'}`}>
                     <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold ${
@@ -990,7 +1018,7 @@ export default function AblageUmzugPage() {
           </Card>
 
           <footer className="mt-4 flex flex-wrap items-center justify-between gap-2">
-            <Button variant="outline" onClick={() => navigate(`/ablage-umzug/${SCHRITTE[Math.max(0, aktuell - 1)].id}`)} disabled={aktuell === 0}>
+            <Button variant="outline" onClick={() => navigate(schrittPfad(SCHRITTE[Math.max(0, aktuell - 1)].id))} disabled={aktuell === 0}>
               <ArrowLeft className="h-4 w-4 mr-1.5" />Zurück
             </Button>
             {definition.id !== 'abschluss' && (

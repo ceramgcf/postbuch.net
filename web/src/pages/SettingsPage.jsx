@@ -30,24 +30,28 @@ import {
 import { usePrinter } from '@/contexts/PrinterContext';
 import BackupWarnung from '@/components/BackupWarnung';
 import NextcloudCard from '@/components/settings/NextcloudCard';
+import LokalAblageCard from '@/components/settings/LokalAblageCard';
 import ProviderCard from '@/components/settings/ProviderCard';
 import EmbeddingCard from '@/components/settings/EmbeddingCard';
 import CloudfreiCard from '@/components/settings/CloudfreiCard';
 import PushInstanzCard from '@/components/settings/PushInstanzCard';
 import UpdateCard from '@/components/settings/UpdateCard';
 import { ScannerFreigabe, ErreichbarkeitCard } from '@/components/settings/FreigabeSchalter';
+import StackCard from '@/components/settings/StackCard';
 import EmpfehlungenCard from '@/components/settings/EmpfehlungenCard';
 import DebugModusCard from '@/components/settings/DebugModusCard';
 import EtikettQrCard from '@/components/settings/EtikettQrCard';
 import ModelSelector from '@/components/settings/ModelSelector';
-import { WurzelordnerFeld, useAppOrdner, standardWurzel, wurzelLabel } from '@/components/settings/WurzelordnerFeld';
+import { WurzelordnerFeld, useAppOrdner, useWurzelVorbelegung, wurzelLabel } from '@/components/settings/WurzelordnerFeld';
 import ScannerDiscoveryCard from '@/components/settings/ScannerDiscoveryCard';
+import { UngespeichertProvider, useUngespeichert, useWechsel, useAusgangsstand } from '@/lib/ungespeichert';
 import OneDriveSection from '@/components/settings/OneDriveSection';
 import { SetupGuideCard, SetupStepList } from '@/components/settings/SetupGuide';
 import MenschenCard from '@/components/settings/MenschenCard';
 import KostentraegerProfilCard from '@/components/settings/KostentraegerProfilCard';
 import { MODEL_CLASSES, modellwahlAus, klassenFuer } from '@/components/settings/modelClasses';
 import { ModellwahlAuswahl } from '@/components/settings/ModellwahlAuswahl';
+import { AufgabenUmstellungHinweis } from '@/components/settings/AufgabenUmstellungHinweis';
 import { renderLabelCanvas } from '@/lib/labelRenderer';
 import { gleichesModell } from '@/lib/modellId';
 import { leseImportFolgen, schreibeImportFolgen } from '@/lib/importFolgen';
@@ -59,6 +63,7 @@ import {
   useUpdateVerbleibKategorie,
   useArchiveVerbleibKategorie,
 } from '@/hooks/useVerbleib';
+import PasswortHinweis from '@/components/settings/PasswortHinweis';
 import * as LucideIcons from 'lucide-react';
 
 const SYSTEM_FOLDER_KEYS = ['inbox', 'failed', 'suspended', 'trash', 'backup', 'abrechnungMerged', 'debug'];
@@ -353,7 +358,7 @@ function BackupGroupSection({ group, onRestore }) {
 
 // ── Backup Tab ────────────────────────────────────────────────────────────────
 
-function BackupTab() {
+function BackupTab({ backend }) {
   const qc = useQueryClient();
   const { data: settings, isLoading: settingsLoading } = useQuery({ queryKey: ['backup', 'settings'], queryFn: () => api.backup.getSettings() });
   const [localEnabled, setLocalEnabled] = useState(null);
@@ -364,15 +369,47 @@ function BackupTab() {
     mutationFn: (data) => api.backup.updateSettings(data),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['backup', 'settings'] }); setLocalEnabled(null); setLocalCron(null); },
   });
+  // Abschalten von Backup bzw. Verschlüsselung verlangt ein eingetipptes Wort.
+  const [tippFrage, setTippFrage] = useState(null); // 'backup' | 'verschluesselung'
+  const [tippEingabe, setTippEingabe] = useState('');
+  const TIPP_FRAGEN = {
+    backup: {
+      titel: 'Backups wirklich abschalten?',
+      text: 'Ohne Backup lässt sich die Datenbank nach einem Defekt nicht wiederherstellen.',
+      wort: 'NOBACKUP',
+      knopf: 'Backups abschalten',
+    },
+    verschluesselung: {
+      titel: 'Backup-Verschlüsselung wirklich abschalten?',
+      text: 'Künftige Backups werden dann unverschlüsselt abgelegt, ohne Zugangsdaten wie die '
+        + 'Anmeldung an der Dateiablage, KI-Schlüssel und Tokens. Bereits vorhandene verschlüsselte '
+        + 'Backups bleiben verschlüsselt. Diese Instanz öffnet sie weiterhin ohne Passworteingabe; '
+        + 'Schlüssel und Passwort bleiben erhalten und gelten auch beim späteren Wiedereinschalten.',
+      wort: 'UNVERSCHLÜSSELT',
+      knopf: 'Verschlüsselung abschalten',
+    },
+  };
+  function oeffneTippFrage(art) { setTippEingabe(''); setTippFrage(art); }
+  function bestaetigeTippFrage() {
+    const art = tippFrage;
+    if (!art || tippEingabe !== TIPP_FRAGEN[art].wort) return;
+    setTippFrage(null);
+    if (art === 'backup') settingsMutation.mutate({ enabled, cron, bestaetigung: 'NOBACKUP', bewusst: true });
+    else encryptionMutation.mutate({ enabled: false, bewusst: true });
+  }
   function speichereBackupSettings() {
-    if (!enabled) {
-      const bestaetigung = window.prompt('Backups wirklich abschalten? Tippe NOBACKUP zur Bestätigung.');
-      if (bestaetigung !== 'NOBACKUP') return;
-      settingsMutation.mutate({ enabled, cron, bestaetigung, bewusst: true });
-      return;
-    }
+    if (!enabled) { oeffneTippFrage('backup'); return; }
     settingsMutation.mutate({ enabled, cron });
   }
+  useUngespeichert('backup', {
+    aktiv: localEnabled !== null || localCron !== null, label: 'Backup-Einstellungen',
+    speichern: async () => {
+      // Abschalten verlangt die Tipp-Bestätigung in der Karte selbst.
+      if (!enabled) { oeffneTippFrage('backup'); throw new Error('Backups abschalten bitte in der Karte „Backup-Einstellungen“ bestätigen.'); }
+      await settingsMutation.mutateAsync({ enabled, cron });
+    },
+    verwerfen: () => { setLocalEnabled(null); setLocalCron(null); },
+  });
   // ── Backup-Verschlüsselung ─────────────────────────────────────────────────
   const encryption = settings?.encryption ?? { enabled: false, entschieden: false, passwortGesetzt: false };
   const [encFormOffen, setEncFormOffen] = useState(false);
@@ -404,19 +441,7 @@ function BackupTab() {
       ...(encNeuesPasswort ? { neuesPasswort: true } : {}),
     });
   }
-  function deaktiviereVerschluesselung() {
-    const bestaetigung = window.prompt(
-      'Backup-Verschlüsselung wirklich abschalten?\n\n'
-      + 'Künftige Backups werden dann unverschlüsselt abgelegt, ohne Zugangsdaten wie '
-      + 'OneDrive-Anmeldung, KI-Schlüssel und Tokens. Bereits vorhandene '
-      + 'verschlüsselte Backups bleiben verschlüsselt. Diese Instanz öffnet sie weiterhin '
-      + 'ohne Passworteingabe; Schlüssel und Passwort bleiben erhalten und gelten auch '
-      + 'beim späteren Wiedereinschalten.\n\n'
-      + 'Tippe UNVERSCHLÜSSELT zur Bestätigung.'
-    );
-    if (bestaetigung !== 'UNVERSCHLÜSSELT') return;
-    encryptionMutation.mutate({ enabled: false, bewusst: true });
-  }
+  function deaktiviereVerschluesselung() { oeffneTippFrage('verschluesselung'); }
   const [revealOffen, setRevealOffen] = useState(false);
   const [revealAppPasswort, setRevealAppPasswort] = useState('');
   const revealMutation = useMutation({
@@ -495,18 +520,46 @@ function BackupTab() {
 
   return (
     <div className="space-y-6">
-      <BackupWarnung />
+      <Dialog open={!!tippFrage} onOpenChange={(o) => { if (!o) setTippFrage(null); }}>
+        {tippFrage && (
+          <>
+            <DialogTitle>{TIPP_FRAGEN[tippFrage].titel}</DialogTitle>
+            <DialogDescription className="mt-3">{TIPP_FRAGEN[tippFrage].text}</DialogDescription>
+            <div className="mt-4 space-y-1">
+              <label className="text-xs font-medium text-muted-foreground" htmlFor="tipp-bestaetigung">
+                Tippe <span className="font-mono">{TIPP_FRAGEN[tippFrage].wort}</span> zur Bestätigung
+              </label>
+              <Input
+                id="tipp-bestaetigung" autoFocus autoComplete="off" value={tippEingabe}
+                onChange={(e) => setTippEingabe(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') bestaetigeTippFrage(); }}
+                className="h-9 font-mono text-sm"
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" size="sm" onClick={() => setTippFrage(null)}>Abbrechen</Button>
+              <Button
+                variant="destructive" size="sm" onClick={bestaetigeTippFrage}
+                disabled={tippEingabe !== TIPP_FRAGEN[tippFrage].wort}
+              >
+                {TIPP_FRAGEN[tippFrage].knopf}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </Dialog>
+      <BackupWarnung backend={backend} />
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Backup-Einstellungen</CardTitle>
-          <CardDescription className="text-xs">Automatischer Datenbank-Backup (pg_dump) in den konfigurierten OneDrive-Ordner.</CardDescription>
+          <CardDescription className="text-xs">Automatisches Datenbank-Backup (pg_dump) in den Backup-Ordner der Dateiablage.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {!settingsLoading && !settings?.backupFolderConfigured && (
             <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2.5">
               <AlertTriangle className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" />
               <p className="text-xs text-amber-600 dark:text-amber-400">
-                Backup-Ordner nicht konfiguriert. Bitte unter <strong>OneDrive → Ordner-Zuordnung</strong> den Backup-Ordner hinterlegen.
+                Backup-Ordner nicht konfiguriert. Bitte unter <strong>Dateiablage → Ordner-Zuordnung</strong> den Backup-Ordner hinterlegen.
               </p>
             </div>
           )}
@@ -542,8 +595,8 @@ function BackupTab() {
             Backup-Verschlüsselung
           </CardTitle>
           <CardDescription className="text-xs">
-            Verschlüsselt künftige Backups mit einem Passwort, bevor sie in die Dateiablage (OneDrive/Nextcloud) hochgeladen werden.
-            Nur verschlüsselte Backups enthalten auch die Zugangsdaten (OneDrive-Anmeldung, KI-Schlüssel, Tokens).
+            Verschlüsselt künftige Backups mit einem Passwort, bevor sie in der Dateiablage abgelegt werden.
+            Nur verschlüsselte Backups enthalten auch die Zugangsdaten (Anmeldung an der Dateiablage, KI-Schlüssel, Tokens).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -625,9 +678,7 @@ function BackupTab() {
                   className="h-9 text-sm"
                   autoComplete="new-password"
                 />
-                {encPasswort && encPasswortWiederholung && encPasswort !== encPasswortWiederholung && (
-                  <p className="text-xs text-destructive">Passwörter stimmen nicht überein.</p>
-                )}
+                <PasswortHinweis passwort={encPasswort} wiederholung={encPasswortWiederholung} />
               </div>
               {encryptionMutation.isError && <p className="text-sm text-destructive">{encryptionMutation.error?.message}</p>}
               <div className="flex flex-wrap gap-2">
@@ -865,10 +916,10 @@ function UmzugFehlerListe({ fehlerListe }) {
 // serverseitig ohnehin immer gegen das aktive Dateiablage-Backend. Vorher stand hier
 // hart „in OneDrive" – auf einer Nextcloud-Instanz eine glatte Falschaussage.
 function SetupWizardCard({ onDone, backend }) {
-  const backendLabel = backend === 'nextcloud' ? 'WebDAV-Speicher' : 'OneDrive';
+  const backendLabel = ABLAGE_ANZEIGE[backend] || 'OneDrive';
   // Der Root-Pfad wird NICHT geraten. Er kommt aus der Instanz; 'postbuch' ist
   // nur die Vorgabe, solange dort noch nichts eingerichtet ist.
-  const wurzelQuery = useQuery({ queryKey: ['ablage-wurzel'], queryFn: () => api.onedrive.folderRoot(), retry: false });
+  const wurzelQuery = useQuery({ queryKey: ['ablage-wurzel', backend], queryFn: () => api.onedrive.folderRoot(backend), retry: false });
   const appOrdner = useAppOrdner(backend);
   // Ist bereits ein Wurzelordner eingerichtet, legt diese Karte keine neue
   // Struktur mehr an, sondern verschiebt eine bestehende – das erfordert auf
@@ -884,10 +935,7 @@ function SetupWizardCard({ onDone, backend }) {
   const [umzugFehler, setUmzugFehler] = useState('');
   const [umzugFehlerListe, setUmzugFehlerListe] = useState(null);
   const running = !!ordnerJobId || !!umzugJobId;
-  useEffect(() => {
-    const w = wurzelQuery.data;
-    if (w && appOrdner.bereit) setRootPath((alt) => alt || w.rootPath || standardWurzel(appOrdner));
-  }, [wurzelQuery.data, appOrdner.bereit, appOrdner.aktiv]);
+  useWurzelVorbelegung(wurzelQuery.data, appOrdner, setRootPath);
   // Läuft bereits ein Setup-/Umzugs-Job im Hintergrund (z. B. nach einem
   // Seiten-Reload während eines laufenden Umzugs), Fortschrittsbalken und
   // Sperre sofort wiederherstellen statt den Button fälschlich freizugeben.
@@ -952,7 +1000,7 @@ function SetupWizardCard({ onDone, backend }) {
         <div className="flex gap-2 items-start">
           <div className="flex-1 space-y-1">
             <label className="text-xs font-medium text-muted-foreground">
-              {appOrdner.aktiv ? 'Wurzelordner' : `Wurzelordner (relativ zum ${backend === 'nextcloud' ? 'WebDAV-Stammverzeichnis' : 'OneDrive-Stammverzeichnis'})`}
+              {appOrdner.aktiv ? 'Wurzelordner' : `Wurzelordner (relativ zum ${backend === 'lokal' ? 'Ablageordner' : backend === 'nextcloud' ? 'WebDAV-Stammverzeichnis' : 'OneDrive-Stammverzeichnis'})`}
             </label>
             <WurzelordnerFeld
               appOrdner={appOrdner}
@@ -1461,7 +1509,7 @@ function UnmatchedRow({ entry, sessionId, onResolved }) {
 // Anzeigename des aktiven Dateiablage-Backends. Der interne Backend-Name bleibt
 // 'nextcloud' (ein Adapter für die ganze ownCloud-WebDAV-Familie), im UI führt
 // aber der Oberbegriff – der Adapter spricht generisches oc:fileid-WebDAV.
-const ABLAGE_ANZEIGE = { onedrive: 'OneDrive', nextcloud: 'WebDAV-Speicher' };
+const ABLAGE_ANZEIGE = { onedrive: 'OneDrive', nextcloud: 'WebDAV-Speicher', lokal: 'Ordner auf diesem Rechner' };
 // Die drei geläufigsten oc:fileid-fähigen WebDAV-Dienste (Nextcloud & ownCloud
 // gegen echte Server verifiziert, MagentaCLOUD ist Nextcloud-basiert).
 const WEBDAV_BEISPIELE = 'Nextcloud, ownCloud, MagentaCLOUD';
@@ -1483,7 +1531,9 @@ function InaktiveVerbindungWarnung({ backend }) {
   const qc = useQueryClient();
   const { data: ncStatus } = useQuery({ queryKey: ['nextcloud-status'], queryFn: () => api.nextcloud.status(), retry: false });
   const { data: odStatus } = useQuery({ queryKey: ['onedrive-status'], queryFn: () => api.onedrive.status(), retry: false });
-  const inaktivId = backend === 'nextcloud' ? 'onedrive' : 'nextcloud';
+  const inaktivId = backend === 'nextcloud' ? 'onedrive'
+    : backend === 'lokal' ? (ncStatus?.connected ? 'nextcloud' : 'onedrive')
+      : 'nextcloud';
   const inaktivVerbunden = inaktivId === 'nextcloud' ? !!ncStatus?.connected : !!odStatus?.connected;
   const disconnectMutation = useMutation({
     mutationFn: () => (inaktivId === 'nextcloud' ? api.nextcloud.disconnect() : api.onedrive.disconnect()),
@@ -1701,6 +1751,12 @@ function AblageStrukturCard({ backendLabel, onDone }) {
   const entwurfAktiv = entwurf && gleicheEbenen(entwurf, aktuelleEbenen);
   const zielIstAktuell = ziel && gleicheEbenen(ziel.ebenen, aktuelleEbenen) && ziel.personQuelle === aktuellePersonQuelle;
   const zielPfad = ziel ? ablagePfad(ziel.ebenen) : '';
+  // Übernehmen zieht Dateien um und braucht die Bestätigung in der Karte selbst.
+  useUngespeichert('ablagestruktur', {
+    aktiv: !!entwurf && !gleicheEbenen(entwurf, aktuelleEbenen), label: 'Ablagestruktur',
+    speichern: async () => { throw new Error('Die neue Ablagestruktur bitte in der Karte „Ablagestruktur“ übernehmen – dabei werden Dateien umgezogen.'); },
+    verwerfen: () => setEntwurf(null),
+  });
 
   return (
     <Card>
@@ -1815,10 +1871,21 @@ function AblageStrukturCard({ backendLabel, onDone }) {
   );
 }
 
+// Was ein Umzug auf die jeweilige Dateiablage bringt – kurz, für die Auswahl.
+const UMZUG_ANGEBOT = {
+  onedrive: 'Die Dokumente liegen in deinem OneDrive und sind auf allen Geräten mit deinem Microsoft-Konto zu sehen.',
+  nextcloud: `Die Dokumente liegen in deinem eigenen WebDAV-Speicher (${WEBDAV_BEISPIELE}) – dein Server, deine Daten.`,
+  lokal: 'Die Dokumente liegen als gewöhnliche Dateien in einem Ordner auf diesem Rechner, ohne Cloud.',
+};
+
 function AktiveAblageCard({ backend, onUmziehen }) {
-  const istOneDrive = backend !== 'nextcloud';
-  const aktivLabel = ABLAGE_ANZEIGE[istOneDrive ? 'onedrive' : 'nextcloud'];
-  const AktivIcon = istOneDrive ? Cloud : Server;
+  const aktiv = backend || 'onedrive';
+  const aktivLabel = ABLAGE_ANZEIGE[aktiv] || ABLAGE_ANZEIGE.onedrive;
+  const AktivIcon = aktiv === 'lokal' ? HardDrive : aktiv === 'nextcloud' ? Server : Cloud;
+  const { data: lokalStatus } = useQuery({ queryKey: ['lokal-ablage-status'], queryFn: () => api.storage.lokalStatus(), retry: false });
+  // Der Ordner auf diesem Rechner ist ein Ziel, wenn er eingebunden ist oder sich festlegen lässt.
+  const lokalMoeglich = !!lokalStatus?.verfuegbar || lokalStatus?.festgelegt === false;
+  const ziele = ['nextcloud', 'onedrive', 'lokal'].filter((b) => b !== aktiv && (b !== 'lokal' || lokalMoeglich));
   return (
     <Card className="border-primary/30 bg-linear-to-br from-primary/[0.07] to-transparent">
       <CardHeader className="pb-3">
@@ -1833,29 +1900,34 @@ function AktiveAblageCard({ backend, onUmziehen }) {
             </div>
             <CardDescription className="text-xs pt-0.5">
               Alle Dokumente von postbuch.net werden derzeit in <span className="font-medium text-foreground">{aktivLabel}</span> gespeichert.
-              Die Verbindungs­einstellungen weiter unten gehören zu {aktivLabel}.
+              Die Einstellungen weiter unten gehören zu {aktivLabel}.
             </CardDescription>
           </div>
         </div>
       </CardHeader>
-      <CardContent>
-        <div className="rounded-lg border border-border/60 bg-background/70 px-3.5 py-3 flex items-center justify-between gap-3 flex-wrap">
-          <div className="min-w-0 flex-1">
-            <p className="text-sm font-medium">
-              {istOneDrive ? 'Lieber deinen eigenen Speicher nutzen?' : 'Wechsel zu OneDrive?'}
-            </p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              {istOneDrive
-                ? <>postbuch.net kann seine Dokumente stattdessen in deinem eigenen <span className="font-medium text-foreground">WebDAV-Speicher</span> ablegen ({WEBDAV_BEISPIELE}) – dein Server, deine Daten. Der Umzug kopiert alles hinüber; die Originale in OneDrive bleiben unangetastet.</>
-                : <>postbuch.net kann seine Dokumente stattdessen in OneDrive ablegen. Der Umzug kopiert alles hinüber; die Originale bleiben unangetastet.</>}
-            </p>
-          </div>
-          <Button size="sm" className="flex-shrink-0" onClick={onUmziehen}>
-            <ArrowLeftRight className="h-3.5 w-3.5 mr-1.5" />
-            {istOneDrive ? 'Auf WebDAV-Speicher umziehen' : 'Auf OneDrive umziehen'}
-          </Button>
-        </div>
-      </CardContent>
+      {ziele.length > 0 && <CardContent className="space-y-2">
+        <p className="text-xs text-muted-foreground">
+          Der Umzug kopiert alle Dokumente hinüber; die Originale in {aktivLabel} bleiben dabei unangetastet.
+        </p>
+        {ziele.map((ziel) => {
+          const ZielIcon = ziel === 'lokal' ? HardDrive : ziel === 'nextcloud' ? Server : Cloud;
+          return (
+            <div key={ziel} className="rounded-lg border border-border/60 bg-background/70 px-3.5 py-3 flex items-center justify-between gap-3 flex-wrap">
+              <div className="min-w-0 flex-1 flex items-start gap-2">
+                <ZielIcon className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{ABLAGE_ANZEIGE[ziel]}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{UMZUG_ANGEBOT[ziel]}</p>
+                </div>
+              </div>
+              <Button size="sm" variant="outline" className="flex-shrink-0" onClick={() => onUmziehen(ziel)}>
+                <ArrowLeftRight className="h-3.5 w-3.5 mr-1.5" />
+                Umziehen
+              </Button>
+            </div>
+          );
+        })}
+      </CardContent>}
     </Card>
   );
 }
@@ -1879,6 +1951,7 @@ function AktiveAblageCard({ backend, onUmziehen }) {
 // niemals fälschlich Dokumente als fehlend markieren.
 function FehlendeDateienScanCard() {
   const navigate = useNavigate();
+  const wechsle = useWechsel();
   const [jobId, setJobId] = useState(null);
   const [ergebnis, setErgebnis] = useState(null);
   const [fehler, setFehler] = useState('');
@@ -1932,10 +2005,20 @@ function FehlendeDateienScanCard() {
               {ergebnis.errors > 0 ? `, ${ergebnis.errors} übersprungen (kein bestätigter Fehler)` : ''}.
             </span>
             {ergebnis.missing > 0 && (
-              <Button size="sm" variant="outline" className="h-7 text-xs ml-auto" onClick={() => navigate('/postbuch?fehlt_in_ablage=true')}>
+              <Button size="sm" variant="outline" className="h-7 text-xs ml-auto" onClick={() => wechsle(() => navigate('/postbuch?fehlt_in_ablage=true'))}>
                 Anzeigen
               </Button>
             )}
+          </div>
+        )}
+        {ergebnis?.zurueckgehalten > 0 && (
+          <div className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400 bg-amber-500/10 rounded-lg px-3 py-2">
+            <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+            <span>
+              {ergebnis.zurueckgehalten} Datei(en) wurden nicht gefunden, mehr als die Hälfte der geprüften.
+              Das spricht eher für einen falschen Ablageordner als für verschwundene Dateien. Deshalb
+              wurde keine Verknüpfung gelöst. Bitte den Ablageordner prüfen und den Scan danach wiederholen.
+            </span>
           </div>
         )}
       </CardContent>
@@ -1946,6 +2029,7 @@ function FehlendeDateienScanCard() {
 function AblageTab({ settings, isLoading: settingsLoading, onRefresh }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const wechsle = useWechsel();
   // Ordner-IDs liegen je Dateiablage-Backend getrennt in storage_folders
   const backend = settings?.storage_backend?.value || 'onedrive';
   const folders = settings?.storage_folders?.value?.[backend] || {};
@@ -1985,16 +2069,24 @@ function AblageTab({ settings, isLoading: settingsLoading, onRefresh }) {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['settings'] }); setPollEnabled(null); setPollInterval(null); setPollSaved(true); setTimeout(() => setPollSaved(false), 3000); },
   });
 
+  useUngespeichert('ablage-polling', {
+    aktiv: pollEnabled !== null || pollInterval !== null, label: 'Ablage-Abfrage',
+    speichern: () => pollMutation.mutateAsync({ enabled: currentPollEnabled, intervalSec: Math.max(10, currentPollInterval) }),
+    verwerfen: () => { setPollEnabled(null); setPollInterval(null); },
+  });
+
   const nextcloudAktiv = backend === 'nextcloud';
 
   return (
     <div className="space-y-6">
       <InaktiveVerbindungWarnung backend={backend} />
-      <AktiveAblageCard backend={backend} onUmziehen={() => navigate('/ablage-umzug/ueberblick')} />
+      <AktiveAblageCard backend={backend} onUmziehen={(ziel) => wechsle(() => navigate(`/ablage-umzug/ueberblick?ziel=${ziel}`))} />
 
-      {nextcloudAktiv
-        ? <NextcloudCard />
-        : <OneDriveSection settings={settings} onSaved={onRefresh} />}
+      {backend === 'lokal'
+        ? <LokalAblageCard />
+        : nextcloudAktiv
+          ? <NextcloudCard />
+          : <OneDriveSection settings={settings} onSaved={onRefresh} />}
 
       {/* Poll interval */}
       <Card>
@@ -2050,7 +2142,7 @@ function AblageTab({ settings, isLoading: settingsLoading, onRefresh }) {
 
       <SetupWizardCard onDone={onRefresh} backend={backend} />
 
-      {wurzelEingerichtet && <AblageStrukturCard backendLabel={nextcloudAktiv ? 'deinem WebDAV-Speicher' : 'OneDrive'} onDone={onRefresh} />}
+      {wurzelEingerichtet && <AblageStrukturCard backendLabel={backend === 'lokal' ? 'deinem Ablageordner' : nextcloudAktiv ? 'deinem WebDAV-Speicher' : 'OneDrive'} onDone={onRefresh} />}
 
       <FehlendeDateienScanCard />
 
@@ -2129,8 +2221,21 @@ function KITab() {
     setCostValues((prev) => ({ ...prev, [modelId]: val }));
   }
 
+  // Offener Hinweis nach der Umstellung auf zwei Aufgabentypen: Speichern
+  // bestätigt die vorläufige Auswahl auch ohne Änderung.
+  const umstellung = health?.aufgabenUmstellung || null;
+
   const saveModelsMutation = useMutation({
     mutationFn: async () => {
+      if (umstellung) {
+        for (const key of ['routine', 'komplex']) {
+          const m = health?.models?.[key];
+          if (modelValues[key] === undefined && m?.model) {
+            const cls = MODEL_CLASSES.find((c) => c.key === key);
+            await api.settings.update(cls.settingKey, { providerId: m.providerId, model: m.model });
+          }
+        }
+      }
       for (const cls of MODEL_CLASSES) {
         const v = modelValues[cls.key];
         // Immer als {providerId, model} speichern. Es gibt keinen Pfad mehr,
@@ -2163,6 +2268,7 @@ function KITab() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['settings'] });
       qc.invalidateQueries({ queryKey: ['cloudfrei-check'] });
+      qc.invalidateQueries({ queryKey: ['ai-health-admin'] });
       refetchHealth();
       setModelValues({});
       setCostValues({});
@@ -2172,6 +2278,11 @@ function KITab() {
   });
 
   const hasChanges = Object.keys(modelValues).length > 0 || Object.keys(costValues).length > 0;
+  useUngespeichert('ki-modelle', {
+    aktiv: hasChanges, label: 'KI-Modelle',
+    speichern: () => saveModelsMutation.mutateAsync(),
+    verwerfen: () => { setModelValues({}); setCostValues({}); },
+  });
   const modellwahl = modellwahlAus(settings);
   const sichtbareKlassen = klassenFuer(modellwahl);
 
@@ -2225,7 +2336,7 @@ function KITab() {
           </div>
           <CardDescription className="text-xs pt-1">
             {modellwahl === 'einfach'
-              ? 'Ein Modell analysiert jedes Dokument. Scheitert es, springt der letzte Fallback ein.'
+              ? 'Zwei Modelle decken alle KI-Aufgaben ab. Jedes Dokument analysiert „Anspruchsvoll & Komplex“; scheitert es, springt „Einfach & Routine“ ein.'
               : 'Primärmodell pro Dokumentklasse. Bei Fehlern greift eine Fallback-Kette.'}
           </CardDescription>
         </CardHeader>
@@ -2235,18 +2346,25 @@ function KITab() {
               <div className="mb-4">
                 <ModellwahlAuswahl wert={modellwahl} onGespeichert={() => refetchHealth()} />
               </div>
+              {umstellung && <AufgabenUmstellungHinweis umstellung={umstellung} className="mb-4" />}
               {sichtbareKlassen.filter((c) => !c.group).map(renderSelector)}
-              <div className="mt-5 mb-2 pt-4 border-t border-border">
-                <p className="text-sm font-semibold">Büroassistent und Akten</p>
-                <p className="text-xs text-muted-foreground">Eigene Modellwahl, unabhängig von den Dokumentklassen. Der Büroassistent braucht ein Modell, das Tool-Calling beherrscht.</p>
-              </div>
-              {MODEL_CLASSES.filter((c) => c.group === 'chat').map(renderSelector)}
+              {modellwahl === 'einfach' ? (
+                <p className="mt-2 text-xs text-muted-foreground">Der Büroassistent braucht für beide Aufgabentypen ein Modell, das Tool-Calling beherrscht.</p>
+              ) : (
+                <>
+                  <div className="mt-5 mb-2 pt-4 border-t border-border">
+                    <p className="text-sm font-semibold">Büroassistent und Akten</p>
+                    <p className="text-xs text-muted-foreground">Eigene Modellwahl, unabhängig von den Dokumentklassen. Der Büroassistent braucht ein Modell, das Tool-Calling beherrscht.</p>
+                  </div>
+                  {sichtbareKlassen.filter((c) => c.group === 'chat').map(renderSelector)}
+                </>
+              )}
             </>
           )}
           {saveModelsMutation.isError && <p className="mt-3 text-sm text-destructive">{saveModelsMutation.error?.message}</p>}
           <div className="mt-4 flex items-center gap-3">
-            <Button size="sm" onClick={() => saveModelsMutation.mutate()} disabled={saveModelsMutation.isPending || !hasChanges}>
-              {saveModelsMutation.isPending ? 'Speichern…' : 'Modelle speichern'}
+            <Button size="sm" onClick={() => saveModelsMutation.mutate()} disabled={saveModelsMutation.isPending || (!hasChanges && !umstellung)}>
+              {saveModelsMutation.isPending ? 'Speichern…' : (umstellung && !hasChanges ? 'Auswahl bestätigen' : 'Modelle speichern')}
             </Button>
             {modelSaved && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle className="h-3.5 w-3.5" />Gespeichert</span>}
           </div>
@@ -2297,6 +2415,10 @@ function ClassificationRulesCard({ settings, settingsLoading }) {
   });
 
   const hasChanges = draft !== null && draft !== String(stored);
+  useUngespeichert('klassifikationsregeln', {
+    aktiv: hasChanges, label: 'Eigene Klassifikationsregeln',
+    speichern: () => saveMutation.mutateAsync(), verwerfen: () => setDraft(null),
+  });
 
   return (
     <Card>
@@ -2674,31 +2796,42 @@ function CacheModeOptionCard({ settings, settingsLoading }) {
 function DuplicateDetectionCard({ settings, settingsLoading }) {
   const qc = useQueryClient();
 
-  const thresholdRaw = settings?.duplicate_embedding_threshold?.value ?? 0.90;
-  const timeoutRaw   = settings?.duplicate_decision_timeout_min?.value ?? 60;
+  const thresholdRaw = settings?.duplicate_embedding_threshold?.value ?? 0.80;
+  const timeoutRaw   = settings?.duplicate_decision_timeout_min?.value ?? 10080;
+  const kiRaw        = settings?.duplicate_ki_pruefung?.value === true;
+  const kiKlasse     = modellwahlAus(settings) === 'einfach' ? 'Einfach & Routine' : 'Voranalyse';
 
   const [threshold, setThreshold] = useState(null);
-  const [timeout, setTimeout]     = useState(null);
+  const [fristStd, setFristStd]   = useState(null);
+  const [ki, setKi]               = useState(null);
   const [saved, setSaved]         = useState(false);
 
   const displayThreshold = threshold !== null ? threshold : Number(thresholdRaw);
-  const displayTimeout   = timeout   !== null ? timeout   : Number(timeoutRaw);
+  const displayFristStd  = fristStd  !== null ? fristStd  : Math.max(1, Math.round(Number(timeoutRaw) / 60));
+  const displayKi        = ki        !== null ? ki        : kiRaw;
+  const fristTage = displayFristStd % 24 === 0 ? displayFristStd / 24 : null;
 
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (threshold !== null) await api.settings.update('duplicate_embedding_threshold', threshold);
-      if (timeout   !== null) await api.settings.update('duplicate_decision_timeout_min', timeout);
+      if (fristStd  !== null) await api.settings.update('duplicate_decision_timeout_min', Math.max(1, Math.round(fristStd)) * 60);
+      if (ki        !== null) await api.settings.update('duplicate_ki_pruefung', ki);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['settings'] });
       setThreshold(null);
-      setTimeout(null);
+      setFristStd(null);
+      setKi(null);
       setSaved(true);
       globalThis.setTimeout(() => setSaved(false), 3000);
     },
   });
 
-  const hasChanges = threshold !== null || timeout !== null;
+  const hasChanges = threshold !== null || fristStd !== null || ki !== null;
+  useUngespeichert('duplikate', {
+    aktiv: hasChanges, label: 'Duplikat-Erkennung',
+    speichern: () => saveMutation.mutateAsync(), verwerfen: () => { setThreshold(null); setFristStd(null); setKi(null); },
+  });
 
   return (
     <Card>
@@ -2708,7 +2841,7 @@ function DuplicateDetectionCard({ settings, settingsLoading }) {
           <CardTitle className="text-base">Duplikat-Erkennung</CardTitle>
         </div>
         <CardDescription className="text-xs pt-1">
-          Cosinus-Ähnlichkeits-Schwelle und Entscheidungs-Timeout für die embedding-basierte Duplikaterkennung. Bei bewusst eingerichteter experimenteller Discord-Anbindung gilt: Bot-Konfiguration → native Buttons, sonst Magic-Link.
+          Neue Dokumente werden mit inhaltlich ähnlichen Dokumenten im Archiv verglichen. Ein Duplikatverdacht erscheint unter Import → Eingang und wird dort im Vergleich alt/neu entschieden.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4 pt-0">
@@ -2730,23 +2863,32 @@ function DuplicateDetectionCard({ settings, settingsLoading }) {
                 className="w-full"
               />
               <p className="text-xs text-muted-foreground">
-                Dokumente mit Ähnlichkeit ≥ {(displayThreshold * 100).toFixed(0)}% werden als Duplikat-Kandidaten gewertet.
+                Dokumente mit Ähnlichkeit ab {(displayThreshold * 100).toFixed(0)}% werden als Kandidaten geprüft. Ein Verdacht entsteht ohne KI nur, wenn Briefdatum, fremdes Zeichen und Betrag übereinstimmen.
               </p>
+            </div>
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <p className="text-sm font-medium">KI-Duplikatprüfung in Zweifelsfällen</p>
+                <p className="text-xs text-muted-foreground">
+                  Stimmt nur ein Teil der Merkmale überein (bei Rezepten immer), vergleicht die KI das neue Dokument mit bis zu drei Kandidaten. Dafür wird je Zweifelsfall ein kostenpflichtiger Aufruf der Modellklasse „{kiKlasse}“ ausgelöst. Ist die KI nicht sicher, gilt das Dokument nicht als Duplikat.
+                </p>
+              </div>
+              <Switch checked={displayKi} onCheckedChange={(an) => setKi(an)} label="KI-Duplikatprüfung in Zweifelsfällen" />
             </div>
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">
-                Entscheidungs-Timeout (Minuten)
+                Entscheidungsfrist (Stunden)
               </label>
               <input
                 type="number"
-                min={5}
-                max={1440}
-                value={displayTimeout}
-                onChange={(e) => setTimeout(Number(e.target.value))}
+                min={1}
+                max={720}
+                value={displayFristStd}
+                onChange={(e) => setFristStd(Number(e.target.value))}
                 className="h-8 w-28 rounded-md border border-input bg-background px-2 text-sm"
               />
               <p className="text-xs text-muted-foreground">
-                Nach {displayTimeout} Minuten ohne Entscheidung: Auto-Replace wenn bessere Qualität, sonst Auto-Discard.
+                Ohne Entscheidung innerhalb von {fristTage ? `${fristTage} ${fristTage === 1 ? 'Tag' : 'Tagen'}` : `${displayFristStd} Stunden`} werden beide Dokumente behalten. Es wird nie selbsttätig etwas verworfen.
               </p>
             </div>
             <div className="flex items-center gap-3">
@@ -2770,18 +2912,23 @@ function AllgemeinTab() {
 
   const [form, setForm]   = useState(null);
   const [saved, setSaved] = useState(false);
+  const stand = useAusgangsstand(form);
+  const setFormAusgang = (f) => { stand.merken(f); setForm(f); };
   const [dbStatus, setDbStatus] = useState(null);
   const [dbTesting, setDbTesting] = useState(false);
 
   useEffect(() => {
     if (settings && form === null) {
       const vis = settings.nav_visibility?.value || {};
-      setForm({
+      setFormAusgang({
         instance_name:  settings.instance_name?.value ?? '',
         app_host:       settings.app_host?.value ?? '',
         show_salden:    vis.salden  !== false,
         show_logs:      vis.logs    !== false,
         pipeline_max_parallel: Number(settings.pipeline_max_parallel?.value ?? 3),
+        ki_parallel_lokal: settings.ki_parallel_lokal?.value ?? '',
+        ki_parallel_cloud: settings.ki_parallel_cloud?.value ?? '',
+        rechnen_parallel: settings.rechnen_parallel?.value ?? '',
         salden_quellen_aktiv: settings.salden_quellen_aktiv?.value === true,
       });
     }
@@ -2794,13 +2941,26 @@ function AllgemeinTab() {
       await api.settings.update('nav_visibility', { salden: form.show_salden, logs: form.show_logs });
       const n = Math.max(1, Math.min(10, Math.trunc(Number(form.pipeline_max_parallel)) || 3));
       await api.settings.update('pipeline_max_parallel', n);
+      for (const key of ['ki_parallel_lokal', 'ki_parallel_cloud', 'rechnen_parallel']) {
+        const roh = String(form[key] ?? '').trim();
+        const vorher = String(settings?.[key]?.value ?? '').trim();
+        if (roh === vorher) continue;
+        await api.settings.update(key, roh === '' ? null : Math.max(1, Math.min(16, Math.trunc(Number(roh)) || 1)));
+      }
       await api.settings.update('salden_quellen_aktiv', form.salden_quellen_aktiv);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['settings'] });
+      // Instanzname und Menüsichtbarkeit liest die Seitenleiste aus den öffentlichen Settings.
+      qc.invalidateQueries({ queryKey: ['settings-public'] });
+      stand.merken(form);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
     },
+  });
+  useUngespeichert('allgemein', {
+    aktiv: stand.geaendert, label: 'Allgemein',
+    speichern: () => saveMutation.mutateAsync(), verwerfen: () => setForm(null),
   });
 
   async function testDb() {
@@ -2924,6 +3084,28 @@ function AllgemeinTab() {
             />
             <p className="text-xs text-muted-foreground">Standard: 3. Höhere Werte beschleunigen Bursts, belasten aber RAM/CPU/OneDrive- und KI-API stärker.</p>
           </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {[
+              ['ki_parallel_lokal', 'KI auf diesem Rechner', 'Standard: 1'],
+              ['ki_parallel_cloud', 'KI-Dienste im Internet', 'Standard: 6'],
+              ['rechnen_parallel', 'Bildverarbeitung', 'Standard: Kerne − 1'],
+            ].map(([key, label, hinweis]) => (
+              <div key={key} className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{label}</label>
+                <Input
+                  type="number" min="1" max="16" step="1" placeholder={hinweis}
+                  value={form[key]}
+                  onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                  className="h-9 text-sm w-24"
+                />
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Gleichzeitige Aufrufe je KI-Dienst und je rechenintensivem Schritt, unabhängig davon,
+            wie viele Dokumente laufen. Eine KI auf diesem Rechner oder im Heimnetz schafft meist
+            nur einen Aufruf zur Zeit. Leer lassen für den Standard.
+          </p>
         </CardContent>
       </Card>
 
@@ -2969,6 +3151,8 @@ function ScannerTab() {
 
   const [form, setForm]   = useState(null);
   const [saved, setSaved] = useState(false);
+  const stand = useAusgangsstand(form);
+  const setFormAusgang = (f) => { stand.merken(f); setForm(f); };
 
   // Fähigkeitsermittlung. Freiwillig – ohne sie gilt der bisherige Stand.
   // Das Gerät hat gerade live geantwortet, was es kann – die Ausstattung
@@ -2985,6 +3169,7 @@ function ScannerTab() {
       if (res.persistiert !== false && res.ausstattung) {
         setForm((prev) => (prev ? { ...prev, ...res.ausstattung } : prev));
         setAngewendeteAusstattung(res.ausstattung);
+        stand.merkeTeil(res.ausstattung);
       }
       qc.invalidateQueries({ queryKey: ['settings'] });
       qc.invalidateQueries({ queryKey: ['settings-public'] });
@@ -3021,6 +3206,7 @@ function ScannerTab() {
     mutationFn: () => api.settings.update('scanner_device_url', ''),
     onSuccess: () => {
       setForm((prev) => (prev ? { ...prev, scanner_device_url: '' } : prev));
+      stand.merkeTeil({ scanner_device_url: '' });
       setLokaleCapabilities(null);
       setCapabilitiesPersistiert(true);
       setAngewendeteAusstattung(null);
@@ -3033,13 +3219,14 @@ function ScannerTab() {
 
   useEffect(() => {
     if (settings && form === null) {
-      setForm({
+      setFormAusgang({
         scanner_device_url:             settings.scanner_device_url?.value             ?? '',
         scanner_default_dpi:            settings.scanner_default_dpi?.value            ?? 300,
         scanner_default_mode:           settings.scanner_default_mode?.value           ?? 'gray',
         scanner_has_adf:                settings.scanner_has_adf?.value                ?? false,
         scanner_supports_a3:            settings.scanner_supports_a3?.value            ?? false,
         scanner_adf_duplex:             settings.scanner_adf_duplex?.value             ?? false,
+        stapel_ohne_rueckfrage:         settings.stapel_ohne_rueckfrage?.value         ?? true,
         cleaner_ocr_enabled:            settings.cleaner_ocr_enabled?.value            ?? true,
         cleaner_ocr_langs:              settings.cleaner_ocr_langs?.value              ?? 'deu',
         cleaner_ocr_jobs:               settings.cleaner_ocr_jobs?.value               ?? 1,
@@ -3061,7 +3248,7 @@ function ScannerTab() {
     mutationFn: async () => {
       const keys = [
         'scanner_device_url', 'scanner_default_dpi', 'scanner_default_mode',
-        'scanner_has_adf', 'scanner_supports_a3', 'scanner_adf_duplex',
+        'scanner_has_adf', 'scanner_supports_a3', 'scanner_adf_duplex', 'stapel_ohne_rueckfrage',
         'cleaner_ocr_enabled', 'cleaner_ocr_langs', 'cleaner_ocr_jobs',
         'cleaner_blank_mean_min', 'cleaner_blank_stddev_max',
         'cleaner_blank_mean_min_single', 'cleaner_blank_stddev_max_single',
@@ -3073,9 +3260,18 @@ function ScannerTab() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['settings'] });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 3000);
+      // Eine neue Scanner-Adresse schaltet den Scan-Dienst serverseitig ein;
+      // der Zustand des Profils kommt über den Heartbeat des Host-Agenten.
+      stand.merken(form);
+      setSaved(agent?.scannerProfilAktiv === false && form.scanner_device_url ? 'dienst' : true);
+      updates.refetch();
+      setTimeout(() => setSaved(false), 8000);
     },
+  });
+  useUngespeichert('scanner', {
+    aktiv: stand.geaendert, label: 'Scanner',
+    speichern: () => saveMutation.mutateAsync(),
+    verwerfen: () => { setForm(null); setAngewendeteAusstattung(null); },
   });
 
   function field(key) {
@@ -3124,7 +3320,7 @@ function ScannerTab() {
                     && (treffer.capabilities?.quellen?.flatbed?.maxHoeheMm || 0) >= 420,
                 };
                 setForm((prev) => ({ ...prev, scanner_device_url: treffer.url, ...ausstattung }));
-                setLokaleCapabilities(treffer.capabilities || null);
+                setLokaleCapabilities(treffer.capabilities ? { ermitteltAm: new Date().toISOString(), ...treffer.capabilities } : null);
                 setCapabilitiesPersistiert(false);
                 setAngewendeteAusstattung(ausstattung);
               }} />
@@ -3257,8 +3453,9 @@ function ScannerTab() {
             {capabilities ? (
               <div className="space-y-1.5 text-xs">
                 <p className="text-muted-foreground">
-                  {capabilities.geraet || 'Gerät'} · ermittelt am{' '}
-                  {new Date(capabilities.ermitteltAm).toLocaleString('de-DE')}
+                  {capabilities.geraet || 'Gerät'}
+                  {capabilities.ermitteltAm && !Number.isNaN(Date.parse(capabilities.ermitteltAm))
+                    && <> · ermittelt am {new Date(capabilities.ermitteltAm).toLocaleString('de-DE')}</>}
                 </p>
                 {Object.entries(capabilities.quellen || {}).map(([quelle, q]) => (
                   <div key={quelle} className="flex flex-wrap gap-x-2 gap-y-0.5">
@@ -3343,6 +3540,25 @@ function ScannerTab() {
                 className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${form.scanner_adf_duplex ? 'bg-primary' : 'bg-muted'} ${!form.scanner_has_adf ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${form.scanner_adf_duplex ? 'translate-x-6' : 'translate-x-1'}`} />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between gap-4 py-1">
+              <div>
+                <p className="text-sm font-medium">Eindeutige Dokumentenstapel ohne Rückfrage verarbeiten</p>
+                <p className="text-xs text-muted-foreground">
+                  Ist die KI bei jeder Trennstelle sicher, fehlt kein Blatt und gibt es keine Anlagen oder Beilagen, geht der Dokumentenstapel nach 15 Sekunden Countdown von selbst weiter. Sonst wartet er im Eingang auf deine Prüfung.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={!form.scanner_has_adf}
+                aria-pressed={form.stapel_ohne_rueckfrage}
+                aria-label="Eindeutige Dokumentenstapel ohne Rückfrage verarbeiten"
+                onClick={() => setForm((prev) => ({ ...prev, stapel_ohne_rueckfrage: !prev.stapel_ohne_rueckfrage }))}
+                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${form.stapel_ohne_rueckfrage ? 'bg-primary' : 'bg-muted'} ${!form.scanner_has_adf ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${form.stapel_ohne_rueckfrage ? 'translate-x-6' : 'translate-x-1'}`} />
               </button>
             </div>
           </div>
@@ -3485,7 +3701,9 @@ function ScannerTab() {
         <Button size="sm" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
           {saveMutation.isPending ? 'Speichern…' : 'Einstellungen speichern'}
         </Button>
-        {saved && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle className="h-3.5 w-3.5" />Gespeichert – Scanner übernimmt innerhalb 30 s</span>}
+        {saved && <span className="text-xs text-emerald-600 flex items-center gap-1"><CheckCircle className="h-3.5 w-3.5" />{saved === 'dienst'
+          ? 'Gespeichert – der Scan-Dienst wird eingeschaltet (in der Regel innerhalb einer Minute).'
+          : 'Gespeichert – Scanner übernimmt innerhalb 30 s'}</span>}
       </div>
     </div>
   );
@@ -3647,6 +3865,35 @@ function BenachrichtigungenTab() {
       onSuccess: () => setHourDirty(false),
     });
   }
+
+  useUngespeichert('push-zeiten', {
+    aktiv: hourDirty || offsetDirty, label: 'Push-Erinnerungen',
+    speichern: async () => {
+      const upd = {};
+      if (hourDirty) upd.push_reminder_hour = Number(reminderHour);
+      if (offsetDirty) upd.push_payment_offset_days = Number(paymentOffset);
+      if (offsetDirty && !(Number.isInteger(upd.push_payment_offset_days) && upd.push_payment_offset_days >= 0 && upd.push_payment_offset_days <= 60)) {
+        throw new Error('Vorlauf für Zahlungen: bitte eine ganze Zahl von 0 bis 60 eintragen.');
+      }
+      await prefsMutation.mutateAsync(upd);
+      setHourDirty(false); setOffsetDirty(false);
+    },
+    verwerfen: () => {
+      setHourDirty(false); setOffsetDirty(false);
+      setReminderHour(prefs?.push_reminder_hour ?? 9); setPaymentOffset(prefs?.push_payment_offset_days ?? 3);
+    },
+  });
+
+  const discordBotOffen = !!(discordBotToken.trim() || discordChannelId.trim());
+  useUngespeichert('discord', {
+    aktiv: discordBotOffen || !!discordWebhook.trim(), label: 'Discord',
+    speichern: async () => {
+      if (!discordRisikoBestaetigt) throw new Error('Discord: bitte zuerst den Risikohinweis in der Karte bestätigen.');
+      if (discordBotOffen) await discordBotMutation.mutateAsync();
+      if (discordWebhook.trim()) await discordMutation.mutateAsync();
+    },
+    verwerfen: () => { setDiscordWebhook(''); setDiscordBotToken(''); setDiscordChannelId(''); },
+  });
 
   // Konvertiert das HH:MM-Eingabefeld zu einer Stunden-Zahl. Minuten werden ignoriert.
   function onHourPickerChange(e) {
@@ -4170,6 +4417,11 @@ function VerbleibKategorieRow({ kategorie }) {
       onSuccess: () => setEditing(false),
     });
   }
+  useUngespeichert(`verbleib-${kategorie.id}`, {
+    aktiv: editing && (editName !== kategorie.name || editIcon !== kategorie.icon), label: `Verbleib „${kategorie.name}“`,
+    speichern: async () => { await update.mutateAsync({ id: kategorie.id, name: editName, icon: editIcon }); setEditing(false); },
+    verwerfen: () => { setEditing(false); setEditName(kategorie.name); setEditIcon(kategorie.icon); },
+  });
 
   function handleArchive() {
     if (!window.confirm(
@@ -4236,6 +4488,11 @@ function NewVerbleibKategorieForm({ onDone }) {
   const [name, setName] = useState('');
   const [icon, setIcon] = useState('Folder');
   const create = useCreateVerbleibKategorie();
+  useUngespeichert('verbleib-neu', {
+    aktiv: !!name.trim(), label: 'Neue Verbleib-Kategorie',
+    speichern: async () => { await create.mutateAsync({ name: name.trim(), icon }); setName(''); setIcon('Folder'); onDone?.(); },
+    verwerfen: () => { setName(''); setIcon('Folder'); onDone?.(); },
+  });
 
   function handleSubmit(e) {
     e.preventDefault();
@@ -4499,6 +4756,12 @@ function McpTab() {
       qc.invalidateQueries({ queryKey: ['mcp-tokens'] });
     },
   });
+  // Ein neues Token ist nur einmal sichtbar; erzeugt wird es deshalb nur in der Karte.
+  useUngespeichert('mcp-token', {
+    aktiv: !!(description.trim() || expiresAt), label: 'Neues MCP-Token',
+    speichern: async () => { throw new Error('Das Token bitte in der Karte erzeugen – es wird nur einmal angezeigt.'); },
+    verwerfen: () => { setDescription(''); setExpiresAt(''); },
+  });
 
   const revokeMut = useMutation({
     mutationFn: (id) => api.mcpTokens.revoke(id),
@@ -4666,6 +4929,16 @@ function KontoTab() {
     onError: (err) => setError(err.message || 'Passwort konnte nicht geändert werden.'),
   });
 
+  useUngespeichert('konto-passwort', {
+    aktiv: !!(oldPassword || newPassword || confirm), label: 'Passwort ändern',
+    speichern: async () => {
+      if (!oldPassword || !newPassword) throw new Error('Bitte alle Passwortfelder ausfüllen.');
+      if (newPassword !== confirm) throw new Error('Neues Passwort und Bestätigung stimmen nicht überein.');
+      await changeMut.mutateAsync();
+    },
+    verwerfen: () => { setOldPassword(''); setNewPassword(''); setConfirm(''); setError(''); },
+  });
+
   const submit = (event) => {
     event.preventDefault();
     setError('');
@@ -4746,6 +5019,7 @@ function ImportFolgenKarte() {
 
 function SettingsTabBar({ tab, onTabChange }) {
   const { isAdmin, canWrite, istEingeschraenkt } = useAuth();
+  const wechsle = useWechsel();
   const adminTabs = [
     { id: 'konto',              label: 'Persönlich',         icon: UserRound },
     { id: 'allgemein',          label: 'Allgemein',          icon: Globe    },
@@ -4761,6 +5035,7 @@ function SettingsTabBar({ tab, onTabChange }) {
     { id: 'verbleib',           label: 'Verbleib',           icon: Folder   },
     { id: 'drucker',            label: 'Drucker',            icon: Printer  },
     { id: 'mcp',                label: 'MCP-Zugriff',        icon: Plug     },
+    { id: 'stack',              label: 'Stack',              icon: Server   },
     { id: 'backup',             label: 'Backup',             icon: Archive  },
     { id: 'benachrichtigungen', label: 'Benachrichtigungen', icon: Bell     },
   ];
@@ -4772,7 +5047,7 @@ function SettingsTabBar({ tab, onTabChange }) {
   return (
     <div className="flex flex-wrap gap-1 border-b border-border pb-2">
       {tabs.map(({ id, label, icon: Icon }) => (
-        <button key={id} onClick={() => onTabChange(id)}
+        <button key={id} onClick={() => { if (id !== tab) wechsle(() => onTabChange(id)); }}
           className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-md transition-colors whitespace-nowrap
             ${tab === id ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
         >
@@ -4787,7 +5062,12 @@ function SettingsTabBar({ tab, onTabChange }) {
 // ── Main Page ────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
+  return <UngespeichertProvider><SettingsSeite /></UngespeichertProvider>;
+}
+
+function SettingsSeite() {
   const qc = useQueryClient();
+  const wechsle = useWechsel();
   const navigate = useNavigate();
   const { isAdmin, canWrite, istEingeschraenkt } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -4844,7 +5124,7 @@ export default function SettingsPage() {
           <Badge variant="secondary" className="text-[10px]">{updateInfo.verfuegbar} verfügbar</Badge>
         )}
         {isAdmin && (
-          <Button variant="outline" size="sm" className="ml-auto h-8" onClick={() => einrichtungOeffnen.mutate()} disabled={einrichtungOeffnen.isPending}>
+          <Button variant="outline" size="sm" className="ml-auto h-8" onClick={() => wechsle(() => einrichtungOeffnen.mutate())} disabled={einrichtungOeffnen.isPending}>
             <Wand2 className="h-3.5 w-3.5 mr-1.5" />Einrichtung erneut öffnen
           </Button>
         )}
@@ -4861,7 +5141,8 @@ export default function SettingsPage() {
       {tab === 'verbleib'           && isAdmin && <VerbleibTab />}
       {tab === 'drucker'            && isAdmin && <DruckerTab />}
       {tab === 'mcp'                && canWrite && <McpTab />}
-      {tab === 'backup'             && isAdmin && <BackupTab />}
+      {tab === 'stack'              && isAdmin && <StackCard />}
+      {tab === 'backup'             && isAdmin && <BackupTab backend={settings?.storage_backend?.value} />}
       {tab === 'benachrichtigungen' && !istEingeschraenkt && <BenachrichtigungenTab />}
     </div>
   );

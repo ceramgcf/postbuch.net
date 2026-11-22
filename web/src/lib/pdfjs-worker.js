@@ -7,8 +7,6 @@
  * sie wegen nosniff ab (siehe web/nginx.conf).
  *
  * Ein Import genügt – die Zuweisung ist ein idempotenter Modul-Seiteneffekt.
- * PdfPanel.jsx und DokumentViewer.jsx tragen dieselbe Zuweisung noch inline;
- * sie sollen bei Gelegenheit auf dieses Modul umgestellt werden.
  */
 import { pdfjs } from 'react-pdf';
 
@@ -26,10 +24,26 @@ if (!pdfjs.GlobalWorkerOptions.workerSrc) {
  * Die Dateien kopiert web/Dockerfile beim Build aus pdfjs-dist nach
  * public/pdfjs/ (Auslieferung: web/nginx.conf, Block /pdfjs/).
  */
+/**
+ * Ein gemeinsamer Worker für alle Viewer, gestartet beim Laden der Seite.
+ * Ohne ihn startet PDF.js je Dokument einen neuen Worker. Scheitert das ein
+ * einziges Mal – etwa während eines Updates, wenn der Web-Container kurz weg
+ * ist –, schaltet PDF.js für die ganze Sitzung auf den Ersatz-Worker um und
+ * merkt sich auch dessen fehlgeschlagenes Laden: Bis zum Neuladen der Seite
+ * zeigte dann kein Viewer mehr ein PDF. Beim Laden der Seite ist der Server
+ * erreichbar, und der Worker stammt aus demselben Build wie die Oberfläche.
+ * Ein über `worker` übergebener Worker wird beim Schließen eines Dokuments
+ * nicht beendet.
+ */
+const gemeinsamerWorker = typeof window !== 'undefined' && typeof Worker !== 'undefined'
+  ? new pdfjs.PDFWorker({ name: 'postbuch-pdf' })
+  : undefined;
+
 export const PDFJS_DOCUMENT_OPTIONS = Object.freeze({
   withCredentials: true,
   wasmUrl: '/pdfjs/wasm/',
   standardFontDataUrl: '/pdfjs/standard_fonts/',
+  ...(gemeinsamerWorker ? { worker: gemeinsamerWorker } : {}),
 });
 
 export { pdfjs };

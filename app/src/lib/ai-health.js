@@ -14,7 +14,7 @@
 
 import { loadDynamicSettings } from '../config.js';
 import { subscriptionFeatureUnlocked } from './claude-subscription.js';
-import { listProviders, getProvider, modelsUrl, kannDokumentSehen } from './llm/registry.js';
+import { listProviders, getProvider, modelsUrl, kannDokumentSehen, modellAnzeigename } from './llm/registry.js';
 import { MODEL_CLASSES, aktiveModellklassen, modellwahl } from './llm/model-classes.js';
 import { gleichesModell } from './llm/modell-id.js';
 import { guardedFetchJson, clientSafeError, TIMEOUT_PROBE_MS } from './net-guard.js';
@@ -137,7 +137,7 @@ async function modelleVon(settings, providerId, fresh) {
         }
 
         let liste = (d.data || d.models || [])
-          .map((m) => ({ id: m.id || m.name, name: m.id || m.name, created: m.created || 0 }))
+          .map((m) => ({ id: m.id || m.name, name: modellAnzeigename(m.id || m.name, settings, providerId), created: m.created || 0 }))
           .filter((m) => m.id);
 
         // Embedding-Liste IMMER aus der Rohliste, bevor der OpenAI-Chat-Filter
@@ -167,7 +167,21 @@ async function modelleVon(settings, providerId, fresh) {
     // mit einer frei eintragbaren baseUrl wäre der Fehlertext sonst ein
     // generisches HTTP-Lesegerät fürs LAN. Rohtext nur ins Server-Log.
     console.warn('[ai-health] Modell-Listing "%s" fehlgeschlagen:', providerId, e.message);
-    error = clientSafeError(e);
+    // Eingebaute Dienste (llama.cpp) antworten mit 503, solange sie ihr Modell
+    // laden. Das ist kein Fehler der Gegenstelle, sondern ein Zwischenstand.
+    // Ist ihr Container (noch) nicht erreichbar, läuft der Dienst nicht oder
+    // startet gerade. Beides sind keine Fehler der Gegenstelle.
+    const msg = e.message || '';
+    const dienst = prov?.nurEmbedding ? 'Der eingebaute Embedding-Dienst' : 'Die lokale KI';
+    if (prov?.fest && /^HTTP 503\b/.test(msg)) {
+      error = `${prov.nurEmbedding ? 'Der eingebaute Embedding-Dienst lädt gerade sein' : 'Die lokale KI lädt gerade ihr'} Modell. `
+        + 'Den Fortschritt zeigt Einstellungen → Stack; danach den Test wiederholen.';
+    } else if (prov?.fest && /DNS-Auflösung|ENOTFOUND|EAI_AGAIN|ECONNREFUSED|^Verbindung zu .* fehlgeschlagen/.test(msg)) {
+      error = `${dienst} läuft noch nicht. Ist der Dienst unter Einstellungen → Stack eingeschaltet, `
+        + 'startet er womöglich gerade; den Fortschritt zeigt derselbe Reiter.';
+    } else {
+      error = clientSafeError(e);
+    }
   }
 
   const ergebnis = { at: Date.now(), models, embeddingModels, error };
@@ -218,6 +232,14 @@ export async function buildAiHealth({ fresh = false } = {}) {
     // Compose-Profil). Ungewählt ist ein fehlschlagender Abruf kein Defekt;
     // eingerichtet wird er über die Embedding-Karte.
     if (prov.nurEmbedding && prov.fest && settings.llm_embedding?.providerId !== e.id) {
+      berichte[e.id] = { id: e.id, label: e.label, typ: e.typ, caps: e.caps,
+                         configured: true, working: false, ruhend: true, error: null, models: [], embeddingModels: [], benutzt };
+      return;
+    }
+    // Die eingebaute lokale KI ist aus, solange der Agent sie nicht als
+    // eingeschaltet und geladen meldet – kein Defekt, eingeschaltet wird sie
+    // im Reiter Stack.
+    if (prov.fest && !prov.nurEmbedding && !e.aktiv) {
       berichte[e.id] = { id: e.id, label: e.label, typ: e.typ, caps: e.caps,
                          configured: true, working: false, ruhend: true, error: null, models: [], embeddingModels: [], benutzt };
       return;
@@ -283,7 +305,28 @@ export async function buildAiHealth({ fresh = false } = {}) {
     providers: berichte,
     models,
     modellwahl: modellwahl(settings),
+    // Offener Hinweis nach der Umstellung auf zwei Aufgabentypen
+    // (service/aufgabentypen-umstellung.js). Nur in der einfachen Modellwahl.
+    aufgabenUmstellung: settings.llm_aufgaben_umstellung?.offen === true && modellwahl(settings) === 'einfach'
+      ? umstellungMitAktuellemStand(settings) : null,
   };
+}
+
+/**
+ * Der Vermerk ist ein Schnappschuss vom Update. Hat ein anderer Weg den
+ * Aufgabentyp seither geändert (z. B. die Empfehlungs-Automatik), zeigt der
+ * Hinweis das aktuell eingestellte Modell statt des alten Schnappschusses.
+ */
+function umstellungMitAktuellemStand(settings) {
+  const v = { ...settings.llm_aufgaben_umstellung };
+  for (const k of ['routine', 'komplex']) {
+    const jetzt = settings[`llm_aufgabe_${k}`];
+    if (!v[k] || !jetzt?.model) continue;
+    if (jetzt.model !== v[k].model || jetzt.providerId !== v[k].providerId) {
+      v[k] = { providerId: jetzt.providerId, model: jetzt.model, quelle: 'geaendert' };
+    }
+  }
+  return v;
 }
 
 function kompakt(b) {

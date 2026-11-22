@@ -5,6 +5,7 @@ import { access, unlink } from 'fs/promises';
 import { constants } from 'fs';
 import { werkseinstellungFuerProvider } from './lib/llm/empfehlungs-standard.js';
 import { MODEL_CLASSES } from './lib/llm/model-classes.js';
+import { LOKAL_ID, LOKAL_MODELL } from './lib/llm/registry.js';
 import { EINGEBAUTES_EMBEDDING } from './lib/embedding-eingebaut.js';
 
 // Create a standalone client (don't use shared pool from db.js which has search_path issues)
@@ -67,8 +68,11 @@ const scannerDefaults = [
   { key: 'cleaner_content_threshold',     value: 200 },
   { key: 'cleaner_content_denoise_min_px', value: 10 },
   { key: 'pipeline_max_parallel',         value: 3 },
+  // Dokumentenstapel: eindeutige Stapel nach 15 s Countdown ohne Rückfrage aufteilen.
+  { key: 'stapel_ohne_rueckfrage',        value: true },
   { key: 'duplicate_embedding_threshold', value: 0.80 },
-  { key: 'duplicate_decision_timeout_min', value: 60 },
+  { key: 'duplicate_decision_timeout_min', value: 10080 },
+  { key: 'duplicate_ki_pruefung', value: false },
   { key: 'llm_cache_mode_enabled',        value: false },
   { key: 'llm_cache_mode_auto',           value: false },
   { key: 'llm_cache_mode_auto_tier',      value: 'mittel' },
@@ -236,9 +240,9 @@ for (const { key, value } of scannerDefaults) {
 // Ein Restore bringt die _settings der Sicherung mit; fehlt dort der Schlüssel,
 // greift beim nächsten Start dieselbe Erkennung.
 //
-// Das Analysemodell einer bestehenden Instanz startet mit ihrem Modell für
-// „Leicht", damit ein späteres Umschalten nicht auf einen Provider zeigt, den
-// die Instanz gar nicht nutzt.
+// Die beiden Aufgabentypen der einfachen Wahl leitet bei einer bestehenden
+// Instanz die Umstellung in service/aufgabentypen-umstellung.js aus den
+// bisherigen Modellen ab; die Werkseinstellung unten lässt sie dort aus.
 try {
   await client.query(`
     INSERT INTO _settings (key, value)
@@ -249,11 +253,6 @@ try {
                   OR EXISTS (SELECT 1 FROM postbuch)
                 THEN '"gestaffelt"'::jsonb ELSE '"einfach"'::jsonb END
     WHERE NOT EXISTS (SELECT 1 FROM _settings WHERE key = 'llm_modellwahl')
-  `);
-  await client.query(`
-    INSERT INTO _settings (key, value)
-    SELECT 'llm_model_analyse', value FROM _settings WHERE key = 'llm_model_leicht'
-    ON CONFLICT (key) DO NOTHING
   `);
 } catch (err) {
   console.error('[seed] FAILED llm_modellwahl:', err.message);
@@ -280,8 +279,17 @@ const seedProvider = process.env.ANTHROPIC_API_KEY ? 'anthropic'
   : process.env.OPENAI_API_KEY ? 'openai'
   : null;
 const seedModell = seedProvider ? werkseinstellungFuerProvider(seedProvider) : null;
+// Bestehende Instanz (schon ein Modell gespeichert)? Dann bekommen die beiden
+// Aufgabentypen hier keine Werkseinstellung: sie stammen aus der Umstellung,
+// die die bisher gewählten Modelle auswertet.
+const MODELLSCHLUESSEL_ALT = MODEL_CLASSES.filter((c) => c.modus !== 'einfach').map((c) => c.settingKey)
+  .concat('llm_model_analyse');
+const bestehendeModellwahl = (await client.query(
+  'SELECT EXISTS (SELECT 1 FROM _settings WHERE key = ANY($1)) AS da', [MODELLSCHLUESSEL_ALT],
+)).rows[0]?.da === true;
+const ohneUmstellung = (cls) => !(bestehendeModellwahl && cls.modus === 'einfach');
 if (seedModell) {
-  for (const { settingKey } of MODEL_CLASSES) {
+  for (const { settingKey } of MODEL_CLASSES.filter(ohneUmstellung)) {
     // Die Nachlese bleibt ungesetzt und erbt zur Laufzeit das Analyse- bzw.
     // Schwierig-Modell (loadDynamicSettings). Sonst bekäme eine bestehende
     // Instanz beim Update hier das günstige Werksmodell als Nachleser.
@@ -293,6 +301,31 @@ if (seedModell) {
       [settingKey, JSON.stringify({ providerId: seedModell.providerId, model: seedModell.model })]
     );
     console.log(`[seed] Modell-Werkseinstellung gesetzt (${seedProvider}):`, settingKey, seedModell.model);
+  }
+}
+
+// „Komplett lokal“ im Installer (POSTBUCH_KI=lokal): Alle Sprachmodell-
+// Aufgaben laufen auf der eingebauten lokalen KI – aber nur auf einer frischen
+// Instanz und nur, wo noch nichts gewählt ist. Bis der Host-Agent das Modell
+// geladen hat, ist der Provider inaktiv; Dokumente warten so lange in der
+// Warteschlange.
+if (!seedModell && (process.env.POSTBUCH_KI || '').trim() === 'lokal') {
+  try {
+    const frisch = (await client.query('SELECT NOT EXISTS (SELECT 1 FROM postbuch) AS frisch')).rows[0]?.frisch === true;
+    if (frisch) {
+      for (const { settingKey } of MODEL_CLASSES.filter(ohneUmstellung)) {
+        if (settingKey === 'llm_model_nachlese') continue;
+        const r = await client.query(
+          'INSERT INTO _settings (key, value) VALUES ($1, $2::jsonb) ON CONFLICT (key) DO NOTHING',
+          [settingKey, JSON.stringify({ providerId: LOKAL_ID, model: LOKAL_MODELL })],
+        );
+        if (r.rowCount > 0) console.log('[seed] Modell auf lokale KI gesetzt:', settingKey);
+      }
+    } else {
+      console.log('[seed] POSTBUCH_KI=lokal ignoriert — Instanz ist nicht mehr frisch.');
+    }
+  } catch (err) {
+    console.error('[seed] POSTBUCH_KI-Seed fehlgeschlagen:', err.message);
   }
 }
 
@@ -394,7 +427,7 @@ try {
 //
 // Rückbaupfad: UPDATE postbuch._settings SET value = '"onedrive"'::jsonb
 //              WHERE key = 'storage_backend';
-const STORAGE_BACKENDS = ['onedrive', 'nextcloud'];  // muss zu BACKENDS in lib/storage/index.js passen
+const STORAGE_BACKENDS = ['onedrive', 'nextcloud', 'lokal'];  // muss zu BACKENDS in lib/storage/index.js passen
 try {
   const gewuenscht = (process.env.STORAGE_BACKEND || '').trim();
   if (gewuenscht) {

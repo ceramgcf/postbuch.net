@@ -30,6 +30,7 @@ import sys
 ALIGN = 65536
 # Feldnummern laut onnx.proto
 MODEL_GRAPH = 7
+MODEL_METADATA_PROPS = 14
 GRAPH_INITIALIZER = 5
 TENSOR_RAW_DATA = 9
 TENSOR_EXTERNAL_DATA = 13
@@ -90,9 +91,9 @@ def laengenfeld(nummer, nutz):
     return kodiere_varint((nummer << 3) | 2) + kodiere_varint(len(nutz)) + nutz
 
 
-def eintrag(schluessel, wert):
+def eintrag(nummer, schluessel, wert):
     nutz = laengenfeld(1, schluessel.encode()) + laengenfeld(2, wert.encode())
-    return laengenfeld(TENSOR_EXTERNAL_DATA, nutz)
+    return laengenfeld(nummer, nutz)
 
 
 def main():
@@ -129,14 +130,16 @@ def main():
                 pos_daten += luecke
                 laenge = roh[1] - roh[0]
                 daten.write(memoryview(buf)[roh[0]:roh[1]])
-                rest += eintrag("location", datei)
-                rest += eintrag("offset", str(pos_daten))
-                rest += eintrag("length", str(laenge))
+                rest += eintrag(TENSOR_EXTERNAL_DATA, "location", datei)
+                rest += eintrag(TENSOR_EXTERNAL_DATA, "offset", str(pos_daten))
+                rest += eintrag(TENSOR_EXTERNAL_DATA, "length", str(laenge))
                 rest += kodiere_varint(TENSOR_DATA_LOCATION << 3) + kodiere_varint(EXTERNAL)
                 graph += laengenfeld(GRAPH_INITIALIZER, bytes(rest))
                 pos_daten += laenge
                 ausgelagert += 1
             modell += laengenfeld(MODEL_GRAPH, bytes(graph))
+    modell += eintrag(MODEL_METADATA_PROPS, "postbuch.net.modification",
+                      f"postbuch.net externalized initializer data to {datei}; graph operations and weight values unchanged.")
     with open(ziel, "wb") as f:
         f.write(modell)
     print(f"{ausgelagert} Gewichte ausgelagert, {pos_daten // 1048576} MB extern, "

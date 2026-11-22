@@ -11,7 +11,9 @@
  *     die Anzeige daraus korrekt.
  *   • Fehlgeschlagene Anfragen werden gezählt, nicht angezeigt. Erst wenn
  *     `UNERREICHBAR_SCHWELLE` Versuche in Folge scheitern, geht die Anzeige in
- *     „Anwendung startet neu …" – und selbst das ist kein Fehler.
+ *     „Anwendung startet neu …" – und selbst das ist kein Fehler. Erst nach
+ *     `KEIN_NEUSTART_MS` ohne Antwort meldet `langeUnerreichbar`, dass die
+ *     neue Version vermutlich nicht startet.
  *   • Der Timeout ist großzügig: ein vite-Build im Safe-Mode auf einem RPi kann
  *     25+ Minuten dauern.
  */
@@ -25,11 +27,22 @@ const UNERREICHBAR_SCHWELLE = 3;
 export const NICHT_ABGEHOLT_MS = 3 * 60 * 1000;
 /** Nach dieser Zeit ohne Endstatus gibt das UI auf und verweist aufs Log. */
 export const LAUF_TIMEOUT_MS = 60 * 60 * 1000;
+/**
+ * So lange darf die Anwendung nach dem Containerwechsel schweigen, bevor der
+ * Dialog den Rückweg zeigt. Der Build läuft vorher bei laufender Anwendung,
+ * ein normaler Neustart dauert Sekunden bis wenige Minuten. Nur der Umzug auf
+ * eine neue PostgreSQL-Hauptversion hält die Anwendung länger an.
+ */
+export const KEIN_NEUSTART_MS = 10 * 60 * 1000;
+const KEIN_NEUSTART_DATENBANK_MS = 30 * 60 * 1000;
 
 export function useUpdateStatus(aktiv) {
   const [daten, setDaten] = useState(null);
   const [unerreichbar, setUnerreichbar] = useState(false);
+  const [langeUnerreichbar, setLangeUnerreichbar] = useState(false);
   const fehlerZaehler = useRef(0);
+  const unerreichbarSeit = useRef(null);
+  const letztePhase = useRef(null);
 
   useEffect(() => {
     if (!aktiv) return undefined;
@@ -40,7 +53,10 @@ export function useUpdateStatus(aktiv) {
         const d = await api.updates.get();
         if (abgebrochen) return;
         fehlerZaehler.current = 0;
+        unerreichbarSeit.current = null;
+        letztePhase.current = d?.lauf?.phase ?? null;
         setUnerreichbar(false);
+        setLangeUnerreichbar(false);
         setDaten(d);
       } catch {
         if (abgebrochen) return;
@@ -48,6 +64,9 @@ export function useUpdateStatus(aktiv) {
         // Kein setDaten(null): die letzte bekannte Wahrheit bleibt stehen,
         // sonst flackert die Anzeige bei jedem Container-Neustart auf leer.
         if (fehlerZaehler.current >= UNERREICHBAR_SCHWELLE) setUnerreichbar(true);
+        unerreichbarSeit.current ??= Date.now();
+        const grenze = letztePhase.current === 'datenbank' ? KEIN_NEUSTART_DATENBANK_MS : KEIN_NEUSTART_MS;
+        if (Date.now() - unerreichbarSeit.current > grenze) setLangeUnerreichbar(true);
       }
     }
 
@@ -56,7 +75,7 @@ export function useUpdateStatus(aktiv) {
     return () => { abgebrochen = true; clearInterval(id); };
   }, [aktiv]);
 
-  return { daten, unerreichbar };
+  return { daten, unerreichbar, langeUnerreichbar };
 }
 
 /**
@@ -74,7 +93,11 @@ export function leiteLaufPhaseAb(daten, unerreichbar) {
   if (!daten) return { art: 'laden', text: 'Lade …' };
 
   if (lauf?.status === 'laeuft') {
-    return { art: 'laeuft', text: phasenText(lauf.phase), phase: lauf.phase };
+    // Die Phasen sind die des Installers. Host-Aufträge (Modell der lokalen KI,
+    // Ablage, Dienste) bringen eine eigene Meldung mit; „download“ heißt dort
+    // Modell laden, nicht neue Version.
+    const text = lauf.typ && lauf.typ !== 'update' && lauf.meldung ? lauf.meldung : phasenText(lauf.phase);
+    return { art: 'laeuft', text, phase: lauf.phase };
   }
   if (daten.anforderung) {
     const seit = daten.anforderung.angefordertAm ? Date.parse(daten.anforderung.angefordertAm) : NaN;

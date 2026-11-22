@@ -53,7 +53,7 @@ function idAusLabel(label, vergeben) {
 export default function ProviderDialog({
   open, onClose, provider, presets, capKeys, builtinIds, vergebeneIds,
   allowPrivateGlobal, rasterDefault = 8, rasterGrenze = 32,
-  maxOutMin = 256, maxOutGrenze = 200000, onSaved,
+  maxOutMin = 256, maxOutGrenze = 200000, kontextMin = 4096, kontextGrenze = 200000, onSaved,
 }) {
   const neu = !provider;
   const builtin = !!provider && builtinIds.includes(provider.id);
@@ -66,6 +66,7 @@ export default function ProviderDialog({
   const [caps, setCaps]       = useState({});
   const [rasterMax, setRasterMax] = useState('');   // leer = Standard
   const [maxOut, setMaxOut]   = useState('');       // leer = kein eigenes Limit
+  const [kontext, setKontext] = useState('');       // leer = Obergrenze
   const [privat, setPrivat]   = useState(false);
   const [keyInput, setKeyInput] = useState('');
   const [zeigeKey, setZeigeKey] = useState(false);
@@ -88,6 +89,7 @@ export default function ProviderDialog({
     setCaps({ ...(provider?.caps ?? {}) });
     setRasterMax(provider?.rasterMaxSeiten != null ? String(provider.rasterMaxSeiten) : '');
     setMaxOut(provider?.maxOutputTokens != null ? String(provider.maxOutputTokens) : '');
+    setKontext(provider?.kontextTokens != null ? String(provider.kontextTokens) : '');
     setPrivat(provider?.erlaubtPrivateZiele === true);
     setKeyInput(''); setZeigeKey(false); setFehler(''); setBenutztVon(null);
   }, [open, provider]);
@@ -110,6 +112,7 @@ export default function ProviderDialog({
         // angehakt): sonst verlöre ein Speichern den Wert still.
         rasterMaxSeiten: rasterMax.trim() === '' ? null : Number(rasterMax),
         maxOutputTokens: maxOut.trim() === '' ? null : Number(maxOut),
+        kontextTokens: kontext.trim() === '' ? null : Number(kontext),
       });
       // Key getrennt – er geht nie durch dieselbe Route wie die Identität.
       if (keyInput.trim()) await api.settings.ai.providers.setKey(id, keyInput.trim());
@@ -141,6 +144,11 @@ export default function ProviderDialog({
   // einem Fehlerobjekt, die Modell-Liste bliebe leer. Nur ein Hinweis, keine
   // Sperre: LiteLLM & Co. dürfen durchaus unter / laufen.
   const urlOhneV1 = brauchtUrl && baseUrl.trim() !== '' && !/\/v1\/*$/.test(baseUrl.trim());
+  // Häufig kopiert: die vollständige Endpunkt-Adresse statt der Basis. Die App
+  // hängt /embeddings bzw. /chat/completions selbst an; der Server lehnt
+  // solche Adressen ab, der Hinweis sagt vorher, wie es richtig heißt.
+  const endpunkt = /\/(embeddings|chat\/completions|completions|models)\/*$/i.exec(baseUrl.trim());
+  const urlVorschlag = endpunkt ? baseUrl.trim().slice(0, endpunkt.index) : '';
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) onClose(); }} size="lg">
@@ -214,7 +222,14 @@ export default function ProviderDialog({
             <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
                    placeholder="http://host.docker.internal:11434/v1"
                    className="h-9 text-sm font-mono" spellCheck={false} />
-            {urlOhneV1 && (
+            {endpunkt ? (
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                Die Basis-URL darf nicht auf <span className="font-mono">/{endpunkt[1]}</span> enden;
+                postbuch.net hängt diesen Pfad selbst an. Richtig ist die Adresse bis
+                einschließlich <span className="font-mono">/v1</span>
+                {urlVorschlag && <>, hier also <span className="font-mono break-all">{urlVorschlag}</span></>}.
+              </p>
+            ) : urlOhneV1 && (
               <p className="text-xs text-muted-foreground">
                 Endet nicht auf <span className="font-mono">/v1</span> – LM Studio, Ollama und
                 vLLM erwarten den Pfad genau so. Fehlt er, bleibt die Modell-Liste leer.
@@ -307,11 +322,9 @@ export default function ProviderDialog({
                    placeholder={`${rasterDefault} (Standard)`}
                    className="h-9 w-28 text-sm" />
             <p className="text-xs text-muted-foreground">
-              Jede gerasterte Seite kostet grob 1000–2000 Tokens – bei kleinen lokalen
-              Kontextfenstern (4k–8k) sprengen mehr als ein paar Seiten das Fenster, bevor
-              der Prompt überhaupt Platz hat. Bei der Klassifikation bricht ein Überschreiten
-              hart ab (das nächste Modell der Kette übernimmt), bei der Voranalyse wird still
-              gekürzt.
+              Jede gerasterte Seite kostet grob 1000–2000 Tokens. Passen nicht alle Seiten ins
+              Kontextfenster unten, rastert postbuch.net von sich aus weniger. Hat ein Dokument
+              mehr Seiten als erlaubt, gehen die übrigen als erkannter Text mit.
             </p>
             <p className="text-xs text-muted-foreground">
               Leer lassen für den Standard. Mehr als {rasterGrenze} sind nicht möglich, und
@@ -335,6 +348,23 @@ export default function ProviderDialog({
             Aufgabe braucht. Lehnt der Anbieter das ab, wiederholt postbuch.net den Aufruf einmal mit
             einem kleinen Wert und schreibt eine Warnung ins Protokoll; hier eingetragen, entfällt
             dieser Umweg.
+          </p>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Kontextfenster (Tokens)
+          </label>
+          <Input type="number" min={kontextMin} max={kontextGrenze} value={kontext}
+                 onChange={(e) => setKontext(e.target.value)}
+                 placeholder={`${kontextGrenze.toLocaleString('de-DE')} (Obergrenze)`}
+                 className="h-9 w-40 text-sm" />
+          <p className="text-xs text-muted-foreground">
+            Wie viel Eingabe und Antwort zusammen höchstens fassen dürfen. Danach richtet postbuch.net
+            aus, wie viel Dokumenttext und wie viele gerasterte Seiten es mitschickt und wann es ältere
+            Werkzeugergebnisse eines Chats kürzt. Bei lokalen Modellen den Wert eintragen, mit dem der Server
+            gestartet wurde. Leer lassen heißt {kontextGrenze.toLocaleString('de-DE')} – mehr nutzt
+            postbuch.net bei keinem Anbieter, auch wenn das Modell größere Fenster kennt.
           </p>
         </div>
 

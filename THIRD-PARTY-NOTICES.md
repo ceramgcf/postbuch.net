@@ -7,7 +7,7 @@ images built from this repository
 download and bundle third-party software at build time. Those components keep
 their own licenses, listed below.
 
-All third-party components are used **unmodified**, either as standalone
+Third-party programs are used either as standalone
 programs invoked as separate processes (e.g. Ghostscript, Tesseract, qpdf) or
 as libraries via their public APIs. Copyleft-licensed components (AGPL / GPL /
 LGPL / MPL) are aggregated alongside postbuch.net, not modified and not linked
@@ -75,25 +75,51 @@ licensed under the Apache License 2.0. The `web` image serves the unmodified
 `opencv.js` from that package to the browser, which runs it locally on the
 device. Its license text is part of `/lizenzen/npm-pakete.txt`.
 
-## Embedding model (embedding image)
+## Lokale KI und Embeddings
 
-The `embedding` image downloads two files at build time, each pinned to a
-fixed revision and checked against a SHA-256 checksum. Neither file is part
-of this repository or of the release archive.
+Die [Lizenzhinweise zur lokalen KI](embedding/lizenzen/NOTICE.md) enthalten
+die Herkunft und Lizenz der konkret verwendeten Dateien für Snowflake Arctic
+Embed M v2.0, den XLM-RoBERTa-Tokenizer, Voyage 4 Nano, EmbeddingGemma 2,
+Gemma 4 12B, llama.cpp, das NVIDIA Container Toolkit und CUDA. Die Hinweise
+und Lizenztexte liegen auch in den lokalen Diensten unter
+`/usr/share/doc/postbuch.net/`.
 
-- **Snowflake Arctic Embed M v2.0** (`onnx/model_int8.onnx`) by Snowflake Inc.,
-  https://huggingface.co/Snowflake/snowflake-arctic-embed-m-v2.0, licensed
-  under the Apache License 2.0
-  (https://www.apache.org/licenses/LICENSE-2.0). The build rearranges the
-  stored weights into a separate file so they can be memory-mapped; the
-  model's values and graph are not changed.
-- **SentencePiece tokenizer model** (`sentencepiece.bpe.model`) of
-  XLM-RoBERTa base by Facebook AI,
-  https://huggingface.co/FacebookAI/xlm-roberta-base, licensed under the MIT
-  License.
+Das Release-Archiv enthält die Build- und Installationsdateien sowie die
+vorberechneten Hilfevektoren aus der eigenen Dokumentation. Auf der
+Zielinstallation lädt der Embedding-Build Snowflake und den Tokenizer.
+Voyage 4 Nano und EmbeddingGemma 2 kommen bei Auswahl direkt von Hugging
+Face. Der Host-Agent lädt Gemma 4 12B und seine Zusatzdateien bei Aktivierung
+der lokalen KI ebenfalls direkt von Hugging Face. Alle Modell-Downloads sind
+auf Revision und SHA-256 festgelegt.
 
-The precomputed help vectors in `app/hilfe-vektoren.json` are output of that
-model for postbuch.net's own documentation.
+Das Embedding-Image übernimmt `llama-server` und seine gemeinsam genutzten
+Bibliotheken aus dem gepinnten llama.cpp-Image. Dazu gehören glibc
+(LGPL-2.1-or-later), GCC-Laufzeitbibliotheken (GPL mit GCC Runtime Library
+Exception), OpenSSL (Apache 2.0), zlib (zlib-Lizenz) und Zstandard
+(BSD-Lizenz). Die Paket-Copyright-Dateien, Lizenztexte und Verweise auf die
+passenden Ubuntu-Quellpaketversionen stehen im Image unter
+`/usr/share/doc/postbuch.net/ubuntu/`.
+
+Das CPU- bzw. GPU-Image für Gemma 4 kommt direkt aus der llama.cpp-Registry.
+Das GPU-Image enthält NVIDIA CUDA 12.8.1. Der Installer holt vor der ersten
+Aktivierung die Zustimmung zur NVIDIA-Containerlizenz und CUDA-EULA ein.
+Bei Bedarf installiert er das Apache-2.0-lizenzierte NVIDIA Container
+Toolkit direkt aus dem Paket-Repository von NVIDIA.
+
+## Weitere Installer-Abhängigkeiten
+
+Docker Engine und Docker Compose (jeweils Apache 2.0 mit den Hinweisen der
+jeweiligen Distributionspakete) kommen aus der Linux-Paketverwaltung.
+[Docker Engine](https://docs.docker.com/engine/install/) ·
+[Docker Compose](https://github.com/docker/compose/blob/main/LICENSE).
+
+Der Windows-Installer bezieht bei Bedarf das signierte WSL-Paket direkt von
+Microsoft und Debian über die WSL-Distribution. WSL veröffentlicht seinen
+Quellcode unter MIT. Für das Paket gelten auch die mitgelieferten Lizenzen
+seiner Komponenten. Debian führt die Lizenz- und Copyright-Hinweise pro Paket.
+[WSL-Lizenz](https://github.com/microsoft/WSL/blob/master/LICENSE) ·
+[WSL-Installation](https://learn.microsoft.com/windows/wsl/install) ·
+[Debian-Lizenzinformationen](https://www.debian.org/legal/licenses/).
 
 ## Lucide icons in the documentation
 
@@ -104,7 +130,7 @@ MIT License. The license text lies next to them in [docs/icons/LICENSE.txt](docs
 
 ## Trademarks
 
-Microsoft, Azure, OneDrive, Discord, DuckDNS, Cloudflare, Niimbot and
-Snowflake are
+Microsoft, Azure, OneDrive, Discord, DuckDNS, Cloudflare, Niimbot,
+Snowflake, Voyage AI, MongoDB, Google and Gemma are
 trademarks of their respective owners. They are referenced in this project
 solely to describe interoperability; no affiliation or endorsement is implied.

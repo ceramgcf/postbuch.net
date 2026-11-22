@@ -13,6 +13,22 @@ export class CancellationError extends Error {
   constructor() { super('Verarbeitung abgebrochen'); this.name = 'CancellationError'; }
 }
 
+/**
+ * Wird geworfen, wenn ein Pipeline-Auftrag später erneut versucht werden soll,
+ * statt im Slot zu warten (z. B. KI-Dienst nicht erreichbar). Die Warteschlange
+ * stellt ihn zurück und gibt den Platz frei. Die Datei-ID trägt der
+ * Dokumentprozessor nach, sobald Phase 0 hochgeladen hat.
+ */
+export class ZurueckgestelltError extends Error {
+  constructor(grund) {
+    super(`Zurückgestellt: ${grund}`);
+    this.name = 'ZurueckgestelltError';
+    this.grund = grund;
+    this.storageId = null;
+    this.storageBackend = null;
+  }
+}
+
 // jobId → Promise des INSERT in _jobs. create() schreibt bewusst
 // fire-and-forget (der Aufrufer soll nicht auf die DB warten müssen), aber wer
 // eine Fremdschlüssel-Referenz auf _jobs setzt, MUSS vorher awaitPersisted()
@@ -131,6 +147,54 @@ export function markQueued(jobId) {
 }
 
 /**
+ * Zurückgestellter Auftrag: bleibt als 'queued' sichtbar und abbrechbar, das
+ * Label nennt den nächsten Versuch.
+ */
+export function markWartend(jobId, faelligAb, grund = 'KI-Dienst nicht erreichbar') {
+  const uhrzeit = new Date(faelligAb).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  const label = `Wartet bis ${uhrzeit} – ${grund}`;
+  const job = jobs.get(jobId);
+  if (job) {
+    job.status = 'queued';
+    job.stepLabel = label;
+    job.updatedAt = new Date();
+  }
+  pool.query(
+    "UPDATE _jobs SET status = 'queued', step_label = $2, updated_at = NOW() WHERE id = $1",
+    [jobId, label]
+  ).catch(err => console.error('[job-tracker] DB wartend update failed:', err.message));
+}
+
+/**
+ * Holt einen Auftrag nach einem Neustart zurück in den Speicher (init() hat
+ * ihn als interrupted markiert). Fehlt die _jobs-Zeile, wird sie angelegt.
+ *
+ * Mit `opts` auch für Jobs mit fester ID und anderem Typ (Dokumentenstapel: Job-ID
+ * = Stapel-ID, läuft über Neustarts und erneutes Anlegen derselben ID hinweg).
+ */
+export async function wiederherstellen(jobId, label, totalSteps = 10, {
+  type = 'doc-process', status = 'queued', step = 0, stepLabel = 'In Warteschlange', cancellable = true,
+} = {}) {
+  const now = new Date();
+  jobs.set(jobId, {
+    id: jobId, type, label,
+    status, step, totalSteps, stepLabel,
+    cancellable, payload: null,
+    startedAt: now, updatedAt: now, completedAt: null, errorMessage: null,
+    _cancelRequested: false,
+  });
+  await pool.query(
+    `INSERT INTO _jobs (id, type, label, status, step, total_steps, step_label, cancellable)
+     VALUES ($1, $4, $2, $5, $6, $3, $7, $8)
+     ON CONFLICT (id) DO UPDATE
+       SET status = EXCLUDED.status, step = EXCLUDED.step, step_label = EXCLUDED.step_label,
+           label = EXCLUDED.label, total_steps = EXCLUDED.total_steps, error_message = NULL,
+           completed_at = NULL, updated_at = NOW()`,
+    [jobId, label, totalSteps, type, status, step, stepLabel, cancellable]
+  ).catch(err => console.error('[job-tracker] DB wiederherstellen failed:', err.message));
+}
+
+/**
  * Mark a job as suspended (awaiting a user decision — e.g. duplicate resolution).
  * The pipeline slot is freed; the job status persists in the DB.
  */
@@ -219,6 +283,8 @@ export function requestCancel(jobId) {
 
   if (job.status === 'queued') {
     job._cancelRequested = true;
+    // Sonst bliebe ein zurückgestellter Auftrag als „Wartet bis …“ stehen.
+    job.stepLabel = 'Abgebrochen';
     if (_queueRemover) _queueRemover(jobId);
     complete(jobId);
     return true;
@@ -250,6 +316,7 @@ export function complete(jobId, result = null) {
   // Determine final status: cancelled if flag set, done otherwise.
   // If job not in memory (e.g. it was suspended), default to 'done'.
   const finalStatus = job?._cancelRequested ? 'cancelled' : 'done';
+  const stepLabel = finalStatus === 'cancelled' ? job?.stepLabel || null : null;
   if (job) {
     job.status = finalStatus;
     job.updatedAt = new Date();
@@ -259,8 +326,8 @@ export function complete(jobId, result = null) {
 
   // Always update DB — covers suspended jobs that were removed from in-memory map.
   pool.query(
-    'UPDATE _jobs SET status = $1, updated_at = NOW(), completed_at = NOW(), payload = COALESCE($3::jsonb, payload) WHERE id = $2',
-    [finalStatus, jobId, result ? JSON.stringify(result) : null]
+    'UPDATE _jobs SET status = $1, updated_at = NOW(), completed_at = NOW(), payload = COALESCE($3::jsonb, payload), step_label = COALESCE($4, step_label) WHERE id = $2',
+    [finalStatus, jobId, result ? JSON.stringify(result) : null, stepLabel]
   ).catch(err => console.error('[job-tracker] DB complete update failed:', err.message));
 }
 

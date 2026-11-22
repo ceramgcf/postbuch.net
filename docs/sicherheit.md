@@ -54,8 +54,7 @@ Kinder haben Lesezugriff nur auf ihre eigenen Dokumente – ihr Zeugnis, ihren
 Ausbildungsvertrag, Post von der Krankenkasse an sie selbst.
 
 Wer nur die eigenen Dokumente sieht, bekommt eine bewusst schlanke Oberfläche:
-die Dokumentliste, die Dokumentansicht mit PDF, die Suche (Volltext und
-semantisch), die Hilfe und in den Einstellungen den Bereich **Persönlich**.
+die Dokumentliste, die Dokumentansicht mit PDF, die Suche, die Hilfe und in den Einstellungen den Bereich **Persönlich**.
 Übersicht, Analyse, Krankenversicherung, Akten, Wiedervorlagen, Verbleib,
 Anpinnen, der Assistent, Export, Logs und Benachrichtigungen fehlen ganz. Sie
 würden sonst Beträge, Namen oder Zusammenhänge aus fremden Dokumenten
@@ -96,7 +95,9 @@ alten Admin-Sitzungen sind ungültig.
   werden. `admin` ist in jeder Schreibweise für den Administrator reserviert,
   auch die Anmeldung als `Admin` gelingt. Leerzeichen vor oder nach dem Namen
   werden ignoriert.
-- **Cookie:** `httpOnly`, `sameSite=strict`, Laufzeit 7 Tage. Das `Secure`-Flag
+- **Cookie:** `httpOnly`, `sameSite=strict`, Laufzeit 7 Tage ab der letzten
+  Nutzung: Jede Anfrage verlängert die Sitzung, abgemeldet wird erst nach 7 Tagen
+  ohne Nutzung. Das `Secure`-Flag
   wird gesetzt, sobald die Anfrage tatsächlich über HTTPS kam. Ohne
   Reverse-Proxy im LAN wäre ein hartes `Secure` gleichbedeutend mit „kein Login
   möglich", deshalb ist es an das Protokoll gekoppelt.
@@ -218,6 +219,13 @@ Nach dem Schließen zeigt die Karte einen Countdown von zwei Minuten. In dieser
 Zeit bestätigst du mit **Bestätigen**, dass du über HTTPS weiter hineinkommst.
 Ohne Bestätigung öffnet der Host-Agent den Zugang im Heimnetz von selbst wieder.
 Der Installer fragt dieselbe Einstellung bei einer Einrichtung mit DuckDNS ab.
+Antwortet die HTTPS-Adresse am Ende der Installation nicht binnen drei Minuten,
+etwa weil das Zertifikat noch fehlt, öffnet er Port 3420 wieder für das
+Heimnetz und sagt das; geschlossen wird er dann später in den Einstellungen.
+Auf dem Server selbst bleibt die Oberfläche unter `http://localhost:3420`
+immer erreichbar, unter Windows also auf dem PC, auf dem postbuch.net läuft.
+Wird HTTPS im Einrichtungsassistenten wieder abgeschaltet, öffnet postbuch.net
+die Oberfläche dabei von selbst wieder für das Heimnetz.
 Ohne Host-Agent gilt `WEB_BIND` in der `.env`: `127.0.0.1` für nur über HTTPS,
 leer für alle Schnittstellen.
 
@@ -256,10 +264,13 @@ für geschlossen.
 
 **Nicht von außen erreichbar**, obwohl sie am selben Port hängen:
 
-| Pfad                   | Absicherung                                                                                                         |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `/api/webhooks/*`      | nginx antwortet von außen mit `404`; zusätzlich Token-Prüfung per `X-Webhook-Token` (zeitkonstanter Vergleich)      |
-| `/api/internal/config` | nginx antwortet von außen mit `404`; nur im Docker-Netz erreichbar, verteilt Webhook- und Scanner-Token an Cleaner und Scanner |
+| Pfad                   | Absicherung                                                                                                                                              |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/api/webhooks/*`      | Webserver und App antworten von außen mit `404`, unabhängig von der Groß- und Kleinschreibung; zusätzlich Token-Prüfung per `X-Webhook-Token`              |
+| `/api/internal/config` | Webserver und App antworten von außen mit `404`; nur im Docker-Netz erreichbar, verteilt Webhook- und Scanner-Token an Cleaner und Scanner                |
+
+Die Sperre sitzt doppelt: im Webserver und noch einmal in der App, die jede über
+den Webserver hereingereichte Anfrage an diese Pfade ablehnt.
 
 Der 404-Block ist dabei nicht das einzige Schloss, sondern das zweite: Der
 Webhook prüft seinen Token unabhängig davon, weil `/api/` sonst pauschal

@@ -15,7 +15,7 @@
 
 import pool from '../db.js';
 import { loadDynamicSettings } from '../config.js';
-import { callLLM, resolveKlassenModell, buildCostMap, calculateCost, parseJsonFromText, summeKosten } from '../lib/llm.js';
+import { leseDokument, resolveKlassenModell, buildCostMap, calculateCost, parseJsonFromText, summeKosten } from '../lib/llm.js';
 import * as discord from '../lib/discord.js';
 import { retrieveDocument } from './document-retriever.js';
 import { buildEbParsePrompt } from '../prompts/erstattungsbescheid.js';
@@ -28,6 +28,7 @@ import { toDate, toNumeric } from '../lib/coerce.js';
 import { gleichePersonAb } from '../lib/personen-abgleich.js';
 import { bewertePeriodenNachBescheid, setzeBescheidwirkungZurueck, sperreZuordnungFuerBescheid } from './periodenabschluss.js';
 import { sperreBescheidzuordnung } from './perioden-sperre.js';
+import { ladeAbrechnungsPatienten } from './mensch-perioden.js';
 
 // ── Hilfsfunktionen ──────────────────────────────────────────────────────────
 // toDate/toNumeric lagen hier als byte-identische Kopie aus document-inserter.js.
@@ -204,14 +205,9 @@ export async function processErstattungsbescheid(postid, korrekturAnweisung = ''
     const istTier = bescheidResult.rows[0].ist_tier;
 
     // ─── 2. LLM-Analyse mit dynamisch befülltem EB-Parse-Prompt ───
-    // EB kann auf historische Daten Bezug nehmen → ALLE Personen (auch archivierte)
-    const allPersonsResult = await pool.query(
-      `SELECT kurzname, anzeigename AS vollname, ist_tier, pkv, beihilfe, pkv_satz, beihilfe_satz
-       FROM postbuch.mensch
-       WHERE (pkv = true OR beihilfe = true) AND ist_tier = $1
-       ORDER BY kurzname`
-      , [istTier]
-    );
+    // EB kann auf historische Daten Bezug nehmen → ALLE Personen (auch archivierte),
+    // dazu Abgewählte mit noch eingereichter Periode (letzter Bescheid nach Kündigung).
+    const ebPersonen = await ladeAbrechnungsPatienten((sql, params) => pool.query(sql, params), { istTier });
     const aktiveProfileResult = await pool.query(
       `SELECT id, name, kostentraeger, profiltext
        FROM postbuch.kostentraeger_profil
@@ -219,7 +215,7 @@ export async function processErstattungsbescheid(postid, korrekturAnweisung = ''
        ORDER BY id`
     );
     const aktiveProfile = aktiveProfileResult.rows;
-    const ebParsePromptBase = buildEbParsePrompt(allPersonsResult.rows, aktiveProfile);
+    const ebParsePromptBase = buildEbParsePrompt(ebPersonen, aktiveProfile);
     const ebParsePrompt = korrekturAnweisung
       ? `### KORREKTUR-ANWEISUNGEN VOM BENUTZER ###\n${korrekturAnweisung}\n\n` + ebParsePromptBase
       : ebParsePromptBase;
@@ -229,23 +225,28 @@ export async function processErstattungsbescheid(postid, korrekturAnweisung = ''
     // als das, das der Nutzer für das Dokument ausdrücklich bestimmt hat.
     const costMap = buildCostMap(settings);
     const ebKlasse = EB_MODELLSTUFEN.has(modelTier) ? modelTier : 'mittel';
-    const ebParseModel = resolveKlassenModell(ebKlasse, settings).model;
-    const llmResult = await callLLM(ebParseModel, ebParsePrompt, { pdf, jsonMode: true, jsonSchema: BESCHEID_SCHEMA }, settings, {
+    // Vollständige Angabe übergeben: Der Modellname allein verliert bei eigenen
+    // Providern (z. B. lokale KI) die Provider-Zuordnung.
+    const ebParseRef = resolveKlassenModell(ebKlasse, settings);
+    const ebParseModel = ebParseRef.model;
+    // leseDokument bereitet den Bescheid passend zum Provider auf (PDF, Bilder
+    // oder Textebene); nicht jeder Provider nimmt ein PDF entgegen.
+    const llmResult = await leseDokument([ebParseRef], pdf, ebParsePrompt, { jsonMode: true, jsonSchema: BESCHEID_SCHEMA }, settings, {
       kategorie: 'erstattungsbescheid', entity: 'postbuch', entityId: postid, correlationId: postid,
     });
     if (llmResult.abgeschnitten) {
       throw new Error('Bescheid-Auslesung am Ausgabelimit des Modells abgeschnitten');
     }
     const ebData = parseJsonFromText(llmResult.text);
-    const ebTokensIn  = llmResult.usage?.inputTokens  ?? null;
-    const ebTokensOut = llmResult.usage?.outputTokens ?? null;
+    const ebTokensIn  = llmResult.tokensIn;
+    const ebTokensOut = llmResult.tokensOut;
     const ebCostUsd   = calculateCost(ebParseModel, ebTokensIn, ebTokensOut, costMap);
 
     validateEbData(ebData);
 
     // Das Matching vergleicht Personen exakt über den Kurznamen — eine Schreib-
     // variante der KI ließe die Position sonst ohne Rechnung stehen.
-    const ebPatienten = allPersonsResult.rows.map((p) => ({ kurzname: p.kurzname, anzeigename: p.vollname }));
+    const ebPatienten = ebPersonen.map((p) => ({ kurzname: p.kurzname, anzeigename: p.vollname }));
     for (const [index, ep] of ebData.einzelpositionen.entries()) {
       const ergebnis = gleichePersonAb(ep.behandeltePerson, ebPatienten);
       if (ergebnis.art === 'verworfen') {
@@ -730,17 +731,40 @@ export async function setEbpZuordnung(ebPostid, ebSubid, arzPostid, restoreKuerz
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Ein manueller Kostenträgerwechsel sperrt dieselbe Dokumentzeile zuerst.
+    await client.query(
+      'SELECT postid FROM postbuch.postbuch WHERE postid = $1 FOR NO KEY UPDATE', [ebPostid],
+    );
     // Vor jeder Zeilensperre: Eine parallel laufende EB-Verarbeitung desselben
     // Kostenträgers könnte sonst dieselbe Rechnung gleichzeitig belegen.
     await sperreZuordnungFuerBescheid(client, ebPostid);
 
     const epRes = await client.query(
-      `SELECT arz_postid FROM postbuch.erstattungsbescheid_einzelposition
-        WHERE postid = $1 AND subid = $2 FOR UPDATE`,
+      `SELECT ep.arz_postid, ep.behandelte_person, e.ist_tier
+         FROM postbuch.erstattungsbescheid_einzelposition ep
+         JOIN postbuch.erstattungsbescheid e ON e.postid = ep.postid
+        WHERE ep.postid = $1 AND ep.subid = $2 FOR UPDATE OF ep`,
       [ebPostid, ebSubid]
     );
     if (epRes.rows.length === 0) throw httpError('Erstattungsbescheid-Position nicht gefunden', 404);
-    const prevArzPostid = epRes.rows[0].arz_postid;
+    const { arz_postid: prevArzPostid, behandelte_person: person, ist_tier: istTier } = epRes.rows[0];
+    if (prevArzPostid === arzPostid) {
+      await client.query('COMMIT');
+      return { arz_postid: arzPostid, prev_arz_postid: prevArzPostid, prev_kuerzungen_arz_subid: [], perioden_bewertung: null };
+    }
+
+    // Eine Vormerkung übernimmt den Personen- und Rechnungsbezug der Kürzung.
+    // Erst die Kürzungen sperren, dann ihre bestehenden Vormerkungen prüfen.
+    await client.query(
+      `SELECT kuerzung_id FROM postbuch.erstattungsbescheid_kuerzung
+        WHERE postid = $1 AND eb_subid = $2 ORDER BY kuerzung_id FOR UPDATE`,
+      [ebPostid, ebSubid],
+    );
+    const pruefungen = await client.query(
+      `SELECT 1 FROM postbuch.beihilfe_kuerzung_pkv_pruefung WHERE eb_postid = $1 AND eb_subid = $2 LIMIT 1`,
+      [ebPostid, ebSubid],
+    );
+    if (pruefungen.rowCount) throw httpError('Die Rechnungszuordnung ist durch eine vorgemerkte oder eingereichte PKV-Prüfung geschützt.', 409);
 
     if (arzPostid != null) {
       const arzRes = await client.query(
@@ -750,6 +774,8 @@ export async function setEbpZuordnung(ebPostid, ebSubid, arzPostid, restoreKuerz
                 EXISTS (
                   SELECT 1 FROM postbuch.arztrechnung WHERE postid = $1
                 ) AS ist_arztrechnung,
+                (SELECT lebensbereich = 'tier' FROM postbuch.postbuch WHERE postid = $1) AS ist_tier,
+                (SELECT behandelte_person FROM postbuch.arztrechnung WHERE postid = $1) AS behandelte_person,
                 (SELECT von_postid FROM postbuch.dokument_beziehung
                   WHERE zu_postid = $1 AND art = 'ersetzt') AS ersetzt_durch`,
         [arzPostid]
@@ -758,8 +784,35 @@ export async function setEbpZuordnung(ebPostid, ebSubid, arzPostid, restoreKuerz
       if (!arzRes.rows[0].ist_arztrechnung) {
         throw httpError(`${arzPostid} ist keine Arztrechnung`, 400);
       }
+      if (Boolean(arzRes.rows[0].ist_tier) !== istTier) {
+        throw httpError('Rechnung und Bescheid müssen derselben Patientengruppe angehören.', 409);
+      }
+      if (person && arzRes.rows[0].behandelte_person && person !== arzRes.rows[0].behandelte_person) {
+        throw httpError('Die behandelte Person der Rechnung passt nicht zur Bescheidposition.', 409);
+      }
       if (arzRes.rows[0].ersetzt_durch) {
         throw httpError(`${arzPostid} ist durch ${arzRes.rows[0].ersetzt_durch} ersetzt – bitte die Korrekturrechnung zuordnen.`, 409);
+      }
+    }
+
+    // Zuordnung zu abgeschlossenen Perioden bleibt bewusst erlaubt (etwa eine
+    // Nachzahlung, auch nach abgewähltem Kostenträger), wird aber vermerkt.
+    let abgeschlosseneHinweis = '';
+    if (arzPostid != null) {
+      const abgeschlossen = await client.query(
+        `SELECT ab.kostentraeger, ab.periode
+           FROM postbuch.arztrechnung a
+           JOIN postbuch.abrechnungsperiode_buch ab
+             ON ab.person = a.behandelte_person
+            AND ((ab.kostentraeger = 'PKV' AND ab.periode = a.abrechnungsperiode_pkv)
+              OR (ab.kostentraeger = 'Beihilfe' AND ab.periode = a.abrechnungsperiode_beihilfe))
+          WHERE a.postid = $1 AND ab.status = 'COMPLETED'
+          ORDER BY ab.kostentraeger`,
+        [arzPostid]
+      );
+      if (abgeschlossen.rowCount) {
+        abgeschlosseneHinweis = ` (abgeschlossene Periode: ${abgeschlossen.rows
+          .map((r) => `${r.kostentraeger} ${r.periode}`).join(', ')})`;
       }
     }
 
@@ -787,8 +840,8 @@ export async function setEbpZuordnung(ebPostid, ebSubid, arzPostid, restoreKuerz
         await client.query(
           `UPDATE postbuch.erstattungsbescheid_kuerzung
               SET arz_postid = $3::text, arz_subid = $4
-            WHERE postid = $1 AND kuerzung_id = $2`,
-          [ebPostid, kuerzung_id, arzPostid, arz_subid]
+            WHERE postid = $1 AND kuerzung_id = $2 AND eb_subid = $5`,
+          [ebPostid, kuerzung_id, arzPostid, arz_subid, ebSubid]
         );
       }
     } else {
@@ -810,7 +863,7 @@ export async function setEbpZuordnung(ebPostid, ebSubid, arzPostid, restoreKuerz
 
     await client.query('COMMIT');
     uiLog('UPDATE', 'erstattungsbescheid', ebPostid,
-      `EBP ${ebSubid}: Rechnung ${prevArzPostid || '(keine)'} → ${arzPostid || '(gelöst)'}`);
+      `EBP ${ebSubid}: Rechnung ${prevArzPostid || '(keine)'} → ${arzPostid || '(gelöst)'}${abgeschlosseneHinweis}`);
     return {
       arz_postid: arzPostid,
       prev_arz_postid: prevArzPostid,

@@ -14,9 +14,6 @@ import { useAuth } from '@/hooks/useAuth';
 import { DisputeStatus } from './DisputeField';
 import { RechnungMenu, ErsetzungHinweis } from './RechnungMenu';
 
-// Dokumenttypen, bei denen der Rechnungsblock zwingend erforderlich ist
-const PFLICHTTYPEN = ['rechnung', 'kaufbeleg'];
-
 /**
  * Inline-Editor für ein Feld der generischen Rechnung.
  */
@@ -131,9 +128,9 @@ function EditableField({
   );
 }
 
-export function GenRechnungDetail({ data, art }) {
+export function GenRechnungDetail({ data, istPflichttyp, arztUebernahme = false }) {
   const { canWrite } = useAuth();
-  const { mutate: deleteBlock, isPending: isDeleting } = useDeleteGenRechnungsblock();
+  const { mutate: deleteBlock, isPending: isDeleting, error: deleteError, reset: resetDelete } = useDeleteGenRechnungsblock();
   const { clearHistory } = useUndoHistory();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
@@ -141,7 +138,6 @@ export function GenRechnungDetail({ data, art }) {
 
   // Bei Pflichttypen hängt der Block an der Dokumentart: dort ist nicht Löschen
   // der Weg, sondern die Invalidierung (Umschaltung auf Korrespondenz + Reprocess).
-  const istPflichttyp = PFLICHTTYPEN.includes(art);
   const canDelete = canWrite && !istPflichttyp;
 
   function handleDelete() {
@@ -161,13 +157,16 @@ export function GenRechnungDetail({ data, art }) {
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <CardTitle className="text-base">Rechnungsdetails</CardTitle>
             <div className="flex items-center gap-2 flex-wrap">
-              <RechnungMenu data={data} invalidierbar={istPflichttyp} />
+              <RechnungMenu data={data} invalidierbar={istPflichttyp && !arztUebernahme} />
               {canDelete && (
               <Button
                 variant="ghost"
                 size="sm"
                 className="h-7 gap-1.5 text-destructive/60 hover:text-destructive hover:bg-destructive/10"
-                onClick={() => setShowDeleteConfirm(true)}
+                onClick={() => {
+                  resetDelete();
+                  setShowDeleteConfirm(true);
+                }}
                 title="Rechnungsblock löschen"
               >
                 <Trash2 className="h-3.5 w-3.5" />
@@ -310,11 +309,11 @@ export function GenRechnungDetail({ data, art }) {
             Diese Aktion kann <strong>nicht rückgängig gemacht</strong> werden.
           </p>
           <p>
-            Soll der Rechnungsblock später wieder angelegt werden, muss das Dokument
-            erneut verarbeitet werden (Wiederverarbeitung).
+            Du kannst später einen leeren Rechnungsblock hinzufügen und die Daten neu eingeben.
           </p>
           <p>Der gesamte Undo-Verlauf wird dabei gelöscht.</p>
         </DialogDescription>
+        {deleteError && <p role="alert" className="mt-3 text-sm text-destructive">{deleteError.message}</p>}
         <DialogFooter>
           <Button variant="ghost" onClick={() => setShowDeleteConfirm(false)} disabled={isDeleting}>
             Abbrechen

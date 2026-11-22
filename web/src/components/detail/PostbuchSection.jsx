@@ -9,6 +9,7 @@ import { ArtBadgeEditor } from '@/components/postbuch/ArtBadgeEditor';
 import { StatusBadge } from '@/components/postbuch/StatusBadge';
 import { ChevronDown, ChevronUp, Pencil, Check, X, Plus, Trash2, User, Inbox, Send, Cloud, QrCode, ExternalLink } from 'lucide-react';
 import { VerbleibBadge } from '@/components/detail/VerbleibBadge';
+import { DateinameZeile } from '@/components/detail/DateinameZeile';
 import { useUpdatePostbuch } from '@/hooks/usePostbuch';
 import { useAuth } from '@/hooks/useAuth';
 import { useUndoHistory } from '@/hooks/useUndoHistory';
@@ -71,8 +72,9 @@ function QrCodeEntry({ entry }) {
   );
 }
 
-/** Fuß der Stammdaten-Karte: QR-Liste + Nachrüst-Knopf. Bewusst NICHT in der
- *  ActionBar (Plan Abschnitt 4.5) – kein Massen-Backfill, nur je Dokument. */
+/** Fuß der Stammdaten-Karte: QR-Liste + Nachrüst-Knopf, dazu klein der
+ *  Dateiname in der Ablage. Bewusst NICHT in der ActionBar (Plan Abschnitt
+ *  4.5) – kein Massen-Backfill, nur je Dokument. */
 function QrCodesFooter({ data }) {
   const { canWrite } = useAuth();
   const qc = useQueryClient();
@@ -86,7 +88,7 @@ function QrCodesFooter({ data }) {
   const codes = Array.isArray(data.qr_codes) ? data.qr_codes : [];
   const wurdeGescannt = data.qr_codes !== null && data.qr_codes !== undefined;
 
-  if (codes.length === 0 && !canWrite) return null;
+  if (codes.length === 0 && !canWrite && !data.hatPdf) return null;
 
   return (
     <div className="mt-4 pt-3 border-t border-border/60">
@@ -95,28 +97,31 @@ function QrCodesFooter({ data }) {
           {codes.map((c, i) => <QrCodeEntry key={i} entry={c} />)}
         </div>
       )}
-      {canWrite && (
-        wurdeGescannt ? (
-          <button
-            onClick={() => scan()}
-            disabled={isPending}
-            className="text-[11px] text-muted-foreground/50 hover:text-muted-foreground transition-colors disabled:opacity-50"
-          >
-            {isPending ? 'Suche…' : 'QR-Codes erneut suchen'}
-          </button>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => scan()}
-            disabled={isPending}
-            className="h-6 px-2 text-xs gap-1 text-muted-foreground"
-          >
-            <QrCode className="h-3 w-3" />
-            {isPending ? 'Suche…' : 'QR-Codes suchen'}
-          </Button>
-        )
-      )}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        {canWrite && (
+          wurdeGescannt ? (
+            <button
+              onClick={() => scan()}
+              disabled={isPending}
+              className="text-[11px] text-muted-foreground/50 hover:text-muted-foreground transition-colors disabled:opacity-50"
+            >
+              {isPending ? 'Suche…' : 'QR-Codes erneut suchen'}
+            </button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => scan()}
+              disabled={isPending}
+              className="h-6 px-2 text-xs gap-1 text-muted-foreground"
+            >
+              <QrCode className="h-3 w-3" />
+              {isPending ? 'Suche…' : 'QR-Codes suchen'}
+            </Button>
+          )
+        )}
+        {data.hatPdf && <DateinameZeile key={`dateiname-${data.postid}`} postid={data.postid} />}
+      </div>
     </div>
   );
 }
@@ -783,7 +788,7 @@ export function PostbuchSection({ data }) {
           </div>
 
           {/* ── Betreff ── */}
-          <div className="col-span-2">
+          <div className="col-span-2 min-w-0">
             <FieldLabel label="Betreff" field="betreff" editingField={editingField} onEdit={startEdit} />
             {editingField === 'betreff' ? (
               <div>
@@ -801,7 +806,9 @@ export function PostbuchSection({ data }) {
                 <SaveCancelRow field="betreff" onSave={saveField} onCancel={cancelEdit} onRemove={removeField} isPending={isPending} />
               </div>
             ) : (
-              <dd className="font-medium">
+              // Normaler Text bricht um; nur ein Wort, das breiter als die Karte ist,
+              // endet am Rand mit „…“ (text-overflow wirkt je Zeile). Voller Text im Tooltip.
+              <dd className="font-medium overflow-hidden text-ellipsis" title={data.betreff || undefined}>
                 {data.betreff
                   ? <span className="highlight font-semibold">{data.betreff}</span>
                   : '–'}

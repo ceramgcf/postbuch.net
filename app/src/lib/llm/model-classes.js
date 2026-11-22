@@ -30,33 +30,57 @@ function klasse(key, settingKey, label, extra = {}) {
 }
 
 export const MODEL_CLASSES = [
-  // Dokument-Pipeline. `modus` sagt, in welcher Modellwahl die Klasse wirkt
-  // (siehe modellwahl()); ohne Angabe in beiden.
-  klasse('analyse',     'llm_model_analyse',     'Analysemodell', { modus: 'einfach' }),
-  klasse('preanalysis', 'llm_model_preanalysis', 'Voranalyse',      { modus: 'gestaffelt' }),
-  klasse('large',       'llm_model_large',       'Lange Dokumente', { modus: 'gestaffelt' }),
-  klasse('leicht',      'llm_model_leicht',      'Leicht', { modus: 'gestaffelt' }),
-  klasse('mittel',      'llm_model_mittel',      'Mittel', { modus: 'gestaffelt' }),
-  klasse('schwierig',   'llm_model_schwierig',   'Schwierig', { modus: 'gestaffelt' }),
-  klasse('fallback',    'llm_model_fallback',    'Letzter Fallback'),
-  // Liest nach, wenn eine Plausibilitätsprüfung scheitert (Arztrechnungs-
-  // positionen, Kürzungszerlegung). Wirkt in beiden Modellwahlen und ist
-  // bewusst vom günstigen Notfallmodell „Letzter Fallback“ getrennt.
-  klasse('nachlese',    'llm_model_nachlese',    'Nachlese'),
+  // Vereinfachte Modellwahl: nur zwei Aufgabentypen. Jede Klasse der
+  // Einzelwahl gehört über `aufgabe` zu genau einem davon; im einfachen Modus
+  // lenkt resolveKlassenModell sie dorthin um.
+  klasse('routine', 'llm_aufgabe_routine', 'Einfach & Routine', { modus: 'einfach' }),
+  klasse('komplex', 'llm_aufgabe_komplex', 'Anspruchsvoll & Komplex', { modus: 'einfach' }),
 
-  // Büroassistent und Akten — eigene Modellwahl, unabhängig von der Kette
-  klasse('chat_research',  'chat_model_research',  'Büroassistent · Recherche', { group: 'chat' }),
-  klasse('chat_synthesis', 'chat_model_synthesis', 'Büroassistent · Antwort',   { group: 'chat' }),
-  klasse('chat_title',     'chat_model_title',     'Büroassistent · Titel',     { group: 'chat' }),
-  klasse('akte_vorschlag', 'akte_model_vorschlag', 'Akte · Metadaten-Vorschlag',{ group: 'chat' }),
+  // Dokument-Pipeline in der Einzelwahl (gestaffelt).
+  klasse('preanalysis', 'llm_model_preanalysis', 'Voranalyse',      { modus: 'gestaffelt', aufgabe: 'routine' }),
+  klasse('large',       'llm_model_large',       'Lange Dokumente', { modus: 'gestaffelt', aufgabe: 'komplex' }),
+  klasse('leicht',      'llm_model_leicht',      'Leicht',          { modus: 'gestaffelt', aufgabe: 'routine' }),
+  klasse('mittel',      'llm_model_mittel',      'Mittel',          { modus: 'gestaffelt', aufgabe: 'komplex' }),
+  klasse('schwierig',   'llm_model_schwierig',   'Schwierig',       { modus: 'gestaffelt', aufgabe: 'komplex' }),
+  klasse('fallback',    'llm_model_fallback',    'Letzter Fallback', { modus: 'gestaffelt', aufgabe: 'routine' }),
+  // Liest nach, wenn eine Plausibilitätsprüfung scheitert (Arztrechnungs-
+  // positionen, Kürzungszerlegung). Bewusst vom günstigen Notfallmodell
+  // „Letzter Fallback“ getrennt.
+  klasse('nachlese',    'llm_model_nachlese',    'Nachlese',        { modus: 'gestaffelt', aufgabe: 'komplex' }),
+
+  // Büroassistent und Akten — in der Einzelwahl eigene Modelle
+  klasse('chat_research',  'chat_model_research',  'Büroassistent · Recherche', { group: 'chat', modus: 'gestaffelt', aufgabe: 'routine' }),
+  klasse('chat_synthesis', 'chat_model_synthesis', 'Büroassistent · Antwort',   { group: 'chat', modus: 'gestaffelt', aufgabe: 'komplex' }),
+  klasse('chat_title',     'chat_model_title',     'Büroassistent · Titel',     { group: 'chat', modus: 'gestaffelt', aufgabe: 'routine' }),
+  klasse('akte_vorschlag', 'akte_model_vorschlag', 'Akte · Metadaten-Vorschlag',{ group: 'chat', modus: 'gestaffelt', aufgabe: 'routine' }),
+];
+
+/** Die beiden Aufgabentypen der vereinfachten Modellwahl. */
+export const AUFGABENTYPEN = ['routine', 'komplex'];
+
+/**
+ * Früher kannte die einfache Modellwahl ein „Analysemodell“
+ * (`llm_model_analyse`) und daneben Fallback, Nachlese und die Assistenten-
+ * Modelle einzeln. Diese Klassen galten damals in der einfachen Wahl; aus
+ * ihnen leitet die Umstellung (service/aufgabentypen-umstellung.js) die
+ * beiden Aufgabentypen ab. Das Analysemodell war die Dokumentanalyse und
+ * gehört deshalb zu „komplex“.
+ */
+export const ALTE_EINFACHE_KLASSEN = [
+  { settingKey: 'llm_model_analyse', label: 'Analysemodell', aufgabe: 'komplex' },
+  ...['fallback', 'nachlese', 'chat_research', 'chat_synthesis', 'chat_title', 'akte_vorschlag']
+    .map((key) => MODEL_CLASSES.find((c) => c.key === key)),
 ];
 
 /**
  * Modellwahl der Dokumentanalyse:
- *   'einfach'    — ein Analysemodell für jedes Dokument, dahinter nur der
- *                  letzte Fallback. Keine Voranalyse, Prompt-Caching immer an.
- *   'gestaffelt' — Voranalyse schätzt die Schwierigkeit, danach Leicht/Mittel/
- *                  Schwierig bzw. Lange Dokumente.
+ *   'einfach'    — zwei Aufgabentypen („Einfach & Routine“, „Anspruchsvoll &
+ *                  Komplex“) decken alle Aufgaben ab. Die Dokumentanalyse läuft
+ *                  über „komplex“, dahinter springt „routine“ ein. Keine
+ *                  Voranalyse, Prompt-Caching immer an.
+ *   'gestaffelt' — jede Aufgabe einzeln: Voranalyse schätzt die Schwierigkeit,
+ *                  danach Leicht/Mittel/Schwierig bzw. Lange Dokumente;
+ *                  Fallback, Nachlese, Büroassistent und Akten je eigenes Modell.
  * Neuinstallationen starten einfach, bestehende Instanzen behalten die
  * Staffelung (seed-settings.js). Fehlt der Schlüssel trotzdem, bleibt es beim
  * bisherigen Verhalten.

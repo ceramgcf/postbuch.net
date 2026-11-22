@@ -8,11 +8,12 @@
 
 import { Router } from 'express';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import db from '../db.js';
 import { loadDynamicSettings, getFolders, getActiveBackendName } from '../config.js';
 import { buildAiHealth } from '../lib/ai-health.js';
 import { embeddingConfig } from '../lib/embedding.js';
-import { leseAgentStatus } from '../lib/update-agent-datei.js';
+import { leseAgentStatus, leseLaufStatus, leseAnforderung } from '../lib/update-agent-datei.js';
 import { DUCKDNS_DOMAIN_RE, pruefeDuckdnsAufloesung } from '../lib/duckdns-pruefung.js';
 import { runAdapterConformance, SELFTEST_TOTAL_STEPS } from '../service/storage-selftest.js';
 import * as tracker from '../jobs/tracker.js';
@@ -21,13 +22,18 @@ import { getAktiveTaxonomie } from '../lib/taxonomie.js';
 import { appLog } from '../app-log.js';
 import { MODEL_CLASSES, aktiveModellklassen, modellwahl } from '../lib/llm/model-classes.js';
 import { resolveModelConfig } from '../lib/llm.js';
-import { listProviders } from '../lib/llm/registry.js';
+import { listProviders, LOKAL_ID } from '../lib/llm/registry.js';
 import { backupEntscheidungGespeichert, backupVerschluesselungEntschieden } from '../lib/backup-config.js';
 import { verschluesselungsStatus } from '../lib/backup-encryption.js';
+import * as lokal from '../lib/storage/lokal.js';
+import { nachRestoreBild, nachRestoreMarkieren, nachRestoreErledigt } from '../service/stack-profil.js';
+import { lokalProviderSoll, lokalenProviderBeiAntwortAktivieren } from '../service/lokalki-provider.js';
+import { modellZustaende } from '../lib/embedding-dienst.js';
+import { guardedFetchJson } from '../lib/net-guard.js';
 
 const router = Router();
 
-const BACKEND_LABEL = { onedrive: 'OneDrive', nextcloud: 'Nextcloud' };
+const BACKEND_LABEL = { onedrive: 'OneDrive', nextcloud: 'Nextcloud', lokal: 'Der Ordner auf diesem Rechner' };
 
 const STATUS = new Set(['nicht_aktiv', 'offen', 'abgeschlossen', 'uebersprungen']);
 const QUELLEN = new Set(['installation', 'manuell']);
@@ -78,7 +84,7 @@ function normalisiereZustand(wert) {
   const nachweise = {
     ...(wert.nachweise?.storage
       && typeof wert.nachweise.storage === 'object'
-      && ['onedrive', 'nextcloud'].includes(wert.nachweise.storage.backend)
+      && ['onedrive', 'nextcloud', 'lokal'].includes(wert.nachweise.storage.backend)
       ? { storage: {
         backend: wert.nachweise.storage.backend,
         bestandenAm: String(wert.nachweise.storage.bestandenAm || '').slice(0, 40),
@@ -141,9 +147,11 @@ function pruefung(ok, pflicht, text, extra = {}) {
 }
 
 function storageSignatur(settings, backend, folders, stabileKeys) {
+  // Die lokale Ablage hat kein Geheimnis; ihr Nachweis hängt am eingebundenen
+  // Ordner (wurzelAnzeige) und verfällt, wenn ein anderer Ordner eingebunden wird.
   const geheim = backend === 'onedrive'
     ? settings.onedrive_tokens
-    : settings.nextcloud_app_password;
+    : backend === 'lokal' ? lokal.wurzelAnzeige() : settings.nextcloud_app_password;
   return createHash('sha256').update(JSON.stringify({
     backend,
     baseUrl: backend === 'nextcloud' ? settings.nextcloud_base_url || null : null,
@@ -222,6 +230,21 @@ export function pruefeModellklassen(settings, workingProviders, healthModels = n
  * von dort ausschließlich an caddy. Hier steht nur, ob einer hinterlegt ist;
  * das UI zeigt dafür Punkte statt eines Klartextfelds.
  */
+// Ein WSL-Kernel nennt sich „…microsoft…“; der Container sieht den Kernel des
+// Hosts. Unter Windows gibt erst install.ps1 neue Ports im Heimnetz frei.
+let laeuftUnterWindows = null;
+function unterWindows() {
+  if (laeuftUnterWindows === null) {
+    try { laeuftUnterWindows = /microsoft/i.test(readFileSync('/proc/sys/kernel/osrelease', 'utf8')); } catch { laeuftUnterWindows = false; }
+  }
+  return laeuftUnterWindows;
+}
+
+function envPortOder(name, standard) {
+  const n = Number(process.env[name]);
+  return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : standard;
+}
+
 function leseHostconfig(settings) {
   let hostAusBasis = null;
   try {
@@ -236,14 +259,21 @@ function leseHostconfig(settings) {
   const domain = duck?.domain
     || (!abgeschaltet && hostAusBasis && /\.duckdns\.org$/i.test(hostAusBasis) ? hostAusBasis : null);
   const port = settings.hostconfig_port;
+  // Maßgeblich ist der Port, mit dem der Stack gerade läuft: Stellt der
+  // Installer ihn um, bleibt der gespeicherte Wert sonst auf dem alten Stand.
+  const envPort = Number(process.env.WEB_PORT);
+  const laufenderPort = Number.isInteger(envPort) && envPort >= 1 && envPort <= 65535 ? envPort : null;
 
   return {
+    windows: unterWindows(),
+    // HTTPS-Port des caddy-Dienstes: Ist er nicht 443, gehört er in die Basisadresse.
+    httpsPort: envPortOder('CADDY_HTTPS_PORT', 443),
     // Der Port wird NICHT aus app_host abgeleitet: hinter Caddy steht dort 443,
     // während der Host-Port des web-Containers etwas ganz anderes ist. Lieber
     // leer als falsch.
     port: {
-      wert: port?.port || null,
-      quelle: port?.port ? 'gespeichert' : null,
+      wert: laufenderPort || port?.port || null,
+      quelle: laufenderPort || port?.port ? 'gespeichert' : null,
       angefordertAm: port?.angefordertAm || null,
     },
     duckdns: {
@@ -264,6 +294,109 @@ function leseHostconfig(settings) {
   };
 }
 
+/** Der Dienst selbst weiß es am besten: 503 = lädt sein Modell, Verbindung
+ *  verweigert = Container startet, unbekannter Name = läuft hier gar nicht. */
+function sondeLokaleKi() {
+  return guardedFetchJson('http://llm:8080/health', {}, { allowPrivate: true, timeoutMs: 4000 })
+    .then(() => 'antwortet', (e) => {
+      const m = e?.message || '';
+      if (/^HTTP 503\b/.test(m)) return 'laedt';
+      if (/DNS-Auflösung|ENOTFOUND|EAI_AGAIN/.test(m)) return 'fehlt';
+      return 'startet';
+    });
+}
+
+/** Nach so langer Zeit ohne jede Änderung gilt die Einrichtung der lokalen KI
+ *  als hängend: Der Assistent zeigt die Einstellungen dann wieder an. */
+const LOKALKI_STILLSTAND_MS = 60 * 60 * 1000;
+// Letzter beobachteter Stand (Text + Prozent) und seit wann er unverändert ist.
+// Bewusst nur im Prozess: Ein App-Neustart beginnt die Stunde von vorn.
+let lokalkiStand = { schluessel: null, seit: 0 };
+
+function stillstandMarkieren(eintrag, jetzt = Date.now()) {
+  if (!eintrag?.dauer) { lokalkiStand = { schluessel: null, seit: 0 }; return eintrag; }
+  if (eintrag.ohneStillstand) {
+    lokalkiStand = { schluessel: null, seit: 0 };
+    const { ohneStillstand, ...rest } = eintrag;
+    return { ...rest, haengt: false, unveraendertSeitMin: 0 };
+  }
+  const schluessel = `${eintrag.text}|${eintrag.prozent ?? ''}`;
+  if (schluessel !== lokalkiStand.schluessel) lokalkiStand = { schluessel, seit: jetzt };
+  const haengt = jetzt - lokalkiStand.seit >= LOKALKI_STILLSTAND_MS;
+  return { ...eintrag, haengt, unveraendertSeitMin: Math.floor((jetzt - lokalkiStand.seit) / 60000) };
+}
+
+/**
+ * Welche eingebauten Dienste starten noch? Lokale KI: der Host-Agent meldet
+ * Download-Stand und Ladezustand. Embedding: der Dienst selbst (/v1/modelle).
+ * Liefert je Dienst `null` (nichts zu warten) oder `{ prozent, text }`.
+ */
+async function ermittleLadevorgang({ agent, workingProviders, embeddingGewaehlt, embeddingBereit }) {
+  const r = { lokaleKi: null, embedding: null };
+  const lk = agent?.vorhanden ? agent.stack?.lokalki : null;
+  if (!workingProviders.includes(LOKAL_ID)) {
+    // Der Dienst selbst weiß es am besten: 503 = lädt sein Modell, Verbindung
+    // verweigert = Container startet, unbekannter Name = läuft auf diesem
+    // System gar nicht. Der Heartbeat des Agenten kommt nur einmal pro Minute.
+    const sonde = await sondeLokaleKi();
+    // Der Host-Auftrag lädt das Modell, bevor der Container überhaupt existiert:
+    // dann gibt es weder Heartbeat-Hinweis noch Dienst – nur Anforderung und
+    // status.json des Agenten.
+    const [lauf, anforderung] = await Promise.all([
+      leseLaufStatus().catch(() => null),
+      leseAnforderung().catch(() => null),
+    ]);
+    const hostLaeuft = lauf?.status === 'laeuft' && lauf.typ === 'module'
+      && (['download', 'pruefung', 'image', 'start'].includes(lauf.phase || '')
+        || /lokale(n)? KI/i.test(lauf.meldung || ''));
+    const angefordert = anforderung?.typ === 'module' && anforderung.wert === 'lokalki:an';
+    const herunterladen = lk?.profilAktiv === true && lk.vollstaendig === false;
+    // Antwortet der Dienst, ist nichts mehr abzuwarten – egal was Heartbeat
+    // oder status.json (noch) sagen. Sonst bliebe „wird gestartet“ stehen
+    // und der Assistent löste den abschließenden Test nie aus.
+    if (sonde === 'antwortet') {
+      r.lokaleKi = { prozent: null, dauer: false, text: 'Die lokale KI ist bereit und wird jetzt geprüft.' };
+    } else if (hostLaeuft) {
+      const gb = (b) => (b / 1e9).toFixed(1).replace('.', ',');
+      const hatZahlen = lauf.phase === 'download' && lauf.gesamtBytes > 0 && lauf.fortschrittBytes !== null;
+      const prozent = hatZahlen ? Math.min(99, Math.floor((lauf.fortschrittBytes * 100) / lauf.gesamtBytes)) : null;
+      const text = lauf.phase === 'download'
+        ? `Das Modell der lokalen KI wird heruntergeladen${hatZahlen ? `: ${gb(lauf.fortschrittBytes)} von ${gb(lauf.gesamtBytes)} GB (${prozent} %)` : ''}.`
+        : lauf.phase === 'pruefung' ? 'Die heruntergeladene Modelldatei wird geprüft.'
+        : lauf.phase === 'image' ? 'Das Programm der lokalen KI wird heruntergeladen (je nach Rechner 1 bis 4,5 GB, ohne Fortschrittsanzeige).'
+        : lauf.phase === 'start'
+          ? (sonde === 'laedt' ? 'Die lokale KI lädt ihr Modell in den Arbeitsspeicher.' : 'Die lokale KI wird gestartet.')
+        : 'Die Einrichtung der lokalen KI wird vorbereitet (Speicherplatz und Arbeitsspeicher werden geprüft).';
+      // Beim Laden des Programms (docker pull) gibt es keinen Zwischenstand –
+      // der Text bleibt auch bei gesundem Download gleich. Dort begrenzt die
+      // Frist des Host-Agenten; ein Stillstand lässt sich nicht erkennen.
+      r.lokaleKi = { prozent, dauer: true, text, ohneStillstand: lauf.phase === 'image' };
+    } else if (angefordert) {
+      r.lokaleKi = { prozent: null, dauer: true, text: 'Die Einrichtung der lokalen KI ist angefordert und beginnt gleich.' };
+    } else if (herunterladen) {
+      const soll = Number(lk.bedarf?.bytes) || 0;
+      const prozent = soll > 0 ? Math.min(99, Math.floor(((Number(lk.vorhandenBytes) || 0) * 100) / soll)) : null;
+      r.lokaleKi = { prozent, dauer: true, text: `Das Modell der lokalen KI wird heruntergeladen${prozent !== null ? ` (${prozent} %)` : ''}.` };
+    } else if (sonde === 'laedt' || sonde === 'startet' || (lk?.profilAktiv === true && sonde !== 'fehlt')) {
+      r.lokaleKi = { prozent: null, dauer: true, text: sonde === 'laedt' ? 'Die lokale KI lädt ihr Modell in den Arbeitsspeicher.' : 'Die lokale KI wird gestartet.' };
+    }
+  }
+  r.lokaleKi = stillstandMarkieren(r.lokaleKi);
+  if (embeddingGewaehlt && !embeddingBereit) {
+    const dienst = await modellZustaende().catch(() => null);
+    const laedt = (dienst?.modelle || []).find((m) => m.zustand === 'laedt');
+    const fehler = (dienst?.modelle || []).some((m) => m.zustand === 'fehler');
+    if (dienst && !dienst.laeuft) {
+      r.embedding = { prozent: null, dauer: true, text: 'Der Embedding-Dienst startet noch.' };
+    } else if (laedt) {
+      r.embedding = { prozent: laedt.prozent, dauer: true, text: `Der Embedding-Dienst lädt sein Modell herunter${Number.isFinite(laedt.prozent) ? ` (${laedt.prozent} %)` : ''}.` };
+    } else if (dienst?.laeuft && !fehler) {
+      r.embedding = { prozent: null, dauer: false, text: 'Der Embedding-Dienst ist bereit.' };
+    }
+  }
+  return r;
+}
+
 async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest = false } = {}) {
   const wizardZustand = normalisiereZustand(settings.einrichtung);
   const backend = getActiveBackendName(settings);
@@ -272,7 +405,9 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
   const erwarteteFolderKeys = [...stabileKeys];
   const fehlendeFolderKeys = erwarteteFolderKeys.filter((key) => !folders[key]);
   const folderCount = erwarteteFolderKeys.length - fehlendeFolderKeys.length;
-  const storageVerbunden = backend === 'onedrive'
+  const storageVerbunden = backend === 'lokal'
+    ? await lokal.testeVerbindung().then(() => true, () => false)
+    : backend === 'onedrive'
     ? !!settings.onedrive_tokens
     : !!(settings.nextcloud_base_url && settings.nextcloud_username && settings.nextcloud_app_password);
   const storageNachweis = wizardZustand.nachweise.storage?.backend === backend
@@ -289,6 +424,12 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
     || !!settings.onedrive_client_id
     || !!settings.nextcloud_base_url;
 
+  // Antwortet die lokale KI schon, gilt sie sofort als an – der Heartbeat des
+  // Agenten käme erst bis zu eine Minute später.
+  if (aiPruefen && await sondeLokaleKi() === 'antwortet') {
+    await lokalenProviderBeiAntwortAktivieren().catch(() => {});
+  }
+
   const [{ rows: menschenRows }, { rows: docRows }, agent, ai] = await Promise.all([
     db.query('SELECT count(*)::int AS anzahl FROM postbuch.mensch WHERE aktiv = true'),
     db.query('SELECT EXISTS (SELECT 1 FROM postbuch.postbuch) AS vorhanden'),
@@ -302,9 +443,12 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
 
   const aktuelleKiModellSignatur = kiModellSignatur(settings);
   const kiNachweisAktuell = wizardZustand.nachweise.ki?.modellSignatur === aktuelleKiModellSignatur;
+  const nachweisProvider = kiNachweisAktuell ? (wizardZustand.nachweise.ki?.workingProviders || []) : [];
+  // Der Nachweis aus einer Sicherung sagt nichts über den Dienst auf diesem Host.
+  const lokalerNachweisGueltig = !settings.nach_restore || lokalProviderSoll(agent)?.aktiv === true;
   const workingProviders = aiPruefen
     ? Object.values(ai?.providers || {}).filter((p) => p.working).map((p) => p.id)
-    : (kiNachweisAktuell ? (wizardZustand.nachweise.ki?.workingProviders || []) : []);
+    : nachweisProvider.filter((id) => id !== LOKAL_ID || lokalerNachweisGueltig);
   // Der Assistent stellt zwei verschiedene Fragen: „antwortet ein
   // Sprachmodell-Provider?" und „antwortet ein Provider, der Embeddings kann?".
   // Ein 2-in-1-Provider (OpenAI) beantwortet beide auf einmal. Die Fähigkeit
@@ -324,6 +468,13 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
   const embedding = embeddingConfig(settings);
   const embeddingKonfiguriert = !!embedding.model && workingProviders.includes(embedding.providerId);
   const modellklassen = pruefeModellklassen(settings, workingProviders, aiPruefen ? ai?.models : null);
+  // Dienste, die noch hochfahren oder ihr Modell laden. Ohne diese Auskunft
+  // sähe der Assistent aus, als sei etwas kaputt, obwohl nur gewartet wird.
+  const ladevorgang = await ermittleLadevorgang({
+    agent, workingProviders,
+    embeddingGewaehlt: nurEmbedding.has(embedding.providerId),
+    embeddingBereit: embeddingKonfiguriert,
+  });
   const pflichtmodelleOk = modellklassen.filter((x) => x.pflicht).every((x) => x.ok);
   // Eine eingetragene Adresse ist noch keine Konfiguration: erst der Abruf der
   // Fähigkeiten beweist, dass unter der URL wirklich ein eSCL-Scanner steht.
@@ -357,12 +508,14 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
       agent.vorhanden,
       false,
       agent.vorhanden ? 'Host-Agent ist erreichbar.' : 'Kein aktueller Host-Agent-Heartbeat.',
-      { vorhanden: !!agent.vorhanden, version: agent.version || null, capabilities: agent.capabilities || [], letzterLaufAm: agent.letzterLaufAm || null, scannerProfilAktiv: agent.scannerProfilAktiv },
+      { vorhanden: !!agent.vorhanden, version: agent.version || null, capabilities: agent.capabilities || [], letzterLaufAm: agent.letzterLaufAm || null, scannerProfilAktiv: agent.scannerProfilAktiv, duckdnsIp: agent.duckdnsIp || null, lanIp: agent.lan?.ip || null },
     ),
     menschen: pruefung(
       Number(menschenRows[0]?.anzahl || 0) > 0,
       false,
-      'Mindestens eine aktive Person ist angelegt.',
+      Number(menschenRows[0]?.anzahl || 0) > 0
+        ? 'Mindestens eine aktive Person ist angelegt.'
+        : 'Es ist noch keine aktive Person angelegt.',
       { anzahl: Number(menschenRows[0]?.anzahl || 0) },
     ),
     // Verbindung und Selbsttest sind BEWUSST zwei Prüfungen. Der Selbsttest
@@ -420,7 +573,9 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
       llmProviders.length > 0 && pflichtmodelleOk,
       true,
       llmProviders.length === 0
-        ? 'Noch kein Sprachmodell-Provider erfolgreich getestet.'
+        ? (ladevorgang.lokaleKi
+          ? `${ladevorgang.lokaleKi.text}${ladevorgang.lokaleKi.dauer ? ' Das kann einige Minuten dauern.' : ''}`
+          : 'Noch kein Sprachmodell-Provider erfolgreich getestet.')
         : (!pflichtmodelleOk
           ? `${modellklassen.filter((x) => x.pflicht && !x.ok).length} von ${modellklassen.length} Aufgaben haben noch kein nutzbares Modell.`
           : `Alle ${modellklassen.length} Aufgaben sind einem nutzbaren Modell zugeordnet.`),
@@ -431,6 +586,7 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
         modellklassen,
         pflichtmodelleOk,
         modellSignatur: aktuelleKiModellSignatur,
+        laedt: ladevorgang.lokaleKi,
       },
     ),
     kiEmbedding: pruefung(
@@ -439,7 +595,9 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
       nurEmbedding.has(embedding.providerId)
         ? (embeddingKonfiguriert
           ? 'Der eingebaute Embedding-Dienst ist einsatzbereit.'
-          : 'Der eingebaute Embedding-Dienst antwortet noch nicht.')
+          : (ladevorgang.embedding
+            ? `${ladevorgang.embedding.text}${ladevorgang.embedding.dauer ? ' Das kann einige Minuten dauern.' : ''}`
+            : 'Der eingebaute Embedding-Dienst antwortet noch nicht.'))
         : embeddingProviders.length === 0
         ? 'Noch kein Embedding-Provider erfolgreich getestet.'
         : (!embedding.model
@@ -456,12 +614,15 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
         embedding: { providerId: embedding.providerId, model: embedding.model, dim: embedding.dim },
         embeddingExplizit: !!settings.llm_embedding?.model,
         modellSignatur: aktuelleKiModellSignatur,
+        laedt: ladevorgang.embedding,
       },
     ),
     scanner: pruefung(
-      scannerKonfiguriert,
+      scannerKonfiguriert && agent.scannerProfilAktiv !== false,
       false,
-      scannerKonfiguriert
+      scannerKonfiguriert && agent.scannerProfilAktiv === false
+        ? 'Scanner antwortet, aber der Scan-Dienst läuft auf diesem System nicht.'
+        : scannerKonfiguriert
         ? 'Scanner ist eingerichtet und hat auf den Test geantwortet.'
         : (scannerUrlGesetzt
           ? 'Scanner-Adresse ist eingetragen, aber noch nicht erfolgreich getestet.'
@@ -488,6 +649,10 @@ async function baueIstpruefung(settings, { aiPruefen = false, storageSelbsttest 
         discordKonfiguriert,
         updateAgentVorhanden: !!agent.vorhanden,
         verschluesselungEntschieden: backupVerschluesselungEntschiedenWert,
+        // Ausdrücklich abgelehnt? Nur dann zeigt der Assistent „bewusst
+        // unverschlüsselt“. Eine Bestandsinstanz ohne diese Entscheidung ist für
+        // den Abschluss zwar nicht offen, bekommt aber trotzdem das Formular.
+        verschluesselungAbgelehnt: settings.backup_encryption?.bewusst === true && !verschluesselung.enabled,
         verschluesselungAktiv: verschluesselung.enabled,
       },
     ),
@@ -502,6 +667,7 @@ export async function gesamtbild({ aiPruefen = false, storageSelbsttest = false 
   const settings = await loadDynamicSettings();
   const zustand = normalisiereZustand(settings.einrichtung);
   const ist = await baueIstpruefung(settings, { aiPruefen, storageSelbsttest });
+  const nachRestore = await nachRestoreBild(settings).catch(() => null);
   return {
     status: zustand.status,
     quelle: zustand.quelle,
@@ -513,6 +679,9 @@ export async function gesamtbild({ aiPruefen = false, storageSelbsttest = false 
     abgeschlossenAm: zustand.abgeschlossenAm,
     automatischEinladen: zustand.status === 'offen' && !zustand.eingeladenAm,
     hostconfig: leseHostconfig(settings),
+    // Nach einem Restore: Vergleich mit dem Stack der Sicherung. Bleibt
+    // stehen, bis der Assistent abgeschlossen oder der Hinweis erledigt ist.
+    nachRestore,
     ...ist,
   };
 }
@@ -631,6 +800,25 @@ router.post('/storage-selbsttest/start', async (_req, res) => {
   }
 });
 
+// Nach einem Restore: Der erste Admin-Login landet einmal im Assistenten,
+// wenn etwas nicht mehr passt. Öffnet ihn wie /oeffnen (manuell, sperrt nicht).
+router.post('/nach-restore/eingeladen', async (_req, res) => {
+  await nachRestoreMarkieren('eingeladenAm');
+  await mutiereZustand(async (aktuell) => {
+    aktuell.status = 'offen';
+    aktuell.quelle = 'manuell';
+    aktuell.eingeladenAm = new Date().toISOString();
+    aktuell.abgeschlossenAm = null;
+  });
+  res.json({ ok: true });
+});
+
+router.post('/nach-restore/erledigt', async (req, res) => {
+  await nachRestoreErledigt();
+  await appLog('INFO', 'einrichtung', 'Hinweis nach der Wiederherstellung als erledigt markiert', { entity: 'settings', entityId: req.session?.username || 'admin' });
+  res.json({ ok: true });
+});
+
 router.post('/einladung', async (req, res) => {
   let istOffen = true;
   await mutiereZustand(async (zustand) => {
@@ -666,6 +854,7 @@ router.post('/abschliessen', async (req, res) => {
     aktuell.abgeschlossenAm = new Date().toISOString();
     aktuell.schritte.abschluss = { abgeschlossenAm: aktuell.abgeschlossenAm };
   });
+  await nachRestoreErledigt();
   await appLog('INFO', 'einrichtung', 'Einrichtungsassistent abgeschlossen', { entity: 'settings', entityId: req.session?.username || 'admin' });
   res.json({ ok: true, status: zustand.status });
 });

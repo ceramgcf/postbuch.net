@@ -105,6 +105,8 @@ Browser, ob postbuch.net die Kamera benutzen darf.
    hochgeladenen Seiten aus dem Scan; die übrigen bleiben für einen neuen
    Versuch stehen.
 
+#### Farbmodus und Kamera wählen
+
 Oben rechts wählst du **Farbe**, **Grau** oder **SW** (Schwarzweiß). Die Wahl
 gilt für alle Seiten des Scans und lässt sich in der Vorschau noch ändern; die
 Seiten werden dann neu berechnet. SW ergibt die kleinsten Dateien und eignet
@@ -122,6 +124,8 @@ Jede andere Kamera lässt sich direkt antippen; das Livebild wechselt sofort,
 sodass du gleich siehst, welches Objektiv das schärfere Bild liefert. Die
 gerade laufende Kamera ist mit **Aktiv** markiert. Solange die Liste offen
 ist, löst die Automatik nicht aus. Die Wahl gilt nur für diesen Browser.
+
+#### Seiten ordnen und Ecken anpassen
 
 **Seiten ordnen:** Ein Tipp auf ![Raster-Symbol](icons/layout-grid.svg)
 **Seite 2 von 5** oben öffnet alle Seiten als Raster. Eine Seite gedrückt
@@ -145,6 +149,8 @@ oben das Foto mit einem Tipp unverändert.
 Jede Seite wird im PDF auf DIN-A4-Breite gesetzt und mit höchstens
 **200 dpi** gespeichert. Ein A4-Blatt hat damit 1654 × 2339 Bildpunkte, was für
 die KI-Analyse und den Ausdruck genügt und die Datei klein hält.
+
+#### Etiketten, Technik und unterbrochene Scans
 
 **Etikett scannen:** Solange noch keine Seite aufgenommen ist, sucht die
 Live-Ansicht zugleich nach dem QR-Code eines
@@ -238,7 +244,7 @@ Scan über denselben überwachten Ordner wie
 
 Auf der Seite ![Import-Symbol](icons/upload.svg) `Importieren` per Drag & Drop
 oder Dateiauswahl. Fotos darunter öffnen den Scan, siehe
-[Fotos importieren](#fotos-importieren). Für PDFs gibt es zwei Modi:
+[Fotos importieren](#fotos-importieren). Für PDFs gibt es drei Modi:
 
 ![Batch-Symbol](icons/inbox.svg) **Batch** – Jede Datei wird **separat**
 verarbeitet und bekommt eine eigene Postnummer. Das ist der Weg für einen Stapel
@@ -250,6 +256,21 @@ Die Reihenfolge lässt sich vorher per ![Aufwärts-Symbol](icons/arrow-up.svg) /
 ![Abwärts-Symbol](icons/arrow-down.svg) Pfeiltasten ändern, der Dateiname ist
 frei wählbar. Das ist der Weg für einen Brief mit Anlagen oder ein mehrteilig
 gescanntes Schreiben.
+
+![Scheren-Symbol](icons/scissors.svg) **Stapel auftrennen** – Nimmt **genau eine**
+PDF an und behandelt sie als
+[Dokumentenstapel](#dokumentenstapel-aus-dem-einzug): Jede Seite zählt als ein
+Blatt, die KI schlägt vor, wo ein Dokument endet, und du prüfst die Trennung im
+[Eingang](#einen-dokumentenstapel-trennen). Das ist der Weg für eine PDF, in der
+mehrere Schreiben hintereinander stecken, etwa ein Sammelscan aus einem anderen
+Gerät. Eine weitere PDF ersetzt die bereits gewählte. Der Vorschlag braucht eine
+Textebene in der PDF. Fehlt sie (Scan ohne Texterkennung), sagt postbuch.net das
+schon beim Hochladen: Der Stapel steht dann ohne Vorschlag im Eingang, alle Seiten
+liegen vorerst in einem Dokument, und du setzt die Trennungen von Hand. Fehlt die
+Textebene nur auf einzelnen Seiten, nennt der Hinweis ihre Zahl; an diesen Stellen
+lohnt ein genauer Blick. Eine einseitige PDF geht direkt als
+ein Dokument in die Pipeline. Ist [Automatisch folgen](#automatisch-folgen) für
+Dateien eingeschaltet, öffnet sich die Trennansicht.
 
 ### PDFs über das Teilen-Menü übergeben
 
@@ -273,6 +294,13 @@ Ist postbuch.net beim Teilen nicht erreichbar, erscheint eine eigene
 Fehlerseite: Der Server hat nicht geantwortet, die PDF wurde **nicht
 übernommen und verworfen**. Sobald die Verbindung wieder steht, die PDF
 erneut teilen.
+
+Scheitert die Übergabe an den Server erst danach – etwa weil er gerade neu
+startet –, meldet **Logs → Jobs** den Fehler. Die PDF bleibt dann auf dem Gerät
+gespeichert und lässt sich mit **Erneut versuchen** noch einmal übergeben.
+Sonst geht sie beim nächsten Teilen oder nach der nächsten Anmeldung mit,
+höchstens einen Tag lang. Lehnt der Server die Datei ab, etwa bei Lesezugriff,
+wird sie nicht aufbewahrt.
 
 Ist die App beim Teilen nicht angemeldet, wartet die Datei bis zur Anmeldung
 und wird danach übernommen – höchstens einen Tag lang, danach verfällt sie.
@@ -299,8 +327,12 @@ Voraussetzung ist ein eSCL-fähiger Netzwerkscanner und das Compose-Profil
 `scanner`. Eingerichtet wird er unter
 ![Einstellungen-Symbol](icons/settings.svg) `Einstellungen → Scanner` oder im
 Einrichtungsassistenten; die Gerätesuche findet Geräte im eigenen Netz selbst.
-Antwortet das Gerät beim Test, schaltet postbuch.net das Compose-Profil
-`scanner` automatisch ein – sofern der Host-Agent läuft. Ausschalten geht unter
+Antwortet das Gerät beim Test oder wird eine neue Geräteadresse gespeichert,
+schaltet postbuch.net das Compose-Profil `scanner` automatisch ein – sofern der
+Host-Agent läuft. Die Meldung nach dem Speichern sagt dann „der Scan-Dienst wird
+eingeschaltet“; das dauert in der Regel weniger als eine Minute. Läuft der
+Scan-Dienst nicht, nennt ein Scanversuch genau das und den Weg zum Einschalten
+(„Scannerprofil einschalten“ unter `Einstellungen → Scanner`). Ausschalten geht unter
 ![Einstellungen-Symbol](icons/settings.svg) `Einstellungen → Scanner` und nur
 nach ausdrücklicher Rückfrage; danach erreichen gescannte Seiten postbuch.net
 nicht mehr.
@@ -310,8 +342,8 @@ Auf der ![Import-Symbol](icons/upload.svg) Import-Seite wählst du in der
 
 | Einstellung      | Optionen                                                                            |
 | ---------------- | ----------------------------------------------------------------------------------- |
-| **Quelle**       | ADF · ADF Stapel · Flachbett Einzelseite · Flachbett Mehrseitig (Session)           |
-| **Seiten**       | Vorderseite · Beidseitig – nur bei ADF-Quellen und nur, wenn der Scanner laut Einstellungen duplexfähig ist; Vorgabe ist Beidseitig |
+| **Quelle**       | Einzug · Dokumentenstapel aus dem Einzug · Flachbett Einzelseite · Flachbett Mehrseitig (Session) |
+| **Seiten**       | Vorderseite · Beidseitig – nur bei den Einzug-Quellen und nur, wenn der Scanner laut Einstellungen duplexfähig ist; Vorgabe ist Beidseitig |
 | **Auflösung**    | Was das Gerät für die gewählte Quelle meldet                                        |
 | **Farbe**        | Graustufen oder Farbe                                                               |
 | **Papierformat** | A3 (falls unterstützt), A4, A5, A6 – nur bei Flachbett (Einzelseite oder Mehrseitig) |
@@ -329,25 +361,68 @@ lässt sich nach der ersten Seite nicht mehr ändern. Passiert 60 Sekunden lang
 nichts mehr, wird eine Session automatisch abgeschlossen und die bis dahin
 gescannten Seiten gehen in die Verarbeitungs-Pipeline.
 
-Bei **ADF** werden alle eingezogenen Blätter zu **einem** Dokument
+Bei **Einzug** werden alle eingezogenen Blätter zu **einem** Dokument
 zusammengefasst – das eignet sich für ein mehrseitiges Schreiben. Willst du
-dagegen mehrere unterschiedliche Belege auf einmal in den Einzug legen, nutze
-**ADF Stapel**: Hier wird **jedes Blatt zu einem eigenen Dokument**. Bei
-Beidseitig zählen Vorder- und Rückseite eines Blatts zusammen; eine leere
-Rückseite wird automatisch entfernt, sodass das Ergebnis in diesem Fall
-einseitig ist. Kommt es mitten im Stapel zu einem Papierstau, gehen die bereits
-fertig gescannten Blätter trotzdem einzeln in die Pipeline; nur für die
-verbliebenen Blätter musst du den Vorgang wiederholen.
+dagegen mehrere unterschiedliche Dokumente auf einmal in den Einzug legen, nutze
+den [Dokumentenstapel aus dem Einzug](#dokumentenstapel-aus-dem-einzug).
 
 Nach dem Scan durchläuft jede Datei die Bereinigungs-Pipeline im
 `cleaner`-Container (automatische Drehung, Zuschnitt, Entzerrung, OCR-Textebene)
-und wird dann an die App übergeben. Im ADF-Stapel mit Beidseitig werden für den
+und wird dann an die App übergeben. Im Dokumentenstapel mit Beidseitig werden für den
 Zuschnitt die Inhaltsmasken beider Seiten übereinandergelegt. So bestimmt der
 gesamte Nutzinhalt von Vorder- und Rückseite den gemeinsamen Ausschnitt, der
-auf beide Seiten angewendet wird. Automatisch erkannte Leerseiten werden bei
+auf beide Seiten angewendet wird. Die Lage erkennt der Cleaner für jede Seite
+einzeln und dreht ein Blatt nur, wenn die Erkennung sicher ist und keine Seite
+widerspricht; Vorder- und Rückseite drehen dabei gemeinsam. Bleibt eine Seite
+trotzdem falsch herum, drehst du sie in der
+[Trennansicht](#einen-dokumentenstapel-trennen). Automatisch erkannte Leerseiten werden bei
 Beidseitig entfernt (typische unbedruckte Rückseite); bei Vorderseite und
 Flachbett Mehrseitig bleibt jede gescannte Seite erhalten, da du sie dort
 bewusst selbst ausgelöst hast.
+
+### Dokumentenstapel aus dem Einzug
+
+Mit der Quelle **Dokumentenstapel aus dem Einzug** legst du mehrere Dokumente auf einmal
+in den Einzug – etwa die Post einer Woche. postbuch.net liest jedes Blatt
+einzeln ein, die KI schlägt vor, wo ein Dokument endet und das nächste beginnt, und
+du prüfst den Vorschlag im [Eingang](#einen-dokumentenstapel-trennen). Erst danach
+entsteht aus jedem ein eigenes Dokument, das ganz normal verarbeitet wird,
+mit KI-Analyse und Duplikatprüfung. Die Quelle gibt es nur, wenn der Scanner
+einen Einzug hat.
+
+- Bei **Beidseitig** gehören Vorder- und Rückseite eines Blatts immer zusammen;
+  eine leere Rückseite wird automatisch entfernt. Ein Blatt, das ganz leer ist,
+  fällt weg.
+- Ein **Hinweis** zum Scan hilft der KI beim Trennen und wird an jedes
+  entstehende Dokument weitergegeben.
+- Ein Stapel hat höchstens 200 Blätter. Es können höchstens fünf Dokumentenstapel
+  gleichzeitig offen sein; einen weiteren lehnt die Import-Seite mit der Bitte
+  ab, die offenen zuerst im Eingang zu prüfen. Kommt ein Dokumentenstapel über den
+  [Scan-Webhook](#weg-5-scan-webhook-im-eigenen-netz) und ist kein Platz
+  mehr, wird aus jedem Blatt ein eigenes Dokument.
+- Kommt es mitten im Stapel zu einem **Papierstau**, werden die bereits
+  eingelesenen Blätter trotzdem als Dokumentenstapel übernommen. Die übrigen Blätter
+  scannst du als neuen Stapel.
+
+Ist [Automatisch folgen](#automatisch-folgen) für Scans eingeschaltet, öffnet
+sich nach dem Scan die Trennansicht des Stapels. Während die Blätter eingelesen und erkannt
+werden, steht der Stapel im Eingang unter **In Verarbeitung**, danach unter
+**Dokumentenstapel**.
+
+**Eindeutige Stapel ohne Rückfrage:** Unter
+![Einstellungen-Symbol](icons/settings.svg) `Einstellungen → Scanner` steht
+der Schalter **Eindeutige Dokumentenstapel ohne Rückfrage verarbeiten** (Vorgabe:
+an). Ein Stapel geht dann von selbst weiter, wenn alles davon zutrifft:
+
+- Die KI ist sich bei jeder Trennstelle sicher und hält den Stapel für eindeutig.
+- Alle Blätter sind angekommen.
+- Kein Blatt ist als Anlage, Vorblatt, Duplikat, Beilage oder Werbung erkannt.
+- Kein entstehendes Dokument hat mehr als 20 Seiten.
+
+Vorher läuft auf der Kachel im Eingang ein **Countdown von 15 Sekunden**. Ein
+Tipp darauf oder das Öffnen des Stapels hält ihn an; der Stapel wartet dann auf
+deine Prüfung. Trifft eine Bedingung nicht zu oder ist der Schalter aus, wartet
+der Stapel immer im Eingang.
 
 ### Scanner-Erkennung kalibrieren
 
@@ -412,6 +487,11 @@ docker compose up -d --no-deps scanner app
 Scannen über die Import-Seite funktioniert in beiden Fällen, weil postbuch.net
 den Scanner-Dienst über das interne Docker-Netz anspricht.
 
+Auch der [Dokumentenstapel](#dokumentenstapel-aus-dem-einzug) hat eine eigene URL
+(`/scan/adf/stapel/simplex` bzw. `…/duplex`). Ein Aufruf scannt den ganzen
+Stapel; er steht danach im Eingang zur Prüfung oder geht, wenn er eindeutig
+ist, nach dem Countdown von selbst weiter.
+
 Bei **Flachbett Mehrseitig** braucht es mehrere Aufrufe: je Seite
 `/scan/flatbed/session/scan`, am Ende `/scan/flatbed/session/finish`.
 
@@ -431,14 +511,23 @@ die Seiten kommen so an, wie das Gerät sie speichert.
 Die Verarbeitung läuft in Phasen. Standardmäßig laufen bis zu **drei** Dokumente
 gleichzeitig. Anpassen lässt sich das unter
 ![Einstellungen-Symbol](icons/settings.svg)
-`Einstellungen → Allgemein → Verarbeitungs-Pipeline`.
+`Einstellungen → Allgemein → Verarbeitungs-Pipeline`. Dort stehen auch drei
+Grenzen, die unabhängig von der Dokumentzahl gelten: **KI auf diesem Rechner**
+(Standard 1 Aufruf gleichzeitig), **KI-Dienste im Internet** (Standard 6) und
+**Bildverarbeitung** (Standard: Prozessorkerne − 1). Leer lassen heißt
+Standard.
+
+Sobald der Upload bestätigt ist, ist das Dokument sicher angenommen: Auch ein
+Neustart der App dazwischen verliert es nicht, es wird danach weiterverarbeitet.
+Ist kein KI-Dienst erreichbar, wartet der Job und versucht es nach 1, 10 und
+60 Minuten erneut.
 
 | Phase | Was passiert                                                                                                     |
 | ----- | ---------------------------------------------------------------------------------------------------------------- |
 | 0     | Scanner-Eingang in die Dateiablage hochladen                                                                          |
 | 1     | PDF herunterladen                                                                                                |
 | 2     | **KI-Analyse** – Absender, Datum, Betreff, Zusammenfassung, Schlagwörter, Lebensbereich × Dokumentart, Fachdaten |
-| 2.5   | Validierung und Reparatur der KI-Ausgabe                                                                         |
+| 2.5   | Validierung und Reparatur der KI-Ausgabe; ein fehlender Fachblock wird leer angelegt (**Review nötig**)          |
 | 3     | **Duplikatprüfung** über Embedding-Ähnlichkeit                                                                   |
 | 4     | Duplikat-Handling, falls nötig                                                                                   |
 | 5     | Dateiablage in den Zielordner, Umbenennung                                                                            |
@@ -448,7 +537,9 @@ gleichzeitig. Anpassen lässt sich das unter
 | 9     | PDF-Cache (das Embedding wurde bereits in Phase 8 gespeichert)                                                   |
 
 Den Fortschritt siehst du live im Navigationpunkt `Logs → Jobs`. Die Seite darf
-man verlassen.
+man verlassen. Bei einem laufenden oder wartenden Eingang führt
+**Im Eingang ansehen** zu seiner Seite in der Eingangsgalerie mit der Vorschau
+des Dokuments.
 
 ### Automatisch folgen
 
@@ -458,14 +549,15 @@ zeigt, was mit dem Dokument gerade passiert, darunter läuft der Job mit seinen
 Phasen. Ist die Verarbeitung erfolgreich abgeschlossen, öffnet sich nach drei
 Sekunden das neue Dokument. Ein Tipp auf den ablaufenden Ring oder eine
 beliebige Taste bricht das ab; **Dokument öffnen** führt dann von Hand hin.
-Erkennt die Pipeline ein mögliches Duplikat, wartet sie auf die Entscheidung
-unter **Offene Entscheidungen**; schlägt sie fehl, bleibt die Ansicht mit der
+Erkennt die Pipeline einen [Duplikatverdacht](#duplikate), wartet sie auf
+deine Entscheidung; schlägt sie fehl, bleibt die Ansicht mit der
 Fehlermeldung stehen.
 
-Bei mehreren Dokumenten auf einmal – Batch mit mehreren Dateien, **ADF
-Stapel** – zählt der Kasten mit, wie viele fertig sind; ein Dokument
-öffnet sich dann nicht automatisch, ein Tipp auf einen Eintrag im Verlauf führt
-zum jeweiligen Dokument.
+Bei mehreren Dokumenten auf einmal – Batch mit mehreren Dateien – zählt der
+Kasten mit, wie viele fertig sind; ein Dokument öffnet sich dann nicht
+automatisch, ein Tipp auf einen Eintrag im Verlauf führt zum jeweiligen
+Dokument. Ein [Dokumentenstapel](#dokumentenstapel-aus-dem-einzug) führt stattdessen zu
+seiner Trennansicht im Eingang.
 
 Wann postbuch.net folgt:
 
@@ -491,38 +583,268 @@ an, bleibt die Seite mit einem Hinweis stehen.
 Bei einem Cloud-Anbieter rufen die KI-Phasen den eingestellten Provider
 kostenpflichtig auf; bei einem lokal betriebenen, OpenAI-kompatiblen Anbieter
 entstehen keine externen API-Kosten pro Dokument. Ein Import umfasst
-normalerweise die Hauptanalyse und ein Embedding, bei gestaffelter
-[Modellwahl](ki-provider.md#modellwahl) vorher eine kurze Voranalyse; bei
+normalerweise die Hauptanalyse und ein Embedding, bei der Einzelwahl
+([Modellwahl](ki-provider.md#modellwahl)) vorher eine kurze Voranalyse; bei
 Reparatur, Fallback oder einem Erstattungsbescheid können weitere Aufrufe
 dazukommen. Als grobe Orientierung sind **1–20 Eurocent je Dokument** üblich,
 mit günstigen Modellen auch weniger und bei langen, schwierigen oder mehrfach
 versuchten Dokumenten auch mehr. Die vollständige Aufschlüsselung steht unter
 [KI-Anbieter → Kosten und kostenpflichtige Aufrufe](ki-provider.md#kosten-und-kostenpflichtige-aufrufe).
 
-### Duplikate (Experimentell)
+### Duplikate
 
-Erkennt Phase 3 ein wahrscheinliches Duplikat, wird die Verarbeitung
-**angehalten** statt blind fortgesetzt. Auf dem Dashboard erscheint eine
-**offene Entscheidung**: das neue und das bestehende Dokument nebeneinander, mit
-der Wahl zwischen Verwerfen, Ersetzen und Trotzdem anlegen. Dieselbe
-Entscheidung lässt sich aus der PWA-/Browser-Push-Nachricht öffnen. Ist die
-nicht empfohlene, experimentelle Discord-Anbindung bewusst eingerichtet, enthält
-auch deren Meldung einen Link oder Bot-Schaltflächen.
+Erkennt Phase 3 einen **Duplikatverdacht**, wird die Verarbeitung
+**angehalten** statt blind fortgesetzt. Der Eingang steht dann im Reiter
+**Eingang** unter **Duplikatverdacht**, die Dashboard-Karte **Offene Eingänge**
+zählt ihn mit, und
+eine PWA-/Browser-Push-Nachricht führt direkt zum Vergleich.
 
-Das Feature ist experimentell. Aktuell werden viele Duplikate nicht zuverlässig
-erkannt.
+So entsteht ein Verdacht:
+
+- postbuch.net sucht im Bestand nach inhaltlich ähnlichen Dokumenten (ab der
+  [Ähnlichkeits-Schwelle](ki-provider.md#duplikat-erkennung), Standard 80 %).
+- Stimmen bei einem davon Briefdatum, Person und die übrigen Merkmale überein
+  (fremdes Zeichen, Betrag), gilt es als Verdacht.
+- Stimmt nur ein Teil überein, entscheidet die
+  [KI-Duplikatprüfung](ki-provider.md#duplikat-erkennung), wenn sie
+  eingeschaltet ist. Sie meldet nur, wenn sie sich sehr sicher ist. Ist sie aus
+  oder unsicher, wird das Dokument normal abgelegt: Ein fälschlich angehaltenes
+  Dokument wiegt schwerer als ein übersehenes Duplikat.
+
+**Vergleichen und entscheiden:** Die Vergleichsansicht zeigt links die alte
+Fassung aus dem Bestand und rechts die neue; beide scrollen gemeinsam. Auf dem
+Handy wechselt ein Umschalter zwischen alt und neu. Drei Knöpfe stehen zur Wahl:
+
+| Knopf                                       | Wirkung                                                                 |
+| ------------------------------------------- | ----------------------------------------------------------------------- |
+| **Alte Fassung behalten**                   | Die neue PDF wird verworfen, das bestehende Dokument bleibt.            |
+| **Neue Fassung behalten**                   | Die neue PDF ersetzt die alte Fassung unter derselben Kennung.          |
+| **Beide Dokumente behalten (kein Duplikat)** | Die Verarbeitung läuft weiter, das neue Dokument bekommt eine eigene Kennung. |
+
+Ohne Entscheidung innerhalb der Frist (Standard 7 Tage) werden **beide
+Dokumente behalten**; postbuch.net verwirft nie selbsttätig etwas. Ist die nicht
+empfohlene, experimentelle Discord-Anbindung bewusst eingerichtet, enthält auch
+deren Meldung einen Link oder dieselben Knöpfe.
 
 ### Wenn etwas schiefgeht
 
-Fehlgeschlagene Dokumente landen im Ordner
-`<postbuch.net-Wurzelverzeichnis>/_failed` der Dateiablage und erscheinen in einer
-eigenen Karte auf dem Dashboard, von wo aus sich die Verarbeitung wiederholen
-lässt. Angehaltene Läufe (z. B. wegen Duplikatverdacht) liegen in
-`<postbuch.net-Wurzelverzeichnis>/_suspended` und werden fortgesetzt, sobald du
-entschieden hast.
+Ein Dokument, dessen Verarbeitung scheitert, geht nicht verloren: Die Datei
+wandert in den Ordner `<postbuch.net-Wurzelverzeichnis>/_failed` der Dateiablage
+und steht im [Eingang](#der-eingang-offene-dokumente), bis du entschieden hast,
+was mit ihr geschieht. Angehaltene Läufe (z. B. wegen Duplikatverdacht) liegen
+in `<postbuch.net-Wurzelverzeichnis>/_suspended` und werden fortgesetzt, sobald
+du entschieden hast.
 
 Häufige Ursachen und ihre Behebung stehen unter
 [Betrieb und Troubleshooting](betrieb-troubleshooting.md).
+
+## Der Eingang: offene Dokumente
+
+![Import-Symbol](icons/upload.svg) **Importieren** hat zwei Reiter:
+**Hochladen** mit Scanner, Datei-Upload und Kamerascan sowie **Eingang**. Der
+Eingang zeigt als Galerie jede angenommene PDF, die noch kein Dokument in
+postbuch.net ist – mit Vorschaubild der ersten Seite, Name, Stand, Herkunft und
+Eingangszeit. Neueste stehen oben.
+
+Jeder Eingang gehört zu einer von fünf Gruppen, nach denen sich die Galerie
+filtern lässt:
+
+| Gruppe              | Was dort steht                                                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Duplikatverdacht** | angehalten, weil das Dokument schon im Bestand liegen könnte; wartet auf deinen [Vergleich](#duplikate) |
+| **Handlung nötig**  | Verarbeitung fehlgeschlagen, Scan, dessen Upload in die Dateiablage auch nach allen Wiederholungen scheiterte |
+| **Dokumentenstapel**     | ein [Dokumentenstapel](#dokumentenstapel-aus-dem-einzug), dessen Trennung du prüfen sollst; läuft der Countdown, geht er gleich von selbst weiter |
+| **Wartet**          | eingereiht, zurückgestellt, weil kein KI-Dienst erreichbar ist, oder Scan, dessen Upload in die Dateiablage automatisch wiederholt wird      |
+| **In Verarbeitung** | läuft gerade durch die Pipeline, oder ein Scan, den der Scanner noch einliest oder dessen Texterkennung noch läuft                           |
+
+Gibt es offene Eingänge, zeigt das Dashboard die Karte **Offene Eingänge** mit
+der Anzahl je Gruppe. Braucht mindestens einer eine Handlung, einen Vergleich
+oder die Prüfung eines Dokumentenstapels, trägt **Importieren** in der Navigation
+einen roten Punkt.
+
+Ein Scan über **Importieren** erscheint sofort nach dem Auslösen als **Scan
+läuft** im Eingang und unter ![Logs-Symbol](icons/scroll-text.svg) **Logs →
+Jobs**, auch bei einem langen Stapel im Einzug. Die PDF folgt, sobald alle
+Seiten eingelesen und erkannt sind; dann geht der Eintrag nahtlos in die
+Verarbeitung über.
+
+Was der Eingang **nicht** zeigt:
+
+- Eine Datei im überwachten Ordner, die postbuch.net noch nicht übernommen hat.
+- Fertige Dokumente – die stehen in der Dokumentliste.
+
+### Einen Eingang behandeln
+
+Ein Klick auf eine Kachel öffnet den Eingang: links die PDF, rechts Stand,
+Herkunft, Eingangszeit, Zahl der Versuche und der letzte Fehler. Auf dem Handy
+wechselt ein Umschalter zwischen **Eingang** und **Dokument**; die Aktionen
+stehen fest am unteren Rand.
+
+Für fehlgeschlagene und zurückgestellte Eingänge sowie für Scans mit
+ausgeschöpften Wiederholungen gibt es drei Aktionen:
+
+- **Neu auslösen** startet die normale Verarbeitung mit KI-Analyse sofort noch
+  einmal. Sinnvoll, sobald die Ursache behoben ist – etwa der KI-Dienst wieder
+  erreichbar oder das Guthaben aufgefüllt.
+- **Manuell ablegen** legt die PDF ohne KI als Dokument ab, siehe unten.
+- **Verwerfen** legt die PDF nach einer Rückfrage in den
+  [Papierkorb von postbuch.net](storage-backends.md#der-postbuchnet-papierkorb)
+  in der Dateiablage. Ein Dokument entsteht nicht. Gelingt das Verschieben
+  nicht, bleibt der Eingang stehen und meldet den Fehler.
+
+Ein Scan, dessen Upload in die Ablage gescheitert ist, wartet zunächst auf
+seinen nächsten automatischen Versuch (zuerst nach 30 Minuten, danach in
+wachsenden Abständen). Ist die Ablage schon vorher wieder erreichbar – etwa
+nach einer erneuten Anmeldung bei OneDrive –, lädt **Jetzt erneut versuchen**
+ihn sofort hoch. Der Knopf zählt als einer der Versuche.
+
+Je nach Fehler spricht postbuch.net eine **Empfehlung** aus und hebt den
+passenden Knopf hervor:
+
+| Fehler | Empfehlung |
+|---|---|
+| Ablage nicht erreichbar, Scan-Upload gescheitert | Neu auslösen, sobald die Ablage wieder da ist. Manuell ablegen hilft hier nicht. |
+| KI-Dienst vorübergehend gestört (Zeitüberschreitung, zu viele Anfragen) | Neu auslösen |
+| KI nicht nutzbar (Guthaben aufgebraucht, Schlüssel ungültig) oder KI-Auswertung gescheitert | Manuell ablegen |
+| PDF nicht lesbar | Verwerfen; zeigt die Vorschau die PDF doch lesbar an, Manuell ablegen |
+
+Die anderen Aktionen bleiben trotzdem wählbar.
+
+Bei einem Duplikatverdacht öffnet **Alt und neu vergleichen** die
+[Vergleichsansicht](#duplikate). Läuft ein Eingang gerade oder ist er bereits eingereiht,
+gibt es keine Aktion: Die Seite zeigt den Fortschritt und aktualisiert sich
+selbst.
+
+Hat inzwischen jemand anderes oder die Automatik denselben Eingang behandelt,
+meldet postbuch.net das und lädt den aktuellen Stand; eine doppelte Verarbeitung
+entsteht nicht. Ist der Eingang als Dokument abgelegt, nennt die Seite dessen
+Kennung und den Dateinamen und führt zum Dokument.
+
+### Einen Dokumentenstapel trennen
+
+Ein Klick auf die Kachel eines Dokumentenstapels öffnet die **Trennansicht**.
+Solange der Stapel noch eingelesen wird oder die KI noch vorschlägt, zeigt sie
+nur die Blätter in der Reihenfolge ihres Eintreffens; ein noch ausstehendes Blatt
+steht als Platzhalter „Blatt n wird noch eingelesen“ da. Mit dem Vorschlag zeigt sie
+alle Blätter in Scanreihenfolge, gruppiert in Karten: Jede Karte ist ein
+Dokument, so wie es nach dem Vorschlag der KI entstünde, mit Seitenzahl und
+erkannter Dokumentart. Die Karten wechseln zwischen Flieder und Türkis, damit
+du auf einen Blick siehst, wo ein Dokument endet. Zwischen zwei Blättern sitzt ein runder Knopf:
+
+- ![Schere-Symbol](icons/scissors.svg) **Schere** (gefüllt): Hier beginnt ein
+  neues Dokument.
+- ![Verbinden-Symbol](icons/link-2.svg) **Verbinden**: Das nächste Blatt gehört
+  zum Dokument davor.
+
+Ein Tipp schaltet um, die Karten ordnen sich sofort neu. Ein Dokument behält
+die von der KI erkannte Dokumentart, solange es aus denselben Blättern besteht;
+nur die Dokumente, die du neu zuschneidest, verlieren sie. Stellen, bei denen die
+KI unsicher ist, tragen einen gelben Ring mit Fragezeichen. Ein Tipp darauf
+zeigt das Ende des einen und den Anfang des nächsten Blatts nebeneinander, dazu
+die Begründung der KI; du entscheidest mit **Trennen** oder **Zusammen lassen**.
+**Nächste unklare Stelle** (auf dem Handy oben) bzw. die Liste **Unklare
+Stellen** (am Desktop rechts) führt der Reihe nach hin. Eine ungeprüfte Stelle
+darfst du stehen lassen; sie bleibt dann beim Vorschlag der KI.
+
+#### Weitere Möglichkeiten in der Trennansicht
+
+Weitere Möglichkeiten:
+
+- Ein Tipp auf ein Blatt öffnet die **Großansicht** bildschirmfüllend, ein
+  weiterer Tipp auf die Seite schließt sie wieder. Dort wischst du von Blatt
+  zu Blatt und legst mit **Neues Dokument ab hier** fest, ob mit diesem Blatt
+  ein neues Dokument beginnt.
+- Das ![X-Symbol](icons/x.svg) an der Ecke einer Seite **entfernt** sie, etwa
+  Werbung oder ein Begleitschreiben. Sie wird nicht abgelegt. **Rückgängig**
+  bzw. ein erneuter Tipp holt sie zurück. Sind alle Seiten eines Dokuments
+  entfernt, entsteht es nicht. Blätter, die die KI als Anlage, Beilage oder
+  Werbung erkannt hat, sind markiert.
+- Der ![Drehen-Symbol](icons/rotate-cw.svg) **Drehknopf** an der unteren Ecke
+  einer Seite dreht sie um 90 Grad im Uhrzeigersinn, zweimal tippen stellt eine
+  kopfstehende Seite richtig. Gedreht wird jede Seite für sich, auch die
+  Rückseite eines Blatts unabhängig von der Vorderseite; in der Großansicht
+  heißt der Knopf **Drehen**. Die Drehung geht beim Übernehmen in das Dokument ein.
+- **Ein Dokument** fasst alles zusammen, **Jedes Blatt einzeln** trennt überall,
+  **Vorschlag der KI** stellt den Vorschlag wieder her.
+- **Neu vorschlagen** fragt die KI noch einmal; deine Trennungen gehen dabei
+  verloren, entfernte Seiten bleiben entfernt. Ein neuer Vorschlag geht nie
+  ohne Rückfrage weiter.
+- **Dokumentenstapel verwerfen** löscht den Stapel nach einer Rückfrage samt allen
+  Blättern. Ein Dokument entsteht nicht.
+
+Am Desktop wandern die Pfeiltasten über die Trennstellen, die Leertaste
+schaltet um und **U** springt zur nächsten unklaren Stelle. Gedrehte Seiten
+zählen wie Trennungen zu den ungespeicherten Änderungen.
+
+**Übernehmen** (der Knopf nennt die Zahl der Dokumente) reiht jedes Dokument in
+die normale Verarbeitung ein; es erscheint dann im Eingang unter **In
+Verarbeitung**. Verlässt du die Seite mit ungespeicherten Änderungen, fragt
+postbuch.net nach.
+
+**Leere und fehlende Blätter:** Ein ganz leeres Blatt steht als Platzhalter
+„Blatt n war leer“ im Stapel und fällt beim Aufteilen weg. Ist ein Blatt nicht
+angekommen – etwa weil seine Texterkennung scheiterte –, zeigt nach dem
+Einlesen ein Platzhalter „Blatt n ist nicht angekommen“, und ein Hinweis oben empfiehlt: Entferne die
+Seiten des unvollständigen Dokuments, übernimm den Rest und scanne das Dokument
+mit dem fehlenden Blatt neu. Fehlen Blätter, wartet postbuch.net 15 Minuten
+auf Nachzügler, bevor die KI ihren Vorschlag macht.
+
+Ohne erreichbare KI oder ohne lesbaren Text gibt es keinen Vorschlag; dann liegen
+alle Seiten vorerst in einem Dokument, und du trennst von Hand, wo ein neues
+Dokument beginnt.
+
+Hat jemand anderes den Stapel inzwischen übernommen oder verworfen, meldet die
+Seite das. Ist der Stapel aufgeteilt, listet sie die entstandenen Dokumente;
+jeder Eintrag führt zu seinem Stand im Eingang.
+
+### Manuell ablegen
+
+**Manuell ablegen** ist der Weg für PDFs, die die KI nicht auswerten kann oder
+soll. Das Formular fragt nur das Nötigste ab; alles Weitere lässt sich bei
+Bedarf in der [Dokumentansicht](dokumentansicht.md) nachtragen. Pflicht sind
+**Lebensbereich**, **Dokumentart** und **Name/Betreff**:
+
+- **Name/Betreff** wird vollständig der Betreff des Dokuments und zugleich sein
+  Dateiname: postbuch.net ergänzt die Kennung, die Datei heißt danach
+  `<Name> <Kennung>.pdf`. Im Dateinamen werden unzulässige Zeichen entfernt, ein
+  sehr langer Name wird abgeschnitten; den tatsächlichen Namen zeigt die Seite
+  nach dem Ablegen.
+
+Freiwillig sind:
+
+- **Dokumentdatum** – ohne Angabe bleibt das Dokument undatiert und lässt sich
+  später in der Dokumentansicht datieren.
+- **Ist eine Rechnung** – legt einen leeren Rechnungsblock an. Das Häkchen
+  fehlt bei Dokumentarten, bei denen das ohnehin feststeht (z. B. Arztrechnung,
+  Handwerkerrechnung).
+
+Was ein manuell abgelegtes Dokument von einem ausgewerteten unterscheidet:
+
+- Es wird **ohne automatische Duplikatprüfung** abgelegt.
+- Kontakt, Zusammenfassung und Schlagwörter bleiben leer, bis sie in der
+  Dokumentansicht nachgetragen werden oder das Dokument mit KI ausgewertet wird.
+- Über den Betreff ist es von Anfang an in der Suche auffindbar, nach
+  Wortlaut wie nach Inhalt. Jede spätere Änderung an Betreff, Zusammenfassung, Kontakt,
+  Schlagwörtern oder Datum aktualisiert das nach kurzer Zeit.
+- Bei einer Arztrechnung erfasst du Rechnungsdaten, Einzelpositionen und
+  Belegzeilen nach dem Ablegen von Hand in der Dokumentansicht. Auch den
+  Fachblock einer Handwerkerrechnung kannst du dort befüllen.
+- Ein Erstattungsbescheid bekommt Betrag und Positionen durch eine
+  KI-Auswertung. Bis dahin zählt er in Auswertungen nicht mit. Die
+  Dokumentansicht weist darauf hin.
+
+Die KI-Auswertung lässt sich jederzeit nachholen – über
+[Wiederverarbeiten](dokumentansicht.md#wiederverarbeiten) in der Dokumentansicht.
+
+Scheitert das Ablegen, bleibt das ausgefüllte Formular stehen und der Eingang
+erhalten.
+
+### Wer den Eingang sieht
+
+Administrator und Benutzer mit Vollzugriff sehen und behandeln alle Eingänge.
+Mit Lesezugriff auf alle Dokumente lässt sich der Eingang ansehen, aber nicht
+behandeln. Wer nur die eigenen Dokumente sieht, hat keinen Zugriff: Ein Eingang
+ist noch keiner Person zugeordnet.
 
 ## Nachträglich korrigieren
 
@@ -536,14 +858,14 @@ wenn sie schlechter ist als das Bild selbst; postbuch.net schlägt das von sich
 aus vor, wenn es eine fragwürdige Textebene erkennt. Dabei entstehen erneut
 ungefähr dieselben KI-Kosten wie beim Import; eine feste Modellstufe spart die
 Voranalyse, nicht aber die Hauptanalyse und das neue Embedding. Die Wahl der
-Modellstufe gibt es nur bei gestaffelter
-[Modellwahl](ki-provider.md#modellwahl); mit einem Modell für alles verarbeitet
-das Analysemodell das Dokument erneut.
+Modellstufe gibt es nur bei der Einzelwahl
+([Modellwahl](ki-provider.md#modellwahl)); mit zwei Aufgabentypen verarbeitet
+das Modell für **Anspruchsvoll & Komplex** das Dokument erneut.
 
 Bei einem Erstattungsbescheid gilt die Korrekturanweisung auch für das
 anschließende Auslesen der Positionen und den Abgleich der Kürzungen. Eine fest
 gewählte Modellstufe liest auch die Positionen aus; bei „Auto“ übernimmt das die
-Stufe Mittel, mit einem Modell für alles das Analysemodell. Schlägt dieser Schritt fehl, wiederholt postbuch.net ihn nach
+Stufe Mittel, mit zwei Aufgabentypen das Modell für **Anspruchsvoll & Komplex**. Schlägt dieser Schritt fehl, wiederholt postbuch.net ihn nach
 wenigen Minuten automatisch mit derselben Anweisung.
 
 ![PDF-ersetzen-Symbol](icons/file-up.svg) **PDF ersetzen** – Ersetzt nur die
@@ -580,8 +902,8 @@ Kosten deutlich senken kann. Ob der Cache greift, hängt vom Modell ab, siehe
   verbleibende Zeit steht auf der Karte.
 
 Die Karte erscheint auf der Import-Seite nur, wenn Cache-Mode in den
-KI-Einstellungen freigeschaltet ist. Den Cache-Mode gibt es nur bei gestaffelter
-[Modellwahl](ki-provider.md#modellwahl); mit einem Modell für alles ist das
+KI-Einstellungen freigeschaltet ist. Den Cache-Mode gibt es nur bei der
+Einzelwahl ([Modellwahl](ki-provider.md#modellwahl)); mit zwei Aufgabentypen ist das
 Prompt-Caching ohnehin immer an.
 
 ## Sonderfall: Dokumentenübergabe einspielen

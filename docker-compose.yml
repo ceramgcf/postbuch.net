@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg18@sha256:c29f30688a9ad961691bdf0ec1650717cc132a5814619d80f80463d6e4c42e47
+    image: pgvector/pgvector:pg18@sha256:38681dc6eaf55308e2a4c6de392d131652dcfac70e1263e35cd9b5ea3fe39782
     container_name: postbuch-postgres
     restart: unless-stopped
     environment:
@@ -48,6 +48,10 @@ services:
       # Persistente, rein diagnostische Zusammenfassung des einmaligen
       # LxD-Upgrades auf Fremdinstanzen (getrennt vom Update-Agent-Protokoll).
       - ./data/migration:/data/migration
+      # Lokale Ablage (Storage-Backend „lokal“). Ohne POSTBUCH_ABLAGE_DIR ein
+      # leerer Ersatzordner im Installationsverzeichnis, den die App nie benutzt
+      # (siehe POSTBUCH_LOKALE_ABLAGE_FESTGELEGT). Unter Windows ein Windows-Ordner (/mnt/c/…).
+      - ${POSTBUCH_ABLAGE_DIR:-./data/ablage}:/ablage
     environment:
       # Postgres — nur diese kommen permanent aus ENV
       POSTGRES_HOST: postgres
@@ -68,6 +72,8 @@ services:
       INSTANCE_NAME: ${INSTANCE_NAME:-Postbuch}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3420}
       WEB_PORT: ${WEB_PORT:-}
+      # Nur zur Anzeige der HTTPS-Adresse im Assistenten (nicht geseedet).
+      CADDY_HTTPS_PORT: ${CADDY_HTTPS_PORT:-443}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       # dev-Key zur Freischaltung der Claude-Subscription (Agent SDK). Ohne gültigen
@@ -91,6 +97,8 @@ services:
       # — also bei leerer DB. Auf einer bestehenden Instanz wird das aktive Backend
       # ausschliesslich ueber die Migration umgeschaltet, nie ueber die ENV.
       STORAGE_BACKEND: ${STORAGE_BACKEND:-}
+      # „Komplett lokal“ aus dem Installer: Modellklassen auf die lokale KI (nur Erstinstallation).
+      POSTBUCH_KI: ${POSTBUCH_KI:-}
       ONEDRIVE_CLIENT_ID: ${ONEDRIVE_CLIENT_ID:-}
       ONEDRIVE_CLIENT_SECRET: ${ONEDRIVE_CLIENT_SECRET:-}
       ONEDRIVE_TENANT_ID: ${ONEDRIVE_TENANT_ID:-}
@@ -114,6 +122,13 @@ services:
       # Basisadresse raten, statt sie zu kennen (seed-settings.js schreibt sie
       # einmalig nach _settings.hostconfig_duckdns).
       DUCKDNS_DOMAIN: ${DUCKDNS_DOMAIN:-}
+      # Nur Anzeige: wo der Nutzer den Ablageordner auf seinem Rechner findet
+      # (z. B. C:\Users\name\postbuch.net\Ablage). Leer = Pfad im Container.
+      POSTBUCH_LOKALE_ABLAGE_ANZEIGE: ${POSTBUCH_ABLAGE_ANZEIGE:-}
+      # „1“, sobald Installer oder Host-Agent einen Ablageordner eingetragen
+      # haben. Ohne ihn nutzt die App die lokale Ablage nicht (der Ersatzordner
+      # liegt im Installationsverzeichnis).
+      POSTBUCH_LOKALE_ABLAGE_FESTGELEGT: ${POSTBUCH_ABLAGE_DIR:+1}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -138,7 +153,7 @@ services:
     build: ./embedding
     # Fester Image-Name wie bei caddy: Das Image ist release-unabhängig, der
     # Installer baut es nur, wenn es fehlt. Änderung in embedding/ → Tag hoch.
-    image: postbuch-embedding:local2
+    image: postbuch-embedding:local6
     # Eigenes Profil: Der Dienst läuft nur, wo er gewählt ist. Neue
     # Installationen schalten es ein, bestehende über Einstellungen → KI →
     # Embeddings (Host-Agent, postbuch-hostconfig.sh).
@@ -149,8 +164,74 @@ services:
     # Kein Port nach außen: nur die App spricht den Dienst im Docker-Netz an.
     # Das Modell lädt erst bei der ersten Anfrage und wird nach zehn Minuten
     # Leerlauf entladen. Die Grenze fängt einen Ausreißer im Container ab,
-    # bevor er auf einem Pi mit 1 GB den ganzen Stack mitreißt.
-    mem_limit: 640m
+    # bevor er den ganzen Stack mitreißt. Arctic braucht unter 600 MB; Voyage
+    # 4 Nano und EmbeddingGemma 2 (nur ab 2 GB Arbeitsspeicher) bis etwa 900.
+    mem_limit: 1200m
+    read_only: true
+    tmpfs:
+      - /tmp
+    # Bei Bedarf geladene GGUF-Modelle (Voyage, Gemma). Benanntes Volume statt
+    # ./data, damit der unprivilegierte Dienstbenutzer schreiben darf; der
+    # Inhalt lässt sich jederzeit neu herunterladen und gehört nicht ins Backup.
+    volumes:
+      - embedding-modelle:/daten
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      TZ: Europe/Berlin
+    networks:
+      - postbuch
+
+  llm:
+    # Lokale KI (llama.cpp). Fester Build per Digest, neuer Build = neue Version.
+    # Ohne NVIDIA-GPU läuft diese CPU-Variante; docker-compose.gpu.yml tauscht
+    # das Image gegen server-cuda und reserviert die Grafikkarte. Welche Datei
+    # gilt, entscheidet der Host-Agent nach CUDA-Zustimmung und GPU-Erkennung.
+    image: ghcr.io/ggml-org/llama.cpp:server-b12182@sha256:6d581c788abba2dfa23ff78dba37ea0abfc7d838c49bcc98f4be2103df9772b3
+    profiles:
+      - lokalki
+    container_name: postbuch-llm
+    restart: unless-stopped
+    # Kein Port nach außen: nur die App spricht den Dienst im Docker-Netz an
+    # (eingebauter Provider „Lokale KI“, http://llm:8080/v1).
+    volumes:
+      - ${POSTBUCH_MODELLE_DIR:-./data/modelle}:/m:ro
+      - ./embedding/lizenzen:/usr/share/doc/postbuch.net:ro
+    # Modelldateien, Kontext und GPU-Schichten schreibt der Host-Agent erst
+    # nach geprüftem Download (LLAMA_ARG_*; Stufen in
+    # app/src/lib/llm/lokal-modelle.kv). Bewusst ohne Vorgabe in dieser Datei:
+    # sonst zeigte der Dienst nach einem Update auf ein noch nicht geladenes Modell.
+    # Kurze Schreibweise, weil Compose vor 2.24 kein optionales env_file kennt
+    # (Ubuntu 22.04). Installer und Agent halten die Datei deshalb immer
+    # vorhanden, leer solange die lokale KI aus ist.
+    env_file:
+      - ./data/lokalki.env
+    # Das Modell lädt bei der ersten Anfrage und wird nach Leerlauf wieder
+    # entladen (Grafik- bzw. Arbeitsspeicher frei).
+    command:
+      - -np
+      - "1"
+      - -ctk
+      - q8_0
+      - -ctv
+      - q8_0
+      - -fa
+      - "on"
+      - --jinja
+      - --reasoning
+      - "off"
+      - --temp
+      - "0"
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+      - --alias
+      - gemma
+      - --sleep-idle-seconds
+      - "300"
     read_only: true
     tmpfs:
       - /tmp
@@ -195,6 +276,10 @@ services:
       - scanner
     container_name: postbuch-cleaner
     restart: unless-stopped
+    # OCR und Bildbegradigung nehmen sich bei freier CPU so viel sie brauchen;
+    # konkurrieren sie mit der App (Pipeline, Bedienung), bekommen sie nur den
+    # halben Anteil. Keine harte Grenze, damit ein Scan allein schnell bleibt.
+    cpu_shares: ${CLEANER_CPU_ANTEIL:-512}
     depends_on:
       - app
     environment:
@@ -214,19 +299,23 @@ services:
     # Fester Image-Name, damit der Installer das (release-unabhaengige) caddy-
     # Image zuverlaessig wiederfindet und den teuren xcaddy-Build nicht bei
     # jedem Update wiederholt.
-    image: postbuch-caddy:local3
+    image: postbuch-caddy:local4
     container_name: postbuch-caddy
     restart: unless-stopped
     profiles:
       - caddy
     depends_on:
       - web
+    # Innen und außen derselbe Port: Caddy kennt so den echten HTTPS-Port und
+    # leitet von HTTP korrekt dorthin weiter (Caddyfile: http_port/https_port).
     ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
+      - "${CADDY_HTTP_PORT:-80}:${CADDY_HTTP_PORT:-80}"
+      - "${CADDY_HTTPS_PORT:-443}:${CADDY_HTTPS_PORT:-443}"
+      - "${CADDY_HTTPS_PORT:-443}:${CADDY_HTTPS_PORT:-443}/udp"
     environment:
       TZ: Europe/Berlin
+      CADDY_HTTP_PORT: ${CADDY_HTTP_PORT:-80}
+      CADDY_HTTPS_PORT: ${CADDY_HTTPS_PORT:-443}
       CF_API_TOKEN: ${CF_API_TOKEN:-}
       DUCKDNS_API_TOKEN: ${DUCKDNS_API_TOKEN:-}
       DUCKDNS_DOMAIN: ${DUCKDNS_DOMAIN:-}
@@ -241,3 +330,6 @@ services:
 networks:
   postbuch:
     driver: bridge
+
+volumes:
+  embedding-modelle:

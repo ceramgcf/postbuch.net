@@ -27,9 +27,11 @@ import { appLog } from '../app-log.js';
 import { getActiveAdapter, getActiveAdapterFor } from '../lib/storage/index.js';
 import { startBackupJob, starteManuellesBackup, manuellerBackupStatus, userBackupOrdnerId } from '../jobs/backup.js';
 import { appVersion } from '../lib/app-version.js';
+import { systemOrdnerSicherstellen } from '../service/storage-setup.js';
 import { istNeuer } from '../lib/postbuch-feed.js';
 import { atomicPgRestore, adminRestoreCleanupSql } from '../lib/pg-restore.js';
 import { geheimeSettingsDerInstanz } from '../lib/geheime-settings.js';
+import { hostSettingsDerInstanz } from '../lib/host-settings.js';
 import { isEncryptedBackup } from '../lib/backup-crypto.js';
 import {
   verschluesselungsStatus, aktiviere, setzePasswort, deaktiviere,
@@ -38,6 +40,10 @@ import {
 
 const router = Router();
 const gunzipAsync = promisify(gunzip);
+// Wie routes/setup-restore.js: Obergrenze für den entpackten Dump und nie zwei
+// Einspielvorgänge zugleich.
+const MAX_DUMP_BYTES = 1024 * 1024 * 1024;
+let restoreLaeuft = false;
 
 const MIN_BACKUP_PASSWORT_LAENGE = 8;
 
@@ -141,7 +147,7 @@ function vorabSicherungFehlt(req, res) {
 router.get('/files', async (req, res) => {
   try {
     const settings = await loadDynamicSettings();
-    const backupFolderId = getFolders(settings).backup;
+    const backupFolderId = await systemOrdnerSicherstellen('backup');
 
     if (!backupFolderId) {
       return res.status(404).json({ error: 'Backup-Ordner nicht konfiguriert (storage_folders.<backend>.backup)' });
@@ -249,7 +255,7 @@ router.put('/settings', async (req, res) => {
     });
 
     // Cron-Job neu starten mit den neuen Einstellungen
-    await startBackupJob();
+    await startBackupJob({ zeitplanNeu: true });
 
     res.json({ ok: true, enabled, cron });
   } catch (err) {
@@ -436,6 +442,8 @@ router.post('/restore', async (req, res) => {
     return res.status(400).json({ error: 'Datei nicht gefunden oder kein gültiges Backup (.pgdump.gz).' });
   }
 
+  if (restoreLaeuft) return res.status(409).json({ error: 'Ein Restore läuft bereits.' });
+  restoreLaeuft = true;
   const tempDumpPath = `/tmp/restore_${Date.now()}.pgdump`;
 
   try {
@@ -467,7 +475,7 @@ router.post('/restore', async (req, res) => {
     }
 
     // 3. Entpacken
-    const dumpBuffer = await gunzipAsync(gzipBuffer);
+    const dumpBuffer = await gunzipAsync(gzipBuffer, { maxOutputLength: MAX_DUMP_BYTES });
 
     // 4. In temporäre Datei schreiben
     await writeFile(tempDumpPath, dumpBuffer);
@@ -479,7 +487,7 @@ router.post('/restore', async (req, res) => {
     const dbName = process.env.POSTGRES_DB   || 'postbuch';
     const pgEnv  = { ...process.env, PGPASSWORD: process.env.POSTGRES_PASSWORD };
 
-    await atomicPgRestore(tempDumpPath, dbHost, dbPort, dbUser, dbName, pgEnv, adminRestoreCleanupSql(verschluesselungFuerRestore(settings), await geheimeSettingsDerInstanz()));
+    await atomicPgRestore(tempDumpPath, dbHost, dbPort, dbUser, dbName, pgEnv, adminRestoreCleanupSql(verschluesselungFuerRestore(settings), await geheimeSettingsDerInstanz(), await hostSettingsDerInstanz()));
 
     appLog('INFO', 'backup', `Restore erfolgreich: ${targetFile.name}`, {
       entity: 'backup',
@@ -498,9 +506,10 @@ router.post('/restore', async (req, res) => {
       entityId: req.session?.username || null,
       details: err.stderr || err.stack?.slice(0, 1000),
     });
-    res.status(500).json({ error: err.message });
+    res.status(err?.code === 'KEIN_BESTAND' ? 400 : 500).json({ error: err.message });
   } finally {
     await unlink(tempDumpPath).catch(() => {});
+    restoreLaeuft = false;
   }
 });
 
@@ -546,12 +555,19 @@ router.post('/restore-upload',
     }
 
     const rawBackupPasswort = req.get('X-Backup-Passwort');
-    const backupPasswort = rawBackupPasswort ? decodeURIComponent(rawBackupPasswort) : undefined;
-
     const rawName = req.headers['x-filename'] || '';
-    // Dateinamen von URL-Encoding befreien und auf sichere Zeichen beschränken
-    const filename = decodeURIComponent(rawName).replace(/[^a-zA-Z0-9._\-]/g, '_') || `upload_${Date.now()}.pgdump.gz`;
+    let backupPasswort;
+    let filename;
+    try {
+      backupPasswort = rawBackupPasswort ? decodeURIComponent(rawBackupPasswort) : undefined;
+      // Dateinamen von URL-Encoding befreien und auf sichere Zeichen beschränken
+      filename = decodeURIComponent(rawName).replace(/[^a-zA-Z0-9._\-]/g, '_') || `upload_${Date.now()}.pgdump.gz`;
+    } catch {
+      return res.status(400).json({ error: 'Kopfzeile ist nicht gültig URL-kodiert.' });
+    }
 
+    if (restoreLaeuft) return res.status(409).json({ error: 'Ein Restore läuft bereits.' });
+    restoreLaeuft = true;
     const tempDumpPath = `/tmp/restore_upload_${Date.now()}.pgdump`;
 
     try {
@@ -584,7 +600,7 @@ router.post('/restore-upload',
       }
 
       // Entpacken
-      const dumpBuffer = await gunzipAsync(gzipBuffer);
+      const dumpBuffer = await gunzipAsync(gzipBuffer, { maxOutputLength: MAX_DUMP_BYTES });
 
       // In temporäre Datei schreiben
       await writeFile(tempDumpPath, dumpBuffer);
@@ -596,7 +612,7 @@ router.post('/restore-upload',
       const dbName = process.env.POSTGRES_DB   || 'postbuch';
       const pgEnv  = { ...process.env, PGPASSWORD: process.env.POSTGRES_PASSWORD };
 
-      await atomicPgRestore(tempDumpPath, dbHost, dbPort, dbUser, dbName, pgEnv, adminRestoreCleanupSql(verschluesselungFuerRestore(settings), await geheimeSettingsDerInstanz()));
+      await atomicPgRestore(tempDumpPath, dbHost, dbPort, dbUser, dbName, pgEnv, adminRestoreCleanupSql(verschluesselungFuerRestore(settings), await geheimeSettingsDerInstanz(), await hostSettingsDerInstanz()));
 
       appLog('INFO', 'backup', `Upload-Restore erfolgreich: ${filename}`, {
         entity: 'backup',
@@ -614,9 +630,10 @@ router.post('/restore-upload',
         entityId: req.session?.username || null,
         details: err.stderr || err.stack?.slice(0, 1000),
       });
-      res.status(500).json({ error: err.message });
+      res.status(err?.code === 'KEIN_BESTAND' ? 400 : 500).json({ error: err.message });
     } finally {
       await unlink(tempDumpPath).catch(() => {});
+      restoreLaeuft = false;
     }
   });
 

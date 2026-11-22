@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { query, getClient } from '../db.js';
 import { uiLog } from '../log.js';
 import { regenerateEmbedding } from '../lib/embedding.js';
+import { ohneSuchspalten } from '../lib/suchspalten.js';
 import { decodeBase64Pdf, mergePdfs } from '../lib/pdf.js';
 import { scanQrCodes } from '../lib/qr.js';
 import { replacePdf, restorePdf } from '../service/document-replace.js';
@@ -24,11 +25,12 @@ import { sperrePerioden } from '../service/perioden-sperre.js';
 import { setzeBreUnbeachtlich } from '../service/bre.js';
 import { istGueltigerStatus } from '../lib/post-status.js';
 import { laeuftErstattungsbescheid } from '../service/document-inserter.js';
-import { effektiveGruppe } from '../lib/taxonomie.js';
+import { speichereBescheidkopf, bearbeiteBescheidposition } from '../service/bescheid-bearbeiten.js';
+import { effektiveGruppe, istPflichtRechnung } from '../lib/taxonomie.js';
 import { UNBEZAHLT_SQL_CONDITION } from '../lib/rechnungs-filter.js';
 import {
   ZahlungFehler, inTransaktion, setzeBezahltAm, ersetzeZahlungen,
-  aktualisiereZahlstatus, ermittleZahlungslage, berechneLage, ladeZahlungen,
+  aktualisiereZahlstatus, ermittleZahlungslage, berechneLage, ladeZahlungen, ladeRechnung,
   gleicheZahlungenAn, pruefeNichtErsetzt,
 } from '../service/rechnung-zahlung.js';
 import {
@@ -46,6 +48,9 @@ import {
 /** Bearbeitbare Felder, die eine Ablageebene bestimmen. */
 const ABLAGE_FELD_EBENE = { familienmitglied: 'person', briefdatum: 'jahr', richtung: 'richtung' };
 
+import { verwirf as verwirfEingang } from '../service/offene-eingaenge.js';
+
+import { leseDateiname, benenneUm } from '../service/dokument-umbenennen.js';
 const router = Router();
 
 const POSTID_RE = /^P\d{6}$/;
@@ -451,6 +456,7 @@ router.get('/pending-decisions', async (req, res) => {
       discordMessageId: r.discord_message_id,
       createdAt: r.created_at,
       expiresAt: r.expires_at,
+      begruendung: r.begruendung || null,
       // Payload-Auszug für UI
       betreff: r.payload?.extractedData?.postbuch?.betreff || null,
       briefdatum: r.payload?.extractedData?.postbuch?.briefdatum || null,
@@ -487,6 +493,15 @@ router.get('/pending-decisions/:jobId', async (req, res) => {
       return res.status(404).json({ error: 'Suspension nicht gefunden (evtl. bereits entschieden)' });
     }
 
+    // Der Payload trägt das KI-Ergebnis unter extractedData (wie in der Liste).
+    const neuDaten = suspension.payload?.extractedData || {};
+    const neuPb = neuDaten.postbuch || {};
+    const alt = (await query(
+      `SELECT postid, betreff, briefdatum, erfassungsdatum, familienmitglied, dokumentart
+         FROM postbuch.postbuch WHERE postid = $1`,
+      [suspension.match_postid],
+    )).rows[0] || null;
+
     res.json({
       jobId: suspension.job_id,
       reason: suspension.reason,
@@ -500,9 +515,21 @@ router.get('/pending-decisions/:jobId', async (req, res) => {
       newConfidence: Number(suspension.new_confidence),
       createdAt: suspension.created_at,
       expiresAt: suspension.expires_at,
-      betreff: suspension.payload?.postbuch?.betreff || null,
-      briefdatum: suspension.payload?.postbuch?.briefdatum || null,
-      dokumentTyp: suspension.payload?.dokumentart || suspension.payload?.dokumentTyp || null,
+      begruendung: suspension.begruendung || null,
+      betreff: neuPb.betreff || null,
+      briefdatum: neuPb.briefdatum || null,
+      familienmitglied: neuPb.familienmitglied || null,
+      dokumentTyp: neuDaten.dokumentart || neuDaten.dokumentTyp || null,
+      dateiname: suspension.payload?._eingangsname || suspension.payload?.filename || null,
+      // Das vorhandene Dokument für die Vergleichsansicht alt/neu.
+      match: alt ? {
+        postid: alt.postid,
+        betreff: alt.betreff,
+        briefdatum: alt.briefdatum,
+        erfassungsdatum: alt.erfassungsdatum,
+        familienmitglied: alt.familienmitglied,
+        dokumentTyp: alt.dokumentart,
+      } : null,
     });
   } catch (err) {
     console.error('GET /api/postbuch/pending-decisions/:jobId error:', err);
@@ -526,20 +553,14 @@ router.get('/failed', async (req, res) => {
   }
 });
 
-// DELETE /api/postbuch/failed/:onedriveId — Fehlgeschlagenes Dokument löschen (aus DB)
+// DELETE /api/postbuch/failed/:onedriveId – Fehlgeschlagenes Dokument verwerfen:
+// Die Datei geht in den Papierkorb der Ablage, erst danach entfällt der Eintrag.
 router.delete('/failed/:onedriveId', async (req, res) => {
   try {
-    const { onedriveId } = req.params;
-    const result = await query(
-      'DELETE FROM postbuch._failed_documents WHERE onedrive_id = $1 RETURNING *',
-      [onedriveId]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Eintrag nicht gefunden' });
-    }
-    appLog('INFO', 'postbuch', `Fehlgeschlagenes Dokument gelöscht: ${onedriveId}`);
+    await verwirfEingang(`f:${req.params.onedriveId}`, req.session?.username || req.session?.role || null);
     res.json({ ok: true });
   } catch (err) {
+    if (err.status && err.status < 600) return res.status(err.status).json({ error: err.message });
     console.error('DELETE /api/postbuch/failed/:onedriveId error:', err);
     res.status(500).json({ error: 'Interner Serverfehler' });
   }
@@ -581,7 +602,9 @@ router.get('/:postid', async (req, res) => {
     // Capture has_embedding before stripping the vector (too large to send)
     const hasEmbedding = postbuch.embedding != null;
     delete postbuch.embedding;
+    ohneSuchspalten(postbuch);
 
+    const gruppe = await effektiveGruppe(postbuch.lebensbereich, postbuch.dokumentart);
     const response = {
       postbuch: {
         ...postbuch,
@@ -691,13 +714,13 @@ router.get('/:postid', async (req, res) => {
     // markieren, ob der Fachblock erwartet wird, aber noch fehlt. Das Frontend
     // zeigt dafür einen Ladehinweis statt einer leeren Sektion.
     response.erstattungsbescheidAusstehend = false;
-    const ebResult = await query(`SELECT * FROM erstattungsbescheid WHERE postid = $1`, [postid]);
+    const ebResult = await query(`SELECT *, xmin::text AS stand FROM erstattungsbescheid WHERE postid = $1`, [postid]);
     if (ebResult.rows.length > 0) {
       const eb = ebResult.rows[0];
 
       // Einzelpositionen mit verknüpfter Arztrechnung + periodenspezifischem Leistungssatz
       const epResult = await query(`
-          SELECT ep.*,
+          SELECT ep.*, ep.xmin::text AS stand,
                  p_arz.betreff AS arz_betreff,
                  a.name_arzt,
                  per.beihilfe_satz AS personen_beihilfe_satz,
@@ -746,8 +769,18 @@ router.get('/:postid', async (req, res) => {
       eb.einzelpositionen = epResult.rows;
       response.erstattungsbescheid = eb;
       if (laeuftErstattungsbescheid(postid)) response.kuerzungenAusstehend = true;
-    } else if (await effektiveGruppe(postbuch.lebensbereich, postbuch.dokumentart) === 'erstattungsbescheid') {
-      response.erstattungsbescheidAusstehend = true;
+    } else if (gruppe === 'erstattungsbescheid') {
+      // „Ausstehend“ nur, solange der Fachjob wirklich läuft oder zur
+      // Wiederholung vorgemerkt ist. Ein manuell abgelegter Bescheid hat
+      // keinen Fachjob: ihm fehlen die Fachdaten, bis er mit KI ausgewertet wird.
+      const vorgemerkt = await query(
+        `SELECT 1 FROM postbuch._pipeline_file_journal WHERE postid = $1 AND state = 'eb_pending' LIMIT 1`,
+        [postid]);
+      if (laeuftErstattungsbescheid(postid) || vorgemerkt.rows.length > 0) {
+        response.erstattungsbescheidAusstehend = true;
+      } else {
+        response.erstattungsbescheidFehlt = true;
+      }
     }
 
     // Handwerkerrechnung
@@ -767,6 +800,12 @@ router.get('/:postid', async (req, res) => {
     if (rechnungsblock) {
       rechnungsblock.zahlung = berechneLage(rechnungsblock, await ladeZahlungen({ query }, postid));
       rechnungsblock.ersetzung = await ladeErsetzung({ query }, postid);
+    }
+    response.rechnungsblockPflicht = istPflichtRechnung(postbuch.dokumentart || postbuch.art)
+      || gruppe === 'arztrechnung' || gruppe === 'handwerker';
+    const brauchtArztblock = gruppe === 'arztrechnung' && !response.arztrechnung && !response.handwerkerrechnung;
+    if (brauchtArztblock || (!rechnungsblock && gruppe === 'generisch')) {
+      response.rechnungsblockAnlegbar = gruppe;
     }
 
     // Arztbericht
@@ -820,6 +859,35 @@ router.get('/:postid', async (req, res) => {
 });
 
 // PATCH /api/postbuch/:postid — Metadaten aktualisieren
+// GET /api/postbuch/:postid/dateiname – aktueller Dateiname aus der Ablage
+router.get('/:postid/dateiname', async (req, res) => {
+  try {
+    const { postid } = req.params;
+    if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
+    res.json(await leseDateiname(postid));
+  } catch (err) {
+    if (err.status && err.status < 600) return res.status(err.status).json({ error: err.message });
+    console.error('GET /api/postbuch/:postid/dateiname error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
+// PUT /api/postbuch/:postid/dateiname – Datei in der Ablage umbenennen.
+// Body: { stamm } – PostID und Endung ergänzt das System.
+router.put('/:postid/dateiname', async (req, res) => {
+  try {
+    const { postid } = req.params;
+    if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
+    const ergebnis = await benenneUm(postid, req.body?.stamm);
+    if (ergebnis.geaendert) uiLog('UPDATE', 'postbuch', postid, `Dateiname → ${ergebnis.dateiname}`);
+    res.json(ergebnis);
+  } catch (err) {
+    if (err.status && err.status < 600) return res.status(err.status).json({ error: err.message });
+    console.error('PUT /api/postbuch/:postid/dateiname error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
+
 router.patch('/:postid', async (req, res) => {
   try {
     const { postid } = req.params;
@@ -903,7 +971,7 @@ router.patch('/:postid', async (req, res) => {
       return res.status(404).json({ error: 'Dokument nicht gefunden' });
     }
 
-    res.json(result.rows[0]);
+    res.json(ohneSuchspalten(result.rows[0]));
     uiLog('UPDATE', 'postbuch', postid, `fields: ${Object.keys(req.body).join(', ')}`);
 
     // Familienmitglied, Briefdatum und Richtung können Ablageebenen sein und
@@ -1286,7 +1354,7 @@ router.post('/:postid/replace-pdf/restore', async (req, res) => {
 
 // POST /api/postbuch/:postid/qr-scan — QR-Codes für ein Bestandsdokument nachrüsten.
 //
-// Kein Massen-Backfill (Plan: internaldocs/FEATURE_RECHNUNGSTEILE_UND_QRCODES.md
+// Kein Massen-Backfill (Plan: internaldocs/plaene/FEATURE_RECHNUNGSTEILE_UND_QRCODES.md
 // Abschnitt 4.5) — fährt die Scan-Kette einmalig für genau ein Dokument und
 // setzt qr_codes. Schreibend, also automatisch für lesezugriff gesperrt.
 router.post('/:postid/qr-scan', async (req, res) => {
@@ -1787,6 +1855,54 @@ router.patch('/:postid/arztrechnung', async (req, res) => {
   }
 });
 
+async function pruefeOhneKorrekturrechnung(client, postid) {
+  const ersetzung = await ladeErsetzung(client, postid);
+  if (ersetzung.ersetzt || ersetzung.ersetzt_durch) {
+    throw new ZahlungFehler(409, 'Bitte zuerst die Verknüpfung mit der Korrekturrechnung aufheben.');
+  }
+}
+
+// Legt den zur aktuellen Einordnung passenden Rechnungsblock zur manuellen Pflege an.
+router.post('/:postid/rechnungsblock', async (req, res) => {
+  const { postid } = req.params;
+  if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
+  try {
+    const gruppe = await inTransaktion(async (client) => {
+      const { rows: [doc] } = await client.query(
+        'SELECT lebensbereich, COALESCE(dokumentart, art) AS dokumentart FROM postbuch WHERE postid = $1 FOR NO KEY UPDATE', [postid],
+      );
+      if (!doc) throw new ZahlungFehler(404, 'Dokument nicht gefunden');
+      const gruppe = await effektiveGruppe(doc.lebensbereich, doc.dokumentart, client);
+      if (gruppe !== 'arztrechnung' && gruppe !== 'generisch') {
+        throw new ZahlungFehler(409, 'Für diese Dokumentart gibt es einen eigenen Fachblock.');
+      }
+      const vorhanden = await ladeRechnung(client, postid, { sperren: true });
+      if (gruppe === 'arztrechnung' && vorhanden?.tabelle === 'generische_rechnung') {
+        await pruefeOhneKorrekturrechnung(client, postid);
+        await client.query(
+          `INSERT INTO arztrechnung (postid, typ, re_nr, rechnungsdatum, gesamtbetrag, name_arzt, bezahlt_am,
+             faelligkeit, iban, verwendungszweck, kontoinhaber, bezahlt_am_manuell, bestritten_betrag)
+           SELECT postid, $2, re_nr, rechnungsdatum, gesamtbetrag, absender, bezahlt_am,
+             faelligkeit, iban, verwendungszweck, kontoinhaber, bezahlt_am_manuell, bestritten_betrag
+           FROM generische_rechnung WHERE postid = $1`, [postid, doc.dokumentart],
+        );
+        await client.query('DELETE FROM generische_rechnung WHERE postid = $1', [postid]);
+      } else if (vorhanden) {
+        throw new ZahlungFehler(409, 'Das Dokument hat bereits einen Rechnungsblock.');
+      } else if (gruppe === 'arztrechnung') {
+        await client.query('INSERT INTO arztrechnung (postid, typ) VALUES ($1, $2)', [postid, doc.dokumentart]);
+      } else {
+        await client.query('INSERT INTO generische_rechnung (postid) VALUES ($1)', [postid]);
+      }
+      return gruppe;
+    });
+    uiLog('CREATE', 'rechnungsblock', postid, gruppe);
+    res.status(201).json({ ok: true });
+  } catch (err) {
+    sendServiceError(res, err, 'POST /api/postbuch/:postid/rechnungsblock');
+  }
+});
+
 // ── Einzelpositionen einer Arztrechnung manuell pflegen ──────────────────────
 // Neue Positionen erhalten die nächste freie subid, bestehende subids werden
 // nie umnummeriert (Kürzungen und SymLinks verweisen darauf). Eine Abweichung
@@ -1794,39 +1910,77 @@ router.patch('/:postid/arztrechnung', async (req, res) => {
 // Laden des Details berechnet (positionen_abweichung).
 
 const POSITION_TEXT_FELDER = ['goa_goz_gebueh_pzn', 'leistung', 'begruendung', 'zusatzangaben'];
+const BELEG_TEXT_FELDER = ['beleg', 'nummer', 'leistung'];
 
-// Liefert { felder } oder { error }. Nur im Body vorhandene Felder werden übernommen.
+function positionsText(raw) {
+  return raw == null ? null : String(raw).trim() || null;
+}
+
+function positionsZahl(raw) {
+  if (raw == null || raw === '') return null;
+  if (typeof raw !== 'number' && (typeof raw !== 'string' || !/^[+-]?(?:\d+(?:[,.]\d*)?|[,.]\d+)$/.test(raw.trim()))) return NaN;
+  const n = Number(String(raw).replace(',', '.'));
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : NaN;
+}
+
+function parseBelegzeilen(roh) {
+  if (!Array.isArray(roh) || roh.length > 1000) return null;
+  const nummern = new Set();
+  const zeilen = [];
+  for (const z of roh) {
+    if (!z || !Number.isInteger(z.zeile) || z.zeile <= 0 || z.zeile > 2147483647 || nummern.has(z.zeile)) return null;
+    nummern.add(z.zeile);
+    const texte = BELEG_TEXT_FELDER.map((f) => positionsText(z[f]));
+    if (texte.some((t) => t?.length > 2000)) return null;
+    const mengenUndPreise = [positionsZahl(z.menge), positionsZahl(z.einzelpreis), positionsZahl(z.betrag)];
+    if (mengenUndPreise.some((n, i) => Number.isNaN(n) || Math.abs(n) >= (i === 0 ? 1e8 : 1e10))) return null;
+    zeilen.push([z.zeile, ...texte, ...mengenUndPreise]);
+  }
+  return zeilen;
+}
+
+// Nur im Body vorhandene Felder werden übernommen.
 function parsePositionFelder(body) {
   const felder = {};
   for (const f of POSITION_TEXT_FELDER) {
     if (!(f in body)) continue;
-    const v = body[f];
-    const s = v === null || v === undefined ? '' : String(v).trim();
-    if (s.length > 2000) return { error: `${f} ist zu lang` };
-    felder[f] = s === '' ? null : s;
+    const text = positionsText(body[f]);
+    if (text?.length > 2000) return { error: `${f} ist zu lang` };
+    felder[f] = text;
   }
   if ('behandlungs_datum' in body) {
-    const v = body.behandlungs_datum;
-    if (v === null || v === undefined || v === '') felder.behandlungs_datum = null;
-    else if (/^\d{4}-\d{2}-\d{2}$/.test(String(v)) && !isNaN(Date.parse(String(v)))) felder.behandlungs_datum = String(v);
-    else return { error: 'Ungültiges Behandlungsdatum' };
+    const text = positionsText(body.behandlungs_datum);
+    if (text !== null) {
+      const d = new Date(text + 'T00:00:00Z');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(text) || !Number.isFinite(d.getTime()) || d.toISOString().slice(0, 10) !== text) {
+        return { error: 'Ungültiges Behandlungsdatum' };
+      }
+    }
+    felder.behandlungs_datum = text;
   }
-  const zahl = (raw) => {
-    if (raw === null || raw === undefined || raw === '') return null;
-    const n = typeof raw === 'number' ? raw : parseFloat(String(raw).replace(',', '.'));
-    return Number.isFinite(n) ? Math.round(n * 100) / 100 : NaN;
-  };
   if ('faktor' in body) {
-    const n = zahl(body.faktor);
+    const n = positionsZahl(body.faktor);
     if (Number.isNaN(n) || (n !== null && (n <= 0 || n >= 1000))) return { error: 'Ungültiger Faktor' };
     felder.faktor = n;
   }
   if ('betrag' in body) {
-    const n = zahl(body.betrag);
+    const n = positionsZahl(body.betrag);
     if (n === null || Number.isNaN(n) || Math.abs(n) >= 1e10) return { error: 'Ungültiger Betrag' };
     felder.betrag = n;
   }
-  return { felder };
+  const belegzeilen = 'belegzeilen' in body ? parseBelegzeilen(body.belegzeilen) : undefined;
+  if (belegzeilen === null) return { error: 'Ungültige Angaben in den Belegzeilen' };
+  return { felder, belegzeilen };
+}
+
+async function ersetzeBelegzeilen(client, postid, subid, zeilen) {
+  await client.query('DELETE FROM arztrechnung_belegzeile WHERE postid = $1 AND pos_subid = $2', [postid, subid]);
+  for (const z of zeilen) {
+    await client.query(
+      `INSERT INTO arztrechnung_belegzeile (postid, pos_subid, zeile, beleg, nummer, leistung, menge, einzelpreis, betrag)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, [postid, subid, ...z],
+    );
+  }
 }
 
 async function ladePositionen(postid) {
@@ -1862,7 +2016,7 @@ async function sperreArztrechnung(client, postid) {
 router.post('/:postid/arztrechnung/positionen', async (req, res) => {
   const { postid } = req.params;
   if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
-  const { felder, error } = parsePositionFelder(req.body || {});
+  const { felder, belegzeilen, error } = parsePositionFelder(req.body || {});
   if (error) return res.status(400).json({ error });
   if (felder.betrag === undefined) return res.status(400).json({ error: 'Betrag fehlt' });
 
@@ -1884,6 +2038,7 @@ router.post('/:postid/arztrechnung/positionen', async (req, res) => {
        VALUES ($1, $2, ${spalten.map((_, i) => `$${i + 3}`).join(', ')})`,
       [postid, subid, ...spalten.map(k => felder[k])]
     );
+    if (belegzeilen !== undefined) await ersetzeBelegzeilen(client, postid, Number(subid), belegzeilen);
     await client.query('COMMIT');
     uiLog('CREATE', 'arztrechnung_position', postid, `subid=${subid}, betrag=${felder.betrag}`);
     res.status(201).json({ subid, einzelpositionen: await ladePositionen(postid) });
@@ -1900,10 +2055,10 @@ router.post('/:postid/arztrechnung/positionen', async (req, res) => {
 router.patch('/:postid/arztrechnung/positionen/:subid', async (req, res) => {
   const { postid, subid } = req.params;
   if (!POSTID_RE.test(postid) || !SUBID_RE.test(subid)) return res.status(400).json({ error: 'Ungültige Position' });
-  const { felder, error } = parsePositionFelder(req.body || {});
+  const { felder, belegzeilen, error } = parsePositionFelder(req.body || {});
   if (error) return res.status(400).json({ error });
   const spalten = Object.keys(felder);
-  if (spalten.length === 0) return res.status(400).json({ error: 'Keine aktualisierbaren Felder angegeben' });
+  if (spalten.length === 0 && belegzeilen === undefined) return res.status(400).json({ error: 'Keine aktualisierbaren Felder angegeben' });
 
   const client = await getClient();
   try {
@@ -1917,11 +2072,12 @@ router.patch('/:postid/arztrechnung/positionen/:subid', async (req, res) => {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Position nicht gefunden' });
     }
-    await client.query(
+    if (spalten.length) await client.query(
       `UPDATE arztrechnung_einzelposition SET ${spalten.map((k, i) => `${k} = $${i + 3}`).join(', ')}
         WHERE postid = $1 AND subid = $2`,
       [postid, Number(subid), ...spalten.map(k => felder[k])]
     );
+    if (belegzeilen !== undefined) await ersetzeBelegzeilen(client, postid, Number(subid), belegzeilen);
     await client.query('COMMIT');
     uiLog('UPDATE', 'arztrechnung_position', postid, `subid=${subid}, fields: ${spalten.join(', ')}`);
     res.json({ einzelpositionen: await ladePositionen(postid) });
@@ -1991,6 +2147,39 @@ function sendServiceError(res, err, context) {
 
 const SUBID_RE = /^\d+$/;
 
+async function aendereBescheid(req, res, position = false) {
+  const { postid, subid } = req.params;
+  if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
+  if (subid !== undefined && (!SUBID_RE.test(subid) || Number(subid) < 1 || Number(subid) > 2147483647)) {
+    return res.status(400).json({ error: 'Ungültige Positionsnummer' });
+  }
+  const neu = req.method === 'POST';
+  const loeschen = req.method === 'DELETE';
+  try {
+    const ergebnis = await inTransaktion(async (client) => {
+      if (position) return bearbeiteBescheidposition(client, postid, subid === undefined ? null : Number(subid), req.body, loeschen);
+      await speichereBescheidkopf(client, postid, req.body, neu);
+      return {};
+    });
+    uiLog(loeschen ? 'DELETE' : neu ? 'CREATE' : 'UPDATE', 'erstattungsbescheid', postid,
+      position ? `Position ${subid ?? ergebnis.subid}` : 'Fachdaten');
+    schedulePostbuchEmbedding(postid);
+    return res.status(neu ? 201 : 200).json(ergebnis);
+  } catch (err) {
+    if (['40P01', '40001'].includes(err.code)) {
+      return res.status(409).json({ error: 'Eine gleichzeitige Änderung ist im Gange. Bitte versuche es erneut.' });
+    }
+    return sendServiceError(res, err, 'Bescheid bearbeiten');
+  }
+}
+
+const aendereBescheidposition = (req, res) => aendereBescheid(req, res, true);
+router.post('/:postid/erstattungsbescheid', (req, res) => aendereBescheid(req, res));
+router.patch('/:postid/erstattungsbescheid', (req, res) => aendereBescheid(req, res));
+router.post('/:postid/erstattungsbescheid/positionen', aendereBescheidposition);
+router.patch('/:postid/erstattungsbescheid/positionen/:subid', aendereBescheidposition);
+router.delete('/:postid/erstattungsbescheid/positionen/:subid', aendereBescheidposition);
+
 // Extrahiert aus einem SymLink-Token die Postnummer (akzeptiert 'P######' und 'P######-N').
 function parsePostidToken(raw) {
   if (raw == null) return null;
@@ -2020,6 +2209,9 @@ router.patch('/:postid/erstattung/:subid/zuordnung', async (req, res) => {
     const { postid, subid } = req.params;
     if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
     if (!SUBID_RE.test(subid)) return res.status(400).json({ error: 'Ungültige Positionsnummer' });
+    if (laeuftErstattungsbescheid(postid)) {
+      return res.status(409).json({ error: 'Der Bescheid wird gerade ausgewertet. Bitte warte den Abgleich ab.' });
+    }
 
     let arzPostid = null;
     if (req.body.arz_postid != null && String(req.body.arz_postid).trim() !== '') {
@@ -2312,65 +2504,76 @@ router.patch('/:postid/generischerechnung', async (req, res) => {
   }
 });
 
-// DELETE /api/postbuch/:postid/generischerechnung
-// Entfernt den Rechnungsblock (generische_rechnung) eines Dokuments.
-// Nur erlaubt, wenn der Dokumenttyp keinen Rechnungsblock zwingend erfordert.
-// Zwingend erforderlich bei: Rechnung, Kaufbeleg.
-const GENERISCHE_RECHNUNG_PFLICHTTYPEN = ['rechnung', 'kaufbeleg'];
-
-router.delete('/:postid/generischerechnung', async (req, res) => {
+// ── PATCH /:postid/arztbericht ───────────────────────────────────────────────
+// Freitextfelder des Arztberichts nachtragen oder korrigieren.
+router.patch('/:postid/arztbericht', async (req, res) => {
   try {
     const { postid } = req.params;
     if (!POSTID_RE.test(postid)) {
       return res.status(400).json({ error: 'Ungültige PostID' });
     }
-
-    // Dokumenttyp prüfen
-    const postResult = await query(
-      `SELECT dokumentart AS art FROM postbuch WHERE postid = $1`,
-      [postid]
+    const felder = ['behandelte_person', 'anlass', 'norm_befunde', 'pathologische_befunde'];
+    const updates = [];
+    const params = [];
+    for (const f of felder) {
+      if (!(f in req.body)) continue;
+      const v = req.body[f];
+      const text = v === null || v === undefined ? null : String(v).trim();
+      params.push(text === '' ? null : text);
+      updates.push(`${f} = $${params.length}`);
+    }
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'Keine aktualisierbaren Felder angegeben' });
+    }
+    params.push(postid);
+    const result = await query(
+      `UPDATE postbuch.arztbericht SET ${updates.join(', ')} WHERE postid = $${params.length} RETURNING *`,
+      params,
     );
-    if (postResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Dokument nicht gefunden' });
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Arztbericht nicht gefunden' });
     }
-    const { art } = postResult.rows[0];
+    res.json(result.rows[0]);
+    if ('behandelte_person' in req.body) zieheNachBehandelterPerson(postid);
+    uiLog('UPDATE', 'arztbericht', postid, `fields: ${Object.keys(req.body).filter(k => felder.includes(k)).join(', ')}`);
+  } catch (err) {
+    console.error('PATCH /api/postbuch/:postid/arztbericht error:', err);
+    res.status(500).json({ error: 'Interner Serverfehler' });
+  }
+});
 
-    if (GENERISCHE_RECHNUNG_PFLICHTTYPEN.includes(art)) {
-      return res.status(409).json({
-        error: `Für Dokumente des Typs „${art}" ist der Rechnungsblock zwingend erforderlich und kann nicht entfernt werden.`,
-      });
-    }
-
-    const kante = await query(
-      `SELECT 1 FROM postbuch.dokument_beziehung WHERE art = 'ersetzt' AND (von_postid = $1 OR zu_postid = $1)`,
-      [postid],
-    );
-    if (kante.rowCount > 0) {
-      return res.status(409).json({
-        error: 'Die Rechnung ist mit einer Korrekturrechnung verknüpft – bitte zuerst die Ersetzung aufheben.',
-      });
-    }
-
-    // Zahlungen hängen am Dokument, nicht am Block — mit dem Block entfernen.
-    const delResult = await inTransaktion(async (client) => {
-      const r = await client.query(
-        `DELETE FROM generische_rechnung WHERE postid = $1 RETURNING postid`,
-        [postid]
+// Löscht ausschließlich optionale generische Rechnungsblöcke.
+router.delete('/:postid/generischerechnung', async (req, res) => {
+  const { postid } = req.params;
+  if (!POSTID_RE.test(postid)) return res.status(400).json({ error: 'Ungültige PostID' });
+  try {
+    const art = await inTransaktion(async (client) => {
+      const { rows: [doc] } = await client.query(
+        'SELECT lebensbereich, COALESCE(dokumentart, art) AS dokumentart FROM postbuch WHERE postid = $1 FOR NO KEY UPDATE', [postid],
       );
-      if (r.rows.length > 0) {
-        await client.query('DELETE FROM postbuch.rechnung_zahlung WHERE postid = $1', [postid]);
+      if (!doc) throw new ZahlungFehler(404, 'Dokument nicht gefunden');
+      const gruppe = await effektiveGruppe(doc.lebensbereich, doc.dokumentart, client);
+      if (istPflichtRechnung(doc.dokumentart) || gruppe === 'arztrechnung' || gruppe === 'handwerker') {
+        throw new ZahlungFehler(409, 'Diese Dokumentart benötigt einen Rechnungsblock.');
       }
-      return r;
+      const rechnung = await ladeRechnung(client, postid, { sperren: true });
+      if (rechnung?.tabelle !== 'generische_rechnung') {
+        throw new ZahlungFehler(404, 'Kein allgemeiner Rechnungsblock für dieses Dokument vorhanden.');
+      }
+      await pruefeOhneKorrekturrechnung(client, postid);
+      if (rechnung.bezahlt_am || (await ladeZahlungen(client, postid)).length > 0) {
+        throw new ZahlungFehler(409, 'Bitte zuerst die erfassten Zahlungen und das Bezahldatum entfernen.');
+      }
+      if (rechnung.bestritten_betrag != null) {
+        throw new ZahlungFehler(409, 'Bitte zuerst den offenen Streitfall auflösen.');
+      }
+      await client.query('DELETE FROM generische_rechnung WHERE postid = $1', [postid]);
+      return doc.dokumentart;
     });
-    if (delResult.rows.length === 0) {
-      return res.status(404).json({ error: 'Kein Rechnungsblock für dieses Dokument vorhanden' });
-    }
-
     uiLog('DELETE', 'generische_rechnung', postid, `Rechnungsblock entfernt (art: ${art})`);
     res.json({ ok: true, postid });
   } catch (err) {
-    console.error('DELETE /api/postbuch/:postid/generischerechnung error:', err);
-    res.status(500).json({ error: 'Interner Serverfehler' });
+    sendServiceError(res, err, 'DELETE /api/postbuch/:postid/generischerechnung');
   }
 });
 

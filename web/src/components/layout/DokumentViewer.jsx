@@ -1,6 +1,6 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Document, Page, pdfjs } from 'react-pdf';
+import { Document, Page } from 'react-pdf';
 import { PDFJS_DOCUMENT_OPTIONS } from '@/lib/pdfjs-worker';
 import { Spinner } from '@/components/ui/spinner';
 import { Progress } from '@/components/ui/progress';
@@ -33,14 +33,6 @@ function DocumentLoadingIndicator() {
       )}
     </div>
   );
-}
-
-if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-  // Worker aus dem gleichen Build statt externem CDN laden.
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    'pdfjs-dist/build/pdf.worker.min.mjs',
-    import.meta.url,
-  ).toString();
 }
 
 // Halbkreis-Menü: Radius der Knöpfe und Abstand zum unteren Rand (CSS-px).

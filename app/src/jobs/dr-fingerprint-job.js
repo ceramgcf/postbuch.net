@@ -45,7 +45,7 @@ export async function runFingerprintSync(label = 'DR-Fingerprint Sync') {
     try {
       const result = await syncFingerprints({ jobId });
       const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-      const summary = `${result.hashed} neu gehasht, ${result.renamed} umbenannt, ${result.missing} als fehlend markiert, ${result.skipped} unverändert, ${result.errors} Fehler (${elapsed}s)`;
+      const summary = `${result.hashed} neu gehasht, ${result.renamed} umbenannt, ${result.missing} als fehlend markiert, ${result.zurueckgehalten ? `${result.zurueckgehalten} zurückgehalten (Ablage wirkt falsch eingebunden), ` : ''}${result.skipped} unverändert, ${result.errors} Fehler (${elapsed}s)`;
       appLog('INFO', 'dr-fingerprint', `${label}: ${summary}`);
       tracker.complete(jobId, result);
     } catch (err) {

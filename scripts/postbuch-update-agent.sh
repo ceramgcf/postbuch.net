@@ -98,6 +98,25 @@ if command -v flock >/dev/null 2>&1; then
     exec 9>"$STATE_DIR/agent.lock"
     flock -n 9 || exit 0
 fi
+# Installer, die dieser Agent startet, nehmen die Sperre nicht noch einmal
+# (sie wäre belegt, der Installer würde auf seinen eigenen Aufrufer warten).
+export POSTBUCH_AGENT_SPERRE=1
+
+# Läuft gerade ein Installer, den nicht dieser Agent gestartet hat? Installer
+# ab dem nächsten Release nehmen die Sperre oben selbst; ältere nicht. Deren
+# einzige verlässliche Spur seit 2.10 ist der tee-Prozess ihres Protokolls
+# (…/postbuch/logs/install-*.log), auch bei `curl … | bash`, wo „install.sh“
+# in keiner Befehlszeile steht. Nur der Abgleich ohne Auftrag fragt das ab:
+# Er würde sonst mitten in ein Update von Hand hinein Container ersetzen.
+fremder_installer_laeuft() {
+    local f arg
+    for f in /proc/[0-9]*/cmdline; do
+        while IFS= read -r -d '' arg; do
+            [[ "$arg" == */postbuch/logs/install-*.log ]] && return 0
+        done < "$f" 2>/dev/null
+    done
+    return 1
+}
 
 # ── docker-Aufrufart ermitteln ───────────────────────────────────────────────
 # Nur zur Anzeige im GUI: ohne docker-Rechte wird der Installieren-Button VORAB
@@ -193,6 +212,110 @@ web_bestaetigung_bis() {
     done < "$WEB_BESTAETIGUNG"
 }
 
+# ── Stack-Zustand für den Reiter „Stack“ ────────────────────────────────────
+# Alles aus festem Vokabular oder streng gefiltert; Namen, Zustände und Zahlen
+# werden vor der JSON-Ausgabe geprüft. Die GPU-Abfrage ist teuer (nvidia-smi
+# kann hängen) und wird zehn Minuten zwischengespeichert.
+GPU_CACHE="$STATE_DIR/gpu.kv"
+STACK_DIENSTE='postbuch-postgres postbuch-app postbuch-web postbuch-embedding postbuch-llm postbuch-scanner postbuch-cleaner postbuch-caddy'
+
+stack_bibliothek() {
+    declare -F hostconfig_gpu_erkennen >/dev/null && return 0
+    [[ -r "$AGENT_LIB/postbuch-hostconfig.sh" ]] || return 1
+    # shellcheck source=postbuch-hostconfig.sh
+    source "$AGENT_LIB/postbuch-hostconfig.sh"
+}
+
+gpu_lesen() { # gibt "vramMiB|name|dockerBereit" aus oder nichts
+    local alter=999999 zeile
+    [[ -f "$GPU_CACHE" ]] && alter=$(( $(date +%s) - $(stat -c %Y -- "$GPU_CACHE" 2>/dev/null || echo 0) ))
+    if (( alter > 600 )); then
+        zeile=$(hostconfig_gpu_erkennen 2>/dev/null) || zeile=''
+        printf '%s\n' "$zeile" > "$GPU_CACHE" 2>/dev/null || true
+    else
+        zeile=$(head -n1 -- "$GPU_CACHE" 2>/dev/null)
+    fi
+    [[ "$zeile" =~ ^[0-9]{1,7}\|[A-Za-z0-9\ ._()-]{0,128}\|(true|false)$ ]] && printf '%s' "$zeile"
+}
+
+dienste_json() {
+    local zeile name zustand status image health groesse erster=true
+    printf '['
+    while IFS='|' read -r name zustand status image; do
+        [[ " $STACK_DIENSTE " == *" $name "* ]] || continue
+        [[ "$zustand" =~ ^[a-z]{1,20}$ ]] || continue
+        case "$status" in
+            *'(healthy)'*) health=healthy ;;
+            *'(unhealthy)'*) health=unhealthy ;;
+            *'health: starting'*) health=starting ;;
+            *) health=none ;;
+        esac
+        groesse=null
+        if [[ "$image" =~ ^[A-Za-z0-9._/:@-]{1,300}$ ]]; then
+            groesse=$(hostconfig_docker image inspect --format '{{.Size}}' -- "$image" 2>/dev/null | head -n1)
+            [[ "$groesse" =~ ^[0-9]{1,15}$ ]] || groesse=null
+        fi
+        $erster || printf ', '
+        erster=false
+        printf '{ "name": "%s", "zustand": "%s", "health": "%s", "imageBytes": %s }' \
+            "$name" "$zustand" "$health" "$groesse"
+    done < <(hostconfig_docker ps -a --filter 'name=^postbuch-' \
+                --format '{{.Names}}|{{.State}}|{{.Status}}|{{.Image}}' 2>/dev/null)
+    printf ']'
+}
+
+# Modelle der lokalen KI: Bedarf der passenden Stufe und was davon vorliegt.
+lokalki_json() {
+    local gpu="$1" vram='' dir zeile rolle datei sha bytes url vorhanden=0 voll=true groesse
+    local profil=false stufe_aktiv modell_aktiv
+    hostconfig_profil_aktiv "$INSTALL_DIR/.env" lokalki && profil=true
+    stufe_aktiv=$(hostconfig_env_lesen "$INSTALL_DIR/data/lokalki.env" POSTBUCH_LOKALKI_STUFE)
+    modell_aktiv=$(hostconfig_env_lesen "$INSTALL_DIR/data/lokalki.env" POSTBUCH_LOKALKI_MODELL)
+    [[ "$stufe_aktiv" =~ ^[a-z0-9-]{1,32}$ ]] || stufe_aktiv=''
+    [[ "$modell_aktiv" =~ ^[a-z0-9][a-z0-9.-]{0,63}$ ]] || modell_aktiv=''
+    if ! hostconfig_lokalki_manifest "$INSTALL_DIR"; then
+        printf '{ "profilAktiv": %s, "stufe": "%s", "modell": "%s", "bedarf": null }' "$profil" "$stufe_aktiv" "$modell_aktiv"
+        return
+    fi
+    [[ -n "$gpu" && "${gpu##*|}" == true ]] && vram="${gpu%%|*}"
+    hostconfig_lokalki_stufe "$vram" || { printf 'null'; return; }
+    dir=$(hostconfig_modelle_dir "$INSTALL_DIR" lesen) || dir=''
+    local gesamt=0
+    while IFS='|' read -r rolle datei sha bytes url; do
+        [[ -n "$datei" ]] || continue
+        gesamt=$(( gesamt + bytes ))
+        if [[ -n "$dir" ]] && hostconfig_datei_fertig "$dir" "$datei" "$sha" "$bytes"; then
+            vorhanden=$(( vorhanden + bytes ))
+        else
+            voll=false
+            groesse=0
+            [[ -n "$dir" ]] && groesse=$(stat -c %s -- "$dir/$datei.part" 2>/dev/null || echo 0)
+            [[ "$groesse" =~ ^[0-9]{1,15}$ ]] && vorhanden=$(( vorhanden + groesse ))
+        fi
+    done < <(hostconfig_lokalki_stufe_dateien)
+    printf '{ "profilAktiv": %s, "stufe": "%s", "modell": "%s", "bedarf": { "modell": "%s", "stufe": "%s", "gpu": %s, "kontext": %s, "ramMiB": %s, "bytes": %s }, "vorhandenBytes": %s, "vollstaendig": %s }' \
+        "$profil" "$stufe_aktiv" "$modell_aktiv" "$LK_MODELL" "$LK_STUFE" \
+        "$([[ "$LK_GPU" == ja ]] && echo true || echo false)" "$LK_KONTEXT" "$LK_RAM" "$gesamt" "$vorhanden" "$voll"
+}
+
+stack_json() {
+    local gpu gpu_json=null dir frei ram
+    stack_bibliothek || { printf 'null'; return; }
+    gpu=$(gpu_lesen)
+    if [[ -n "$gpu" ]]; then
+        IFS='|' read -r vram name bereit <<< "$gpu"
+        # Im Heartbeat zählt VRAM nur, wenn der Host-Agent CUDA starten darf.
+        hostconfig_cuda_akzeptiert "$INSTALL_DIR" || { bereit=false; gpu="${gpu%|*}|false"; }
+        gpu_json=$(printf '{ "name": "%s", "vramMiB": %s, "dockerBereit": %s }' "$name" "$vram" "$bereit")
+    fi
+    dir=$(hostconfig_modelle_dir "$INSTALL_DIR" lesen) || dir="$INSTALL_DIR"
+    frei=$(df -B1 --output=avail -- "$dir" 2>/dev/null | tail -n1 | tr -d ' ')
+    [[ "$frei" =~ ^[0-9]{1,15}$ ]] || frei=null
+    ram=$(hostconfig_ram_mib 2>/dev/null) || ram=null
+    printf '{ "gpu": %s, "dienste": %s, "lokalki": %s, "platteFreiBytes": %s, "ramMiB": %s }' \
+        "$gpu_json" "$(dienste_json)" "$(lokalki_json "$gpu")" "$frei" "$ram"
+}
+
 heartbeat() {
     local schreibbar lan scanner_profil=false embedding_profil=false bis bestaetigung=null
     schreibbar=$(schreibbar_pruefen)
@@ -211,8 +334,8 @@ heartbeat() {
     atomar_schreiben "$AGENT_JSON" <<EOF
 {
   "version": $PROTOKOLL,
-  "agentVersion": "2.5",
-  "capabilities": ["update", "zielversion", "netzwerk", "module", "embedding", "port", "freigabe", "postgres-umzug"],
+  "agentVersion": "2.11",
+  "capabilities": ["update", "zielversion", "netzwerk", "module", "embedding", "port", "freigabe", "postgres-umzug", "lokalki", "entfernen", "stack", "ablage", "duckdns-schalter"],
   "modus": "$AGENT_MODE",
   "docker": "${DOCKER_ART:-null}",
   "letzterLaufAm": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
@@ -221,7 +344,9 @@ heartbeat() {
   "embeddingProfilAktiv": $embedding_profil,
   "lan": $lan,
   "freigaben": { "scanner": "$(bind_lesen SCANNER_BIND)", "web": "$(bind_lesen WEB_BIND)" },
-  "webBestaetigungBis": $bestaetigung
+  "webBestaetigungBis": $bestaetigung,
+  "duckdnsIp": $(duckdns_json),
+  "stack": $(stack_json)
 }
 EOF
 }
@@ -229,8 +354,10 @@ EOF
 # JSON-Ausgabe aus FESTEM Vokabular — keine Fremddaten, kein Escaping nötig.
 # Genau deshalb ist die Richtung Agent → App JSON und die Richtung App → Agent
 # key=value: hier schreibt der Bash-Teil, dort liest er.
-status_schreiben() {   # $1 nonce  $2 status  $3 phase  $4 exitCode|""  $5 meldung  $6 typ (update|hostconfig)
-    local beendet=""
+status_schreiben() {   # $1 nonce  $2 status  $3 phase  $4 exitCode|""  $5 meldung  $6 typ  $7 Bytes  $8 gesamt
+    local beendet="" bytes="${7:-}" gesamt="${8:-}"
+    [[ "$bytes" =~ ^[0-9]{1,15}$ ]] || bytes=null
+    [[ "$gesamt" =~ ^[0-9]{1,15}$ ]] || gesamt=null
     [[ -n "${4:-}" ]] && beendet="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     local exitcode="${4:-}"
     [[ -z "$exitcode" ]] && exitcode="null"
@@ -244,7 +371,9 @@ status_schreiben() {   # $1 nonce  $2 status  $3 phase  $4 exitCode|""  $5 meldu
   "begonnenAm": "${BEGONNEN_AM:-}",
   "beendetAm": "$beendet",
   "exitCode": $exitcode,
-  "meldung": "$5"
+  "meldung": "$5",
+  "fortschrittBytes": $bytes,
+  "gesamtBytes": $gesamt
 }
 EOF
 }
@@ -259,12 +388,12 @@ log() {
 # Abhängigkeit (jq) oder gebastelt. Jedes Feld wird gegen eine Regex geprüft;
 # nichts davon wird je als Shell-Code ausgewertet.
 lies_anforderung() {   # $1 = sichere private Kopie
-    A_PROTOKOLL=""; A_TYP="update"; A_NONCE=""; A_ZIEL=""; A_AM=""; A_VON=""; A_SHA=""; A_WERT=""; A_SECRET=""
+    A_PROTOKOLL=""; A_TYP="update"; A_NONCE=""; A_ZIEL=""; A_AM=""; A_VON=""; A_SHA=""; A_WERT=""; A_SECRET=""; A_PFAD=""
     local k v
     while IFS='=' read -r k v; do
         case "$k" in
             protokoll)        [[ "$v" =~ ^[0-9]{1,3}$ ]]                  && A_PROTOKOLL="$v" ;;
-            typ)              [[ "$v" =~ ^(update|netzwerk|module|port|duckdns|freigabe)$ ]] && A_TYP="$v" ;;
+            typ)              [[ "$v" =~ ^(update|netzwerk|module|port|duckdns|freigabe|ablage)$ ]] && A_TYP="$v" ;;
             nonce)            [[ "$v" =~ ^[0-9a-f]{32}$ ]]                && A_NONCE="$v" ;;
             zielVersion)      [[ "$v" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){2}$ ]] && A_ZIEL="$v" ;;
             angefordertAm)    [[ "$v" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && A_AM="$v" ;;
@@ -272,11 +401,15 @@ lies_anforderung() {   # $1 = sichere private Kopie
             erwarteterSha256) [[ "$v" =~ ^[0-9a-f]{64}$ ]]                && A_SHA="$v" ;;
             wert)             [[ "$v" =~ ^[A-Za-z0-9.:/_-]{1,300}$ ]]     && A_WERT="$v" ;;
             secret)           [[ "$v" =~ ^[A-Za-z0-9._-]{1,512}$ ]]       && A_SECRET="$v" ;;
+            # Ordnerpfad der lokalen Ablage, Base64; geprüft wird er in der Bibliothek.
+            pfad)             [[ "$v" =~ ^[A-Za-z0-9+/]{4,1100}={0,2}$ ]] && A_PFAD="$v" ;;
         esac
     done < "$1"
     [[ -n "$A_PROTOKOLL" && -n "$A_NONCE" && -n "$A_AM" ]] || return 1
     if [[ "$A_TYP" == "update" ]]; then
         [[ "$A_PROTOKOLL" == "1" && -n "$A_ZIEL" && -n "$A_SHA" ]]
+    elif [[ "$A_TYP" == "ablage" ]]; then
+        [[ "$A_PROTOKOLL" == "2" && "$A_WERT" == setzen && -n "$A_PFAD" ]]
     else
         [[ "$A_PROTOKOLL" == "2" && -n "$A_WERT" ]]
     fi
@@ -345,6 +478,7 @@ postgres_umzug_automatisch() {
     [[ "$version" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){2}(-[A-Za-z0-9.]+)?$ ]] || return 0
     marker="$STATE_DIR/postgres-umzug-$version"
     [[ -e "$marker" ]] && return 0
+    fremder_installer_laeuft && return 0   # nächster Takt, wenn er fertig ist
     date -u '+%Y-%m-%dT%H:%M:%SZ' > "$marker"
     # Folgt der Umzug direkt auf ein erfolgreiches Update, läuft er unter dessen
     # Nonce weiter. Der Update-Dialog im Browser (noch aus der alten Version)
@@ -405,6 +539,7 @@ postgres_image_automatisch() {
     [[ "$version" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){2}(-[A-Za-z0-9.]+)?$ ]] || return 0
     marker="$STATE_DIR/postgres-image-$version"
     [[ -e "$marker" ]] && return 0
+    fremder_installer_laeuft && return 0   # nächster Takt, wenn er fertig ist
     date -u '+%Y-%m-%dT%H:%M:%SZ' > "$marker"
     erfolg="Datenbank-Image aktualisiert."
     nonce=$(vorige_update_nonce)
@@ -451,6 +586,212 @@ postgres_image_automatisch() {
     exit "${exitcode:-1}"
 }
 
+# Fortschritt langer Hostaufträge (Modell-Download der lokalen KI). Die
+# Meldungen stammen aus festem Vokabular, Zahlen prüft status_schreiben.
+# Liest A_NONCE/A_TYP des laufenden Auftrags.
+hostconfig_fortschritt_hook() { # $1 Bytes $2 gesamt $3 phase
+    local meldung jetzt
+    case "$3" in
+        download) meldung="Modell wird heruntergeladen." ;;
+        pruefung) meldung="Modelldatei wird geprüft." ;;
+        image)    meldung="Programm der lokalen KI wird heruntergeladen." ;;
+        start)    meldung="Lokale KI startet." ;;
+        kopie)    meldung="Ablage wird kopiert." ;;
+        start_app) meldung="Anwendung startet mit dem neuen Ablageordner." ;;
+        *) return 0 ;;
+    esac
+    status_schreiben "$A_NONCE" "laeuft" "$3" "" "$meldung" "$A_TYP" "$1" "$2"
+    jetzt=$(date +%s)
+    if (( jetzt - ${FORTSCHRITT_HEARTBEAT:-0} >= 30 )); then
+        FORTSCHRITT_HEARTBEAT=$jetzt
+        heartbeat
+    fi
+}
+
+# ── Modell der lokalen KI ohne Auftrag ───────────────────────────────────────
+# Ein Release kann das kuratierte Modell wechseln (lokal-modelle.kv). Läuft die
+# lokale KI noch mit dem alten, richtet der Agent das neue genauso ein wie beim
+# Einschalten: laden, prüfen, umschalten, Gesundheit abwarten, erst dann die
+# alten Dateien löschen. Scheitert etwas, läuft das alte Modell weiter
+# (Rücktausch in hostconfig_lokalki_an). Ein nur nicht rechtzeitig fertiger
+# Download (rc 3) wird beim nächsten Tick fortgesetzt; jeder andere Fehlschlag
+# sperrt weitere Versuche für sechs Stunden.
+lokalki_modell_automatisch() {
+    [[ "$AGENT_MODE" == "normal" ]] || return 0
+    stack_bibliothek || return 0
+    hostconfig_profil_aktiv "$INSTALL_DIR/.env" lokalki || return 0
+    local aktiv marker rc=0
+    aktiv=$(hostconfig_env_lesen "$INSTALL_DIR/data/lokalki.env" POSTBUCH_LOKALKI_MODELL)
+    [[ -n "$aktiv" ]] || return 0
+    hostconfig_lokalki_manifest "$INSTALL_DIR" || return 0
+    [[ "$LK_MODELL" =~ ^[a-z0-9][a-z0-9.-]{0,63}$ && "$LK_MODELL" != "$aktiv" ]] || return 0
+    marker="$STATE_DIR/lokalki-modell-$LK_MODELL"
+    if [[ -f "$marker" ]] && (( $(date +%s) - $(stat -c %Y -- "$marker" 2>/dev/null || echo 0) < 21600 )); then
+        return 0
+    fi
+    A_NONCE=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
+    A_TYP=module
+    mkdir -p "$VERLAUF/$A_NONCE" 2>/dev/null || true
+    : > "$LOGFILE"; chmod 600 "$LOGFILE" 2>/dev/null || true
+    BEGONNEN_AM="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    log "Neues Modell der lokalen KI wird eingerichtet ($aktiv -> $LK_MODELL, nonce=$A_NONCE)."
+    status_schreiben "$A_NONCE" "laeuft" "hostconfig" "" "Neues Modell der lokalen KI wird eingerichtet." "$A_TYP"
+    hostconfig_anwenden "$INSTALL_DIR" module lokalki:an "" || rc=$?
+    hostdateien_besitz_reparieren || true
+    case "$rc" in
+        0) rm -f -- "$marker"
+           log "Lokale KI läuft mit dem neuen Modell."
+           status_schreiben "$A_NONCE" "erfolgreich" "fertig" 0 "Lokale KI auf das neue Modell umgestellt." "$A_TYP" ;;
+        3) rm -f -- "$marker"
+           log "Download des neuen Modells nicht rechtzeitig fertig; wird fortgesetzt."
+           status_schreiben "$A_NONCE" "fehlgeschlagen" "hostconfig" 3 \
+               "Download des neuen Modells nicht rechtzeitig fertig. Er wird automatisch fortgesetzt." "$A_TYP" ;;
+        *) date -u '+%Y-%m-%dT%H:%M:%SZ' > "$marker"
+           log "Neues Modell nicht eingerichtet (Exit $rc); das bisherige läuft weiter."
+           status_schreiben "$A_NONCE" "fehlgeschlagen" "hostconfig" "$rc" \
+               "$( case "$rc" in 4) echo 'Zu wenig freier Speicherplatz für das neue Modell.' ;; 5) echo 'Zu wenig Arbeitsspeicher für das neue Modell.' ;; *) echo 'Das neue Modell wurde nicht eingerichtet.' ;; esac ) Das bisherige läuft weiter." "$A_TYP" ;;
+    esac
+    cp -f "$STATUS_JSON" "$VERLAUF/$A_NONCE/status.json" 2>/dev/null || true
+    heartbeat
+    exit 0
+}
+
+# ── DuckDNS: Heimnetz-Adresse nachführen ─────────────────────────────────────
+# Die DuckDNS-Domain zeigt auf die Heimnetz-Adresse dieses Rechners (TLS kommt
+# per DNS-01, der Router leitet nichts weiter). Vergibt der Router eine neue
+# Adresse – bei Windows-PCs und Laptops nichts Ungewöhnliches –, zeigte die
+# Domain sonst ins Leere. Alle fünf Minuten wird deshalb verglichen und bei
+# Bedarf über die DuckDNS-API nachgetragen, aber nur ein Eintrag, den dieser
+# Rechner selbst hält: DNS muss noch genau die private Adresse liefern, die
+# hier zuletzt bestätigt oder eingetragen wurde. Alles andere bleibt unberührt
+# und wird nur gemeldet – ein zweiter Rechner mit derselben Domain (Umzug,
+# alter Rechner läuft noch) oder eine bewusst eingetragene öffentliche Adresse
+# mit Portweiterleitung. Den ersten Besitz begründet ein Treffer: DNS liefert
+# die eigene Adresse (so verlangt es der Installer). Oder ein Anspruch: Wer
+# die Domain in der Oberfläche mit Token einrichtet – etwa nach dem Umzug auf
+# einen neuen Rechner –, übernimmt sie ausdrücklich für diesen Rechner
+# ($STATE_DIR/duckdns-anspruch). Dann wird eine private oder fehlende Adresse
+# einmal ersetzt; eine öffentliche bleibt auch dann stehen.
+DUCKDNS_INTERVALL=300
+
+duckdns_ip_privat() {
+    [[ "$1" =~ ^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)[0-9.]+$ ]]
+}
+
+# Adresse dieses Rechners im Heimnetz (Interface der Default-Route) oder nichts.
+# Unter WSL nur im gespiegelten Netz: Sonst wäre es die interne Adresse der VM.
+duckdns_eigene_ip() {
+    if hostconfig_ist_wsl 2>/dev/null && [[ "$(wslinfo --networking-mode 2>/dev/null)" != mirrored ]]; then
+        return 0
+    fi
+    [[ "$(lan_json)" =~ \"ip\":\ \"([0-9.]+)\" ]] || return 0
+    local ip="${BASH_REMATCH[1]}"
+    duckdns_ip_privat "$ip" && printf '%s' "$ip"
+}
+
+# A-Einträge über öffentliches DNS-over-HTTPS (wie install.sh: Der Router
+# verwirft mit DNS-Rebind-Schutz genau die private Antwort). 1 = nicht abfragbar.
+duckdns_dns_a() {
+    local antwort
+    antwort=$(curl -fsS --max-time 8 -H 'accept: application/dns-json' \
+        "https://cloudflare-dns.com/dns-query?name=$1&type=A" 2>/dev/null) \
+        || antwort=$(curl -fsS --max-time 8 "https://dns.google/resolve?name=$1&type=A" 2>/dev/null) \
+        || return 1
+    # Kein A-Eintrag ist eine gültige Antwort (leer), kein Fehler.
+    printf '%s' "$antwort" | { grep -oE '"data": ?"[0-9]{1,3}(\.[0-9]{1,3}){3}"' || true; } \
+        | { grep -oE '[0-9]{1,3}(\.[0-9]{1,3}){3}' || true; } | sort -u
+}
+
+duckdns_ip_nachfuehren() {
+    [[ "$AGENT_MODE" == "normal" ]] || return 0
+    stack_bibliothek || return 0
+    local env="$INSTALL_DIR/.env" merk="$STATE_DIR/duckdns-ip" standdatei="$STATE_DIR/duckdns-stand"
+    local takt="$STATE_DIR/duckdns-takt" anspruchdatei="$STATE_DIR/duckdns-anspruch" domain token eigene dns erster stand
+    local merk_domain='' merk_ip='' alt_stand='' alt_dns='' alt_eigene='' alt_geprueft='' aktualisiert=- jetzt anspruch='' vorher
+    domain=$(hostconfig_env_lesen "$env" DUCKDNS_DOMAIN 2>/dev/null)
+    token=$(hostconfig_env_lesen "$env" DUCKDNS_API_TOKEN 2>/dev/null)
+    if [[ ! "$domain" =~ ^[a-z0-9-]{1,63}\.duckdns\.org$ || ! "$token" =~ ^[A-Za-z0-9._-]{8,256}$ ]]; then
+        rm -f -- "$standdatei" "$takt" "$anspruchdatei"
+        return 0
+    fi
+    [[ -f "$anspruchdatei" ]] && read -r anspruch < "$anspruchdatei"
+    [[ "$anspruch" == "$domain" ]] || { anspruch=''; rm -f -- "$anspruchdatei"; }
+    # Schalter aus Einstellungen → Allgemein: Die App legt die Merkdatei an, wenn
+    # die Adresse nicht nachgeführt werden soll (feste IP im Heimnetz). Geprüft
+    # und gemeldet wird weiter, geändert wird nichts.
+    local aus=0 schalter_neu=0
+    [[ -e "$UPDATE_DIR/duckdns-ip-aus" || -L "$UPDATE_DIR/duckdns-ip-aus" ]] && aus=1
+    [[ -f "$standdatei" ]] && read -r alt_stand _ < "$standdatei"
+    { (( aus )) && [[ "$alt_stand" != aus ]]; } || { (( ! aus )) && [[ "$alt_stand" == aus ]]; } && schalter_neu=1
+    jetzt=$(date +%s)
+    # Ein umgelegter Schalter wartet nicht auf den nächsten Takt.
+    if (( ! schalter_neu )) && [[ -f "$takt" ]] && (( jetzt - $(stat -c %Y -- "$takt" 2>/dev/null || echo 0) < DUCKDNS_INTERVALL )); then
+        return 0
+    fi
+    touch -- "$takt"
+    # Ohne Antwort (Netz nach dem Start noch nicht da) im nächsten Takt erneut.
+    dns=$(duckdns_dns_a "$domain") || return 0
+    eigene=$(duckdns_eigene_ip)
+    erster=$(head -n1 <<< "$dns")
+    [[ -f "$merk" ]] && read -r merk_domain merk_ip < "$merk"
+    if [[ -f "$standdatei" ]]; then
+        read -r alt_stand alt_dns alt_eigene alt_geprueft aktualisiert _ < "$standdatei"
+        [[ "$aktualisiert" =~ ^[0-9]{1,12}$ ]] || aktualisiert=-
+    fi
+    if (( aus )); then
+        stand=aus
+        # Zeigt der Eintrag auf diesen Rechner, gilt er nach dem Wiedereinschalten als eigener.
+        if [[ -n "$eigene" && -n "$dns" ]] && grep -qxF "$eigene" <<< "$dns"; then
+            [[ "$merk_domain $merk_ip" == "$domain $eigene" ]] || printf '%s %s\n' "$domain" "$eigene" > "$merk"
+        fi
+    elif [[ -z "$eigene" ]]; then
+        stand=unbekannt
+    elif [[ -n "$dns" ]] && grep -qxF "$eigene" <<< "$dns"; then
+        stand=ok
+        [[ "$merk_domain $merk_ip" == "$domain $eigene" ]] || printf '%s %s\n' "$domain" "$eigene" > "$merk"
+        rm -f -- "$anspruchdatei"
+    elif { [[ "$merk_domain" == "$domain" && "$dns" == "$merk_ip" ]] && duckdns_ip_privat "$merk_ip"; } \
+         || { [[ -n "$anspruch" ]] && { [[ -z "$dns" ]] || { [[ "$dns" != *$'\n'* ]] && duckdns_ip_privat "$dns"; }; }; }; then
+        vorher=${erster:-keine Adresse}
+        # Token nur über stdin an curl, nie in der Prozessliste.
+        local antwort
+        antwort=$(printf 'url = "https://www.duckdns.org/update?domains=%s&token=%s&ip=%s"\n' \
+            "${domain%.duckdns.org}" "$token" "$eigene" | curl -fsS --max-time 15 -K - 2>/dev/null) || antwort=''
+        if [[ "$antwort" == OK* ]]; then
+            stand=aktualisiert; aktualisiert=$jetzt; erster=$eigene
+            printf '%s %s\n' "$domain" "$eigene" > "$merk"
+            rm -f -- "$anspruchdatei"
+            echo "postbuch-update-agent: DuckDNS $domain von $vorher auf $eigene nachgetragen."
+        else
+            # Ein Anspruch bleibt bestehen und wird im nächsten Takt erneut versucht.
+            stand=fehler
+            echo "postbuch-update-agent: DuckDNS hat $eigene für $domain nicht angenommen." >&2
+        fi
+    else
+        stand=fremd
+        # Öffentliche oder mehrere Adressen: bewusst gesetzt, auch ein Anspruch ändert das nicht.
+        rm -f -- "$anspruchdatei"
+    fi
+    # Ein Nachtrag bleibt als solcher sichtbar, bis die Adresse sich wieder ändert.
+    [[ "$stand" == ok && "$aktualisiert" != - && "$alt_eigene" == "$eigene" ]] && stand=aktualisiert
+    printf '%s %s %s %s %s %s\n' "$stand" "${erster:--}" "${eigene:--}" "$jetzt" "$aktualisiert" "$domain" > "$standdatei"
+}
+
+# Zustand für den Heartbeat: festes Vokabular, Adressen und Zeitpunkte geprüft.
+duckdns_json() {
+    local f="$STATE_DIR/duckdns-stand" stand dns eigene geprueft aktualisiert domain
+    [[ -f "$f" ]] || { printf 'null'; return; }
+    read -r stand dns eigene geprueft aktualisiert domain < "$f"
+    [[ "$stand" =~ ^(ok|aktualisiert|fremd|fehler|unbekannt|aus)$ && "$geprueft" =~ ^[0-9]{1,12}$ \
+       && "$domain" =~ ^[a-z0-9-]{1,63}\.duckdns\.org$ ]] || { printf 'null'; return; }
+    local ipre='^[0-9]{1,3}(\.[0-9]{1,3}){3}$' d=null e=null a=null
+    [[ "$dns" =~ $ipre ]] && d="\"$dns\""
+    [[ "$eigene" =~ $ipre ]] && e="\"$eigene\""
+    [[ "$aktualisiert" =~ ^[0-9]{1,12}$ ]] && a="\"$(date -u -d "@$aktualisiert" '+%Y-%m-%dT%H:%M:%SZ')\""
+    printf '{ "stand": "%s", "domain": "%s", "dns": %s, "eigene": %s, "geprueftAm": "%s", "aktualisiertAm": %s }' \
+        "$stand" "$domain" "$d" "$e" "$(date -u -d "@$geprueft" '+%Y-%m-%dT%H:%M:%SZ')" "$a"
+}
+
 # Nonce des letzten Laufs, wenn das ein erfolgreiches Software-Update war.
 vorige_update_nonce() {
     [[ -f "$STATUS_JSON" && ! -L "$STATUS_JSON" ]] || return 0
@@ -474,6 +815,12 @@ heartbeat
 if [[ "${POSTBUCH_AGENT_EXEC_KOPIE:-0}" != "1" ]]; then
 postgres_umzug_automatisch
 postgres_image_automatisch
+lokalki_modell_automatisch
+duckdns_stand_vorher=$(cat -- "$STATE_DIR/duckdns-stand" 2>/dev/null || true)
+duckdns_ip_nachfuehren
+# Der Heartbeat oben kennt das Ergebnis dieses Laufs noch nicht; sonst zeigt die
+# Oberfläche bis zum nächsten Takt den alten Stand.
+[[ "$(cat -- "$STATE_DIR/duckdns-stand" 2>/dev/null || true)" == "$duckdns_stand_vorher" ]] || heartbeat
 [[ -f "$ANFORDERUNG" ]] || exit 0
 
 INFLIGHT="$UPDATE_DIR/.anforderung.inflight.$$"
@@ -531,6 +878,28 @@ if [[ "$AM_S" -eq 0 ]] || (( JETZT_S - AM_S > MAX_ALTER_MIN * 60 )) || (( AM_S -
     exit 0
 fi
 
+# Was ein Hostauftrag gerade tut, in Worten für den Reiter Stack. Die Werte
+# sind oben bereits gegen ein festes Zeichenmuster geprüft.
+auftrag_bezeichnung() {
+    case "$1:$2" in
+        module:lokalki:an)      echo "Lokale KI wird eingerichtet: Modell laden und Dienst starten …" ;;
+        module:lokalki:aus)     echo "Lokale KI wird abgeschaltet …" ;;
+        module:lokalki:entfernen) echo "Lokale KI wird entfernt …" ;;
+        module:scanner:an)      echo "Scanner-Dienst wird eingeschaltet …" ;;
+        module:scanner:aus)     echo "Scanner-Dienst wird abgeschaltet …" ;;
+        module:embedding:an)    echo "Embedding-Dienst wird eingeschaltet …" ;;
+        module:embedding:aus)   echo "Embedding-Dienst wird abgeschaltet …" ;;
+        module:*)               echo "Dienst wird umgeschaltet …" ;;
+        port:*)                 echo "Port der Weboberfläche wird umgestellt …" ;;
+        duckdns:aus)            echo "HTTPS über DuckDNS wird abgeschaltet …" ;;
+        duckdns:*)              echo "HTTPS über DuckDNS wird eingerichtet …" ;;
+        freigabe:*)             echo "Erreichbarkeit im Heimnetz wird umgestellt …" ;;
+        ablage:*)               echo "Ablageordner wird umgestellt …" ;;
+        netzwerk:*)             echo "Netzwerk der Container wird umgestellt …" ;;
+        *)                      echo "Host-Konfiguration wird angewendet." ;;
+    esac
+}
+
 # Nonce vor jeder Mutation atomar reservieren. Ein Crash nach diesem Punkt darf
 # denselben Hostauftrag nie ein zweites Mal ausführen.
 if ! mkdir "$VERLAUF/$A_NONCE" 2>/dev/null; then
@@ -544,7 +913,7 @@ if [[ "$A_TYP" != "update" ]]; then
     rm -f "$INFLIGHT" "$ANFORDERUNG_KOPIE"
     : > "$LOGFILE"; chmod 600 "$LOGFILE" 2>/dev/null || true
     log "Hostauftrag Typ=$A_TYP übernommen (nonce=$A_NONCE)."
-    status_schreiben "$A_NONCE" "laeuft" "hostconfig" "" "Host-Konfiguration wird angewendet." "$A_TYP"
+    status_schreiben "$A_NONCE" "laeuft" "hostconfig" "" "$(auftrag_bezeichnung "$A_TYP" "$A_WERT")" "$A_TYP"
     HOSTCONFIG="$AGENT_LIB/postbuch-hostconfig.sh"
     if [[ ! -r "$HOSTCONFIG" ]]; then
         status_schreiben "$A_NONCE" "fehlgeschlagen" "hostconfig" 1 "Host-Konfigurationsmodul fehlt." "$A_TYP"
@@ -555,12 +924,23 @@ if [[ "$A_TYP" != "update" ]]; then
     source "$HOSTCONFIG"
     # Jeder neue Auftrag zur Oberfläche ersetzt eine offene Bestätigung.
     [[ "$A_TYP" == freigabe && "$A_WERT" == web:* ]] && rm -f -- "$WEB_BESTAETIGUNG" "$UPDATE_DIR/bestaetigung.kv"
-    if hostconfig_anwenden "$INSTALL_DIR" "$A_TYP" "$A_WERT" "$A_SECRET"; then
+    HOSTCONFIG_RC=0
+    HOSTCONFIG_ARG="$A_SECRET"
+    [[ "$A_TYP" == ablage ]] && HOSTCONFIG_ARG="$A_PFAD"
+    hostconfig_anwenden "$INSTALL_DIR" "$A_TYP" "$A_WERT" "$HOSTCONFIG_ARG" || HOSTCONFIG_RC=$?
+    if (( HOSTCONFIG_RC == 0 )); then
         hostdateien_besitz_reparieren || true
         if [[ "$A_TYP" == freigabe && "$A_WERT" == web:lokal ]]; then
             printf 'nonce=%s\nbis=%s\n' "$A_NONCE" "$(( $(date -u '+%s') + 120 ))" > "$WEB_BESTAETIGUNG"
             chmod 600 "$WEB_BESTAETIGUNG" 2>/dev/null || true
             log "Oberfläche nur über HTTPS erreichbar; Bestätigung binnen zwei Minuten erwartet."
+        fi
+        if [[ "$A_TYP" == duckdns ]]; then
+            # Neu eingerichtet oder abgeschaltet: Besitz und Stand beginnen neu.
+            # Mit Domain und Token übernimmt dieser Rechner die Domain (siehe
+            # duckdns_ip_nachfuehren); geprüft wird im nächsten Lauf.
+            rm -f -- "$STATE_DIR/duckdns-ip" "$STATE_DIR/duckdns-stand" "$STATE_DIR/duckdns-takt" "$STATE_DIR/duckdns-anspruch"
+            [[ "$A_WERT" =~ ^[a-z0-9-]{1,63}\.duckdns\.org$ ]] && printf '%s\n' "$A_WERT" > "$STATE_DIR/duckdns-anspruch"
         fi
         status_schreiben "$A_NONCE" "erfolgreich" "fertig" 0 "Host-Konfiguration abgeschlossen." "$A_TYP"
         cp -f "$STATUS_JSON" "$VERLAUF/$A_NONCE/status.json" 2>/dev/null || true
@@ -568,8 +948,17 @@ if [[ "$A_TYP" != "update" ]]; then
         exit 0
     fi
     hostdateien_besitz_reparieren || true
-    status_schreiben "$A_NONCE" "fehlgeschlagen" "hostconfig" 1 "Host-Konfiguration fehlgeschlagen und wurde zurückgetauscht." "$A_TYP"
+    case "$HOSTCONFIG_RC" in
+        3) HOSTCONFIG_MELDUNG="Download nicht rechtzeitig fertig. Erneutes Einschalten setzt ihn fort." ;;
+        4) HOSTCONFIG_MELDUNG="Zu wenig freier Speicherplatz: Nach dem Laden des Modells müssen noch 5 GB frei bleiben." ;;
+        5) HOSTCONFIG_MELDUNG="Zu wenig Speicher für die lokale KI: Arbeitsspeicher und Grafikspeicher zusammen müssen mindestens 24 GB ergeben." ;;
+        *) HOSTCONFIG_MELDUNG="Host-Konfiguration fehlgeschlagen und wurde zurückgetauscht." ;;
+    esac
+    # Feste Begründung aus der Bibliothek (Ablage), nie Nutzereingaben.
+    [[ -n "${HOSTCONFIG_GRUND:-}" ]] && HOSTCONFIG_MELDUNG="$HOSTCONFIG_GRUND"
+    status_schreiben "$A_NONCE" "fehlgeschlagen" "hostconfig" "$HOSTCONFIG_RC" "$HOSTCONFIG_MELDUNG" "$A_TYP"
     cp -f "$STATUS_JSON" "$VERLAUF/$A_NONCE/status.json" 2>/dev/null || true
+    heartbeat
     exit 1
 fi
 
@@ -652,8 +1041,17 @@ if [[ "$EXIT" -eq 0 ]]; then
     status_schreiben "$A_NONCE" "erfolgreich" "fertig" 0 "$MELDUNG" "update"
 else
     log "Update fehlgeschlagen (Exit $EXIT)."
-    status_schreiben "$A_NONCE" "fehlgeschlagen" "fehler" "$EXIT" \
-        "Das Update ist fehlgeschlagen (Exit $EXIT). Details stehen im Protokoll." "update"
+    # ##PHASE:up ist in allen Installer-Versionen der erste Schritt, der
+    # Container anfasst. Das GUI sieht nur den Schwanz des Logs und kann das
+    # nach einem langen Build nicht mehr selbst erkennen, daher steht es hier
+    # in Phase und Meldung.
+    if grep -q '##PHASE:up' "$LOGFILE" 2>/dev/null; then
+        status_schreiben "$A_NONCE" "fehlgeschlagen" "fehler-nach-start" "$EXIT" \
+            "Das Update ist fehlgeschlagen (Exit $EXIT), nachdem die neue Version eingespielt wurde. Details stehen im Protokoll." "update"
+    else
+        status_schreiben "$A_NONCE" "fehlgeschlagen" "fehler-vor-start" "$EXIT" \
+            "Das Update ist fehlgeschlagen (Exit $EXIT). Die bisherige Version läuft unverändert weiter. Details stehen im Protokoll." "update"
+    fi
 fi
 
 # ── Lauf archivieren ─────────────────────────────────────────────────────────

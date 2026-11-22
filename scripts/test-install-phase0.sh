@@ -85,7 +85,7 @@ error() { :; }
 docker_runtime() {
   printf 'docker %s\n' "$*" >> "$LOG"
   [[ "$1 $2 $3" == "inspect postbuch-scanner --format" ]] && return 1
-  [[ "$1 $2 $3" == "image inspect postbuch-caddy:local3" ]] && return "${CADDY_FEHLT:-1}"
+  [[ "$1 $2 $3" == "image inspect postbuch-caddy:local4" ]] && return "${CADDY_FEHLT:-1}"
   return 0
 }
 upsert_env_value() {
@@ -188,7 +188,7 @@ grep -q 'compose build app web$' "$LOG"
 printf 'COMPOSE_PROFILES=scanner\n' > .env
 CADDY_FEHLT=0; export CADDY_FEHLT
 : > "$LOG"; compose_build caddy app
-grep -q 'docker image inspect postbuch-caddy:local3' "$LOG"
+grep -q 'docker image inspect postbuch-caddy:local4' "$LOG"
 ! grep -q 'compose --profile caddy build caddy' "$LOG"
 grep -q 'compose build app' "$LOG"
 

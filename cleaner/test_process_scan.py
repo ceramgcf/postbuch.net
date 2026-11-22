@@ -44,6 +44,26 @@ class CombinedContentMaskTest(unittest.TestCase):
         self.assertEqual(process_scan.parse_osd_rotation("Orientation: 3\nRotate: 180\n"), 180)
         self.assertIsNone(process_scan.parse_osd_rotation("Too few characters"))
 
+    def test_osd_confidence_parser(self):
+        ausgabe = "Rotate: 180\nOrientation confidence: 13.68\nScript: Latin\n"
+        self.assertEqual(process_scan.parse_osd_confidence(ausgabe), 13.68)
+        self.assertIsNone(process_scan.parse_osd_confidence("Too few characters"))
+
+    def test_blatt_drehung_nur_bei_sicherer_einiger_erkennung(self):
+        entscheide = process_scan.entscheide_blatt_drehung
+        # Beide Seiten sicher und einig.
+        self.assertEqual(entscheide([(180, 9.0), (180, 4.2)]), 180)
+        # Unsichere Rückseite zählt nicht mit.
+        self.assertEqual(entscheide([(180, 9.0), (0, 0.4)]), 180)
+        self.assertEqual(entscheide([(180, 9.0), None]), 180)
+        # Nichts sicher erkannt → nicht drehen.
+        self.assertEqual(entscheide([(180, 2.9), (90, 1.0)]), 0)
+        self.assertEqual(entscheide([None, None]), 0)
+        # Sichere Seiten widersprechen sich → nicht drehen.
+        self.assertEqual(entscheide([(180, 9.0), (0, 5.0)]), 0)
+        # Aufrecht sicher erkannt.
+        self.assertEqual(entscheide([(0, 12.0), (0, 8.0)]), 0)
+
     def test_inner_content_pixels_ignore_scanner_border(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             page = np.full((100, 100), 255, dtype=np.uint8)
@@ -61,7 +81,9 @@ class CombinedContentMaskTest(unittest.TestCase):
     def test_sparse_inner_content_protects_duplex_page(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             page = np.full((100, 100), 255, dtype=np.uint8)
-            page[45:55, 45:55] = 0
+            # 20 × 20 Pixel: sicher über der auf DETECT_DPI skalierten Schwelle
+            # (Referenz 200 Pixel bei 100 dpi), also echter, wenn auch sparsamer Inhalt.
+            page[40:60, 40:60] = 0
             page_path = os.path.join(tmpdir, "content.png")
             Image.fromarray(page).save(page_path)
 
@@ -75,7 +97,7 @@ class CombinedContentMaskTest(unittest.TestCase):
     def test_light_front_side_bleed_does_not_keep_blank_back(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             page = np.full((100, 100), 255, dtype=np.uint8)
-            # Sichtbares, aber nur sehr helles Durchscheinen wie bei P000518.
+            # Sichtbares, aber nur sehr helles Durchscheinen der Vorderseite.
             page[35:65, 35:65] = 210
             page_path = os.path.join(tmpdir, "bleed-through.png")
             Image.fromarray(page).save(page_path)

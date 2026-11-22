@@ -13,8 +13,12 @@ import { promisify } from 'util';
 import { writeFile, readFile, unlink, mkdir, readdir, rm } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { PDFDocument, PDFName, PDFNull, PDFNumber, PDFString, PDFArray, PDFDict, StandardFonts, rgb } from 'pdf-lib';
+import { mitRechenplatz } from './ressourcen.js';
 
 const execFileAsync = promisify(execFile);
+// Ghostscript-Läufe sind die rechenlastigen Schritte; sie teilen sich die
+// Rechenplätze (lib/ressourcen.js) mit allen übrigen Dokumenten.
+const ghostscript = (args, opts, platz) => mitRechenplatz(() => execFileAsync('gs', args, opts), platz);
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
 /**
@@ -81,7 +85,7 @@ export async function stripTextLayer(pdfBuffer) {
 
   try {
     await writeFile(inputPath, pdfBuffer);
-    await execFileAsync('gs', [
+    await ghostscript([
       '-q', '-dNOPAUSE', '-dBATCH', '-dSAFER',
       '-sDEVICE=pdfwrite',
       '-dFILTERTEXT',
@@ -107,15 +111,17 @@ export async function stripTextLayer(pdfBuffer) {
  * @param {Buffer} pdfBuffer
  * @returns {Promise<string>}
  */
-export async function extractTextLayer(pdfBuffer) {
+export async function extractTextLayer(pdfBuffer, { abSeite = 1, bisSeite = null } = {}) {
   const id = randomUUID();
   const inputPath  = `/tmp/pdftext-in-${id}.pdf`;
   const outputPath = `/tmp/pdftext-out-${id}.txt`;
   try {
     await writeFile(inputPath, pdfBuffer);
-    await execFileAsync('gs', [
+    await ghostscript([
       '-q', '-dNOPAUSE', '-dBATCH', '-dSAFER',
       '-sDEVICE=txtwrite',
+      ...(abSeite > 1 ? [`-dFirstPage=${Math.floor(abSeite)}`] : []),
+      ...(bisSeite >= 1 ? [`-dLastPage=${Math.floor(bisSeite)}`] : []),
       `-sOutputFile=${outputPath}`,
       inputPath,
     ]);
@@ -148,6 +154,8 @@ export const RASTER_MAX_SEITEN = 8;
 // kommen per Post/Scan von beliebigen Dritten, das PDF ist nicht vertrauenswürdig.
 const MAX_SEITE_PT = 5000;
 
+const RASTER_DEVICES = ['pnggray', 'png16m', 'jpeggray', 'jpeg'];
+
 function extFuerDevice(device) {
   return device.startsWith('jpeg') ? 'jpg' : 'png';
 }
@@ -163,9 +171,10 @@ function extFuerDevice(device) {
  * @param {object}  [opts]
  * @param {number}  [opts.maxSeiten=RASTER_MAX_SEITEN]
  * @param {number}  [opts.langeKanteMax=1280]        - px, bestimmt die effektive DPI
- * @param {'pnggray'|'png16m'|'jpeggray'} [opts.device='pnggray']
+ * @param {'pnggray'|'png16m'|'jpeggray'|'jpeg'} [opts.device='pnggray'] - `jpeg` = Farb-JPEG (Vorschaubilder)
  * @param {number}  [opts.maxBytesGesamt=12*1024*1024]
  * @param {number}  [opts.timeoutMs=90000]
+ * @param {number}  [opts.prio] - PRIO.* für den Rechenplatz (Standard: verarbeitung)
  * @param {boolean} [opts.strikt=false] - true: mehr Seiten als maxSeiten sind ein
  *   Fehler statt stiller Kürzung. Voranalyse braucht nur einen Eindruck (false),
  *   die Klassifikation soll auf ein PDF-fähiges Modell absteigen statt eine
@@ -179,7 +188,9 @@ export async function renderPdfToImages(pdfBuffer, {
   maxBytesGesamt = 12 * 1024 * 1024,
   timeoutMs      = 90_000,
   strikt         = false,
+  prio,
 } = {}) {
+  if (!RASTER_DEVICES.includes(device)) throw new Error(`Unbekanntes Raster-Device: ${device}`);
   const doc = await PDFDocument.load(pdfBuffer, { updateMetadata: false });
   const seitenGesamt = doc.getPageCount();
   if (strikt && seitenGesamt > maxSeiten) {
@@ -208,7 +219,7 @@ export async function renderPdfToImages(pdfBuffer, {
   const inputPath = `${dir}/in.pdf`;
 
   async function render(dpi) {
-    await execFileAsync('gs', [
+    await ghostscript([
       '-q', '-dNOPAUSE', '-dBATCH', '-dSAFER',
       `-sDEVICE=${device}`,
       `-r${dpi}`,
@@ -217,7 +228,7 @@ export async function renderPdfToImages(pdfBuffer, {
       '-dTextAlphaBits=4', '-dGraphicsAlphaBits=4',
       `-sOutputFile=${dir}/s-%03d.${ext}`,
       inputPath,
-    ], { timeout: timeoutMs, killSignal: 'SIGKILL' });
+    ], { timeout: timeoutMs, killSignal: 'SIGKILL' }, { prio });
     const dateien = (await readdir(dir)).filter((f) => f.startsWith('s-')).sort();
     const bilder = [];
     let gesamtBytes = 0;
@@ -301,9 +312,10 @@ export async function erkenneScanMitTextebene(pdfBuffer) {
   const outputPath = `/tmp/pdftxtprobe-out-${id}.txt`;
   try {
     await writeFile(inputPath, pdfBuffer);
-    await execFileAsync('gs', [
+    await ghostscript([
       '-q', '-dNOPAUSE', '-dBATCH', '-dSAFER',
       '-sDEVICE=txtwrite',
+      ...(abSeite > 1 ? [`-dFirstPage=${Math.floor(abSeite)}`] : []),
       `-sOutputFile=${outputPath}`,
       inputPath,
     ]);
@@ -406,7 +418,7 @@ export async function convertToGrayscale(pdfBuffer, targetFormat = 'a4') {
     // -dFitPage scales proportionally (aspect-ratio preserved); pages slightly
     // smaller than the box are left as-is (scan photos will rarely be exactly A4/A6).
     // -dAutoRotatePages=/None prevents GS from second-guessing orientation.
-    await execFileAsync('gs', [
+    await ghostscript([
       '-q', '-dNOPAUSE', '-dBATCH', '-dSAFER',
       '-sDEVICE=pdfwrite',
       '-dFIXEDMEDIA',
@@ -460,6 +472,24 @@ export async function selectPages(pdfBuffer, von, bis) {
   const kopierte = await out.copyPages(src, indices);
   kopierte.forEach((p) => out.addPage(p));
   return Buffer.from(await out.save());
+}
+
+/**
+ * Zerlegt ein PDF in Einzelseiten. Lädt die Quelle nur einmal (bei vielen
+ * Seiten deutlich günstiger als selectPages je Seite).
+ * @param {Buffer} pdfBuffer
+ * @returns {Promise<Buffer[]>} je Seite ein einseitiges PDF, in Seitenreihenfolge
+ */
+export async function splitPages(pdfBuffer) {
+  const src = await PDFDocument.load(pdfBuffer, { updateMetadata: false });
+  const seiten = [];
+  for (let i = 0; i < src.getPageCount(); i++) {
+    const out = await PDFDocument.create();
+    const [seite] = await out.copyPages(src, [i]);
+    out.addPage(seite);
+    seiten.push(Buffer.from(await out.save()));
+  }
+  return seiten;
 }
 
 /**

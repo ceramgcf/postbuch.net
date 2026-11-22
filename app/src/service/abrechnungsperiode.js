@@ -6,7 +6,7 @@
  * dort liegen auch die vier relationalen Session-Tabellen als Wahrheit.
  * Diese Datei bleibt bewusst nur für die Perioden-Operationen zuständig:
  *   - setPeriodeStatus()     — SUBMITTED↔COLLECTING umschalten (auch generisch nutzbar)
- *   - omitPeriode()          — COLLECTING→OMITTED + neue COLLECTING+1
+ *   - omitPeriode()          – COLLECTING→OMITTED + neue COLLECTING+1 (nur mit Kostenträger-Flag)
  *   - restorePeriode()       — Generisches Status-Restore (Undo-Helper)
  *   - deletePeriodeHighest() — Höchste COLLECTING löschen (Rechnungen → nächsthöhere COLLECTING)
  *   - mergePerioden()        — Source-COLLECTING in Target-COLLECTING mergen
@@ -36,7 +36,7 @@ import { sperrePerioden } from './perioden-sperre.js';
  * @param {number} geloeschtePeriode  Periode, die verschwindet (verwaiste Kinder)
  * @param {number|null} zielPeriode   Periode, die deren Rechnungen übernimmt
  */
-async function loeseHerkunftAuf(client, person, kostentraeger, geloeschtePeriode, zielPeriode) {
+export async function loeseHerkunftAuf(client, person, kostentraeger, geloeschtePeriode, zielPeriode) {
   const entityId = `${person}/${kostentraeger}/${geloeschtePeriode}`;
 
   const eigene = await client.query(
@@ -109,7 +109,7 @@ export async function throwIfSessionLocked(client, person, kostentraeger, period
  * hat sie unmittelbar zuvor über throwIfSessionLocked geprüft und bricht bei
  * einer solchen Session ab.
  */
-async function entferneInaktiveSessionZiele(client, person, kostentraeger, periode) {
+export async function entferneInaktiveSessionZiele(client, person, kostentraeger, periode) {
   await client.query(
     `DELETE FROM _abrechnung_session_ziel
      WHERE person = $1 AND kostentraeger = $2 AND periode = $3 AND NOT aktiv`,
@@ -258,13 +258,19 @@ export async function omitPeriode({ person, kostentraeger, periode }) {
       [person, kostentraeger, periode]
     );
 
-    // Neue COLLECTING nur anlegen, wenn keine weitere existiert
+    // Neue COLLECTING nur anlegen, wenn keine weitere existiert und die Person
+    // den Kostenträger noch hat (abgewählt: nichts mehr zu sammeln).
     const stillColl = await client.query(
       `SELECT 1 FROM abrechnungsperiode_buch WHERE person = $1 AND kostentraeger = $2 AND status = 'COLLECTING' LIMIT 1`,
       [person, kostentraeger]
     );
+    const flag = await client.query(
+      `SELECT CASE $2::text WHEN 'PKV' THEN pkv ELSE beihilfe END AS aktiv
+         FROM postbuch.mensch WHERE kurzname = $1`,
+      [person, kostentraeger]
+    );
     let createdPeriode = null;
-    if (stillColl.rows.length === 0) {
+    if (stillColl.rows.length === 0 && flag.rows[0]?.aktiv === true) {
       const ins = await client.query(
         `INSERT INTO abrechnungsperiode_buch (person, kostentraeger, periode, status, satz)
          SELECT $1, $2, COALESCE(MAX(periode), 0) + 1, 'COLLECTING',

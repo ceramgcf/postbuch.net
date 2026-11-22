@@ -22,6 +22,7 @@
  */
 
 import { useState } from 'react';
+import { useUngespeichert } from '@/lib/ungespeichert';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { Button } from '@/components/ui/button';
@@ -192,6 +193,18 @@ export default function EmbeddingCard({ providers, onChanged }) {
     || vorsilbenGeaendert
     || providerWurdeErsetzt
     || (nochNichtsGespeichert && !!aktuellesModell);
+  // Nur Änderungen von Hand zählen als ungespeichert, nicht die Vorauswahl.
+  useUngespeichert('embedding', {
+    aktiv: !!geaendert && (!!providerId || !!model || vorsilbenEdit !== null), label: 'Embeddings',
+    speichern: async () => {
+      if (!nochNichtsGespeichert && (bestand?.gesamt ?? 0) > 0) {
+        setWechselFrage(true);
+        throw new Error('Der Modellwechsel berechnet alle Embeddings neu – bitte in der Karte „Embeddings“ bestätigen.');
+      }
+      await mSpeichern.mutateAsync();
+    },
+    verwerfen: () => { setProviderId(''); setModel(''); setVorsilbenEdit(null); setFehler(''); },
+  });
 
   return (
     <Card>
@@ -219,7 +232,7 @@ export default function EmbeddingCard({ providers, onChanged }) {
           </div>
         ) : (
           <>
-          <EingebauterEmbeddingDienst gewaehlt={emb?.providerId === EINGEBAUT_ID}
+          <EingebauterEmbeddingDienst gewaehlt={emb?.providerId === EINGEBAUT_ID} model={emb?.model}
                                       bestand={bestand?.gesamt ?? 0} onGewaehlt={nachWahl} />
           {kandidaten.length === 0 ? (
           <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
@@ -288,6 +301,8 @@ export default function EmbeddingCard({ providers, onChanged }) {
                 ))}
               </div>
             </details>
+
+            {emb?.schwellen && wieGespeichert && <SuchSchwellen schwellen={emb.schwellen} />}
 
             <p className="text-xs text-muted-foreground">
               {emb?.signature
@@ -398,5 +413,72 @@ export default function EmbeddingCard({ providers, onChanged }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * Skala der Inhalts- und Übereinstimmungswerte in der Suche: unterhalb der
+ * Unsinnsschwelle 0 %, ab der 100-%-Marke 100 %. Für Modelle der kuratierten
+ * Liste gemessen und nur angezeigt; für unbekannte Modelle generische
+ * Startwerte, die sich hier anpassen lassen. Ein Modellwechsel setzt beide neu.
+ */
+function SuchSchwellen({ schwellen }) {
+  const qc = useQueryClient();
+  const [unsinn, setUnsinn] = useState(null);
+  const [voll, setVoll] = useState(null);
+  const u = unsinn ?? schwellen.unsinn;
+  const v = voll ?? schwellen.voll;
+  const gueltig = Number.isFinite(u) && Number.isFinite(v) && u >= 0 && v > u && v <= 1;
+  const geaendert = unsinn !== null || voll !== null;
+  const mSpeichern = useMutation({
+    mutationFn: async () => {
+      await api.settings.update('embedding_unsinnsschwelle', u);
+      await api.settings.update('embedding_aehnlichkeit_voll', v);
+    },
+    onSuccess: () => {
+      setUnsinn(null); setVoll(null);
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      qc.invalidateQueries({ queryKey: ['ai-embedding'] });
+    },
+  });
+  useUngespeichert('embedding-schwellen', {
+    aktiv: geaendert && gueltig, label: 'Suchschwellen',
+    speichern: () => mSpeichern.mutateAsync(), verwerfen: () => { setUnsinn(null); setVoll(null); },
+  });
+  const zahl = (x) => x.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 3 });
+  return (
+    <details className="text-xs" open={schwellen.generisch || undefined}>
+      <summary className="cursor-pointer text-muted-foreground select-none">
+        Suchschwellen: {schwellen.generisch ? 'generische Startwerte' : 'für dieses Modell gemessen'}
+      </summary>
+      <div className="mt-2 space-y-2">
+        <p className="text-muted-foreground">
+          Legen fest, wie die Suche die Ähnlichkeit dieses Modells in Prozent umrechnet: Unterhalb der
+          Unsinnsschwelle zählt ein Treffer inhaltlich 0 %, ab der 100-%-Marke voll.
+          {schwellen.generisch
+            ? ' Für dieses Modell liegen keine gemessenen Werte vor. Die Startwerte ordnen die Treffer zuverlässig; zeigt die Suche auch für unpassende Dokumente hohe Inhaltswerte, die Unsinnsschwelle anheben.'
+            : ` Unsinnsschwelle ${zahl(schwellen.unsinn)}, 100 % ab ${zahl(schwellen.voll)}.`}
+        </p>
+        {schwellen.generisch && (
+          <div className="flex flex-wrap items-end gap-2">
+            {[['Unsinnsschwelle', u, setUnsinn], ['100 % ab', v, setVoll]].map(([label, wert, setze]) => (
+              <div key={label} className="space-y-1">
+                <label className="font-medium text-muted-foreground uppercase tracking-wider">{label}</label>
+                <input type="number" min={0} max={1} step={0.01} value={wert}
+                       onChange={(e) => setze(Number(e.target.value))}
+                       className="h-8 w-24 rounded-md border border-input bg-background px-2 font-mono text-xs" />
+              </div>
+            ))}
+            <Button size="sm" variant="outline" disabled={!geaendert || !gueltig || mSpeichern.isPending}
+                    onClick={() => mSpeichern.mutate()}>
+              {mSpeichern.isPending ? <Spinner className="h-3.5 w-3.5" /> : null}
+              Speichern
+            </Button>
+          </div>
+        )}
+        {geaendert && !gueltig && <p className="text-destructive">Die 100-%-Marke muss über der Unsinnsschwelle liegen (Werte von 0 bis 1).</p>}
+        {mSpeichern.isError && <p className="text-destructive">{mSpeichern.error?.message}</p>}
+      </div>
+    </details>
   );
 }

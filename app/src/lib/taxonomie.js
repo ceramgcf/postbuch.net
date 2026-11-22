@@ -8,6 +8,10 @@
 
 import pool from '../db.js';
 
+export function istPflichtRechnung(dokumentart) {
+  return dokumentart === 'rechnung' || dokumentart === 'kaufbeleg';
+}
+
 async function ladeTaxonomie({ nurAktiv = true } = {}) {
   const aktivFilter = nurAktiv ? 'WHERE aktiv = true' : '';
   const [lebensbereiche, dokumentarten, aktivierungen] = await Promise.all([
@@ -49,8 +53,8 @@ export async function getAktiveCodes() {
  * Bestimmt ausschließlich aus DB-Taxonomie den spezialisierten Folgepfad.
  * Die LLM-Antwort selbst kann keine Spezialpipeline nominieren.
  */
-export async function resolveSpezialpipeline(lebensbereich, dokumentart) {
-  const { rows } = await pool.query(
+export async function resolveSpezialpipeline(lebensbereich, dokumentart, client = pool) {
+  const { rows } = await client.query(
     `SELECT d.spezial_pipeline
        FROM postbuch.dokumentart d
        JOIN postbuch.sd_aktivierung a ON a.dokumentart_code = d.code
@@ -66,6 +70,6 @@ export async function resolveSpezialpipeline(lebensbereich, dokumentart) {
  * Dokument generisch. Diese Funktion ist die einzige Grundlage für Inserter
  * und spätere manuelle Typwechsel.
  */
-export async function effektiveGruppe(lebensbereich, dokumentart) {
-  return (await resolveSpezialpipeline(lebensbereich, dokumentart)) || 'generisch';
+export async function effektiveGruppe(lebensbereich, dokumentart, client = pool) {
+  return (await resolveSpezialpipeline(lebensbereich, dokumentart, client)) || 'generisch';
 }

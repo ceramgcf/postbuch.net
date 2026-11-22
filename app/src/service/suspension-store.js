@@ -39,8 +39,8 @@ export async function create(row) {
        (job_id, reason, onedrive_id, storage_id, storage_backend, onedrive_weburl,
         reserved_postid, match_postid,
         match_weburl, match_confidence, similarity, new_confidence, embedding,
-        embedding_signature, payload, step_offset, expires_at)
-     VALUES ($1,$2,$3,$3,$16,$4,$5,$6,$7,$8,$9,$10,$11::halfvec,$12,$13,$14,$15)
+        embedding_signature, payload, step_offset, expires_at, begruendung)
+     VALUES ($1,$2,$3,$3,$16,$4,$5,$6,$7,$8,$9,$10,$11::halfvec,$12,$13,$14,$15,$17)
      RETURNING *`,
     [
       row.jobId,
@@ -59,6 +59,7 @@ export async function create(row) {
       row.stepOffset ?? 0,
       row.expiresAt,
       row.storageBackend ?? 'onedrive',
+      row.begruendung ?? null,
     ]
   );
   return result.rows[0];
@@ -85,6 +86,20 @@ export async function deleteOne(jobId) {
     'DELETE FROM postbuch._pipeline_suspensions WHERE job_id = $1',
     [jobId]
   );
+}
+
+/**
+ * Übernimmt eine Suspension zur Auflösung: löscht die Zeile und gibt sie
+ * zurück. Von mehreren gleichzeitigen Entscheidern (Benutzer, Timeout-Job,
+ * Bot) bekommt genau einer die Zeile; alle anderen erhalten null.
+ * @param {string} jobId
+ */
+export async function uebernimm(jobId) {
+  const result = await pool.query(
+    'DELETE FROM postbuch._pipeline_suspensions WHERE job_id = $1 RETURNING *',
+    [jobId]
+  );
+  return result.rows[0] || null;
 }
 
 /**

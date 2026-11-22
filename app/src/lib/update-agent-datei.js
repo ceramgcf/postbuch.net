@@ -14,6 +14,7 @@
  *     status.json       ← Agent → App: Zustand des laufenden/letzten Laufs
  *     update.log        ← Agent → App: Klartext, App liest nur den Schwanz
  *     bestaetigung.kv   ← App → Agent: Quittung „Oberfläche nur über HTTPS“
+ *     duckdns-ip-aus    ← App → Agent: DuckDNS-Adresse nicht nachführen (leer)
  *     verlauf/<nonce>/  ← Agent: abgeschlossene Läufe (zugleich Nonce-Sperre)
  *
  * **`anforderung.kv` ist bewusst `key=value`, kein JSON.** Der Agent ist ein
@@ -31,6 +32,7 @@
 
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
+import { release as kernelVersion } from 'node:os';
 import path from 'node:path';
 
 export const UPDATE_DIR = process.env.POSTBUCH_UPDATE_DIR || '/data/update';
@@ -55,6 +57,7 @@ const P = {
   status:      () => path.join(UPDATE_DIR, 'status.json'),
   bestaetigung: () => path.join(UPDATE_DIR, 'bestaetigung.kv'),
   log:         () => path.join(UPDATE_DIR, 'update.log'),
+  duckdnsAus:  () => path.join(UPDATE_DIR, 'duckdns-ip-aus'),
 };
 
 /** Entfernt den sichtbaren Log-Tail des vorigen Laufs vor einer neuen Anfrage. */
@@ -70,7 +73,7 @@ async function altesLogEntfernen() {
 
 const STATUS_WERTE = ['laeuft', 'erfolgreich', 'fehlgeschlagen', 'abgelehnt'];
 /** Läuft-Typen: eine echte Software-Version oder ein reiner Host-Konfigurationsauftrag. */
-const LAUF_TYP_WERTE = ['update', 'netzwerk', 'module', 'port', 'duckdns', 'freigabe'];
+const LAUF_TYP_WERTE = ['update', 'netzwerk', 'module', 'port', 'duckdns', 'freigabe', 'ablage'];
 const MODI = ['normal', 'dry-run'];
 const DOCKER_ARTEN = ['direkt', 'sudo'];
 
@@ -83,6 +86,14 @@ async function leseJson(pfad) {
   } catch {
     return null;
   }
+}
+
+// Der Windows-Installer meldet den zuletzt lokal geprüften Zustand.
+export async function leseWindowsFirewall() {
+  const status = await leseJson(path.join(UPDATE_DIR, 'firewall-status.json'));
+  if (!status && !/microsoft/i.test(kernelVersion())) return null;
+  const zeit = typeof status?.zeit === 'string' && Number.isFinite(Date.parse(status.zeit)) ? status.zeit : null;
+  return { aktiv: zeit && typeof status.aktiv === 'boolean' ? status.aktiv : null, zeit };
 }
 
 // ── Agent-Heartbeat ──────────────────────────────────────────────────────────
@@ -99,7 +110,7 @@ async function leseJson(pfad) {
  *                    schreibbar:boolean, letzterLaufAm:string|null, version:number|null}>}
  */
 export async function leseAgentStatus() {
-  const leer = { vorhanden: false, modus: null, docker: null, schreibbar: false, letzterLaufAm: null, version: null, capabilities: [], lan: null, scannerProfilAktiv: null, embeddingProfilAktiv: null, freigaben: null, webBestaetigungBis: null };
+  const leer = { vorhanden: false, modus: null, docker: null, schreibbar: false, letzterLaufAm: null, version: null, capabilities: [], lan: null, scannerProfilAktiv: null, embeddingProfilAktiv: null, freigaben: null, webBestaetigungBis: null, stack: null, duckdnsIp: null };
   const o = await leseJson(P.agent());
   if (!o) return leer;
 
@@ -126,7 +137,7 @@ export async function leseAgentStatus() {
     capabilities: version === 1
       ? ['update']
       : (Array.isArray(o.capabilities)
-        ? o.capabilities.filter((c) => ['update', 'zielversion', 'netzwerk', 'module', 'embedding', 'port', 'freigabe'].includes(c))
+        ? o.capabilities.filter((c) => CAPABILITIES.includes(c))
         : []),
     // Primäre LAN-Schnittstelle des Hosts (Interface der Default-Route). Nur
     // der Host-Agent kennt die echte Subnetzmaske; die App liest sie hier
@@ -142,7 +153,62 @@ export async function leseAgentStatus() {
     // Offene Bestätigung nach „Oberfläche nur über HTTPS“ (ISO-Zeitpunkt).
     webBestaetigungBis: typeof o.webBestaetigungBis === 'string'
       && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(o.webBestaetigungBis) ? o.webBestaetigungBis : null,
+    // Dienste, GPU und Modelle für den Reiter „Stack“.
+    stack: leseStack(o.stack),
+    // Zeigt die DuckDNS-Domain auf diesen Rechner? Der Agent trägt eine neue
+    // Heimnetz-Adresse selbst nach, solange der Eintrag ihm gehört.
+    duckdnsIp: leseDuckdnsIp(o.duckdnsIp),
   };
+}
+
+const CAPABILITIES = [
+  'update', 'zielversion', 'netzwerk', 'module', 'embedding', 'port', 'freigabe',
+  'postgres-umzug', 'lokalki', 'entfernen', 'stack', 'ablage', 'duckdns-schalter',
+];
+
+const STACK_DIENSTE = [
+  'postbuch-postgres', 'postbuch-app', 'postbuch-web', 'postbuch-embedding',
+  'postbuch-llm', 'postbuch-scanner', 'postbuch-cleaner', 'postbuch-caddy',
+];
+const ZAHL = (v, max = Number.MAX_SAFE_INTEGER) => (Number.isSafeInteger(v) && v >= 0 && v <= max ? v : null);
+const KURZ = (v, re) => (typeof v === 'string' && re.test(v) ? v : null);
+
+/**
+ * Validiert den Stack-Teil des Heartbeats (Reiter „Stack“). Kommt von
+ * außerhalb des Containers: nur bekannte Dienste, feste Muster, Zahlen.
+ */
+function leseStack(st) {
+  if (!st || typeof st !== 'object' || Array.isArray(st)) return null;
+  const g = st.gpu && typeof st.gpu === 'object' ? st.gpu : null;
+  const gpu = g && ZAHL(g.vramMiB, 10_000_000) != null
+    ? { name: KURZ(g.name, /^[A-Za-z0-9 ._()-]{0,128}$/) || '', vramMiB: g.vramMiB, dockerBereit: g.dockerBereit === true }
+    : null;
+  const dienste = (Array.isArray(st.dienste) ? st.dienste : [])
+    .filter((d) => d && STACK_DIENSTE.includes(d.name))
+    .map((d) => ({
+      name: d.name,
+      zustand: KURZ(d.zustand, /^[a-z]{1,20}$/) || 'unbekannt',
+      health: ['healthy', 'unhealthy', 'starting', 'none'].includes(d.health) ? d.health : 'none',
+      imageBytes: ZAHL(d.imageBytes),
+    }));
+  const l = st.lokalki && typeof st.lokalki === 'object' ? st.lokalki : null;
+  const b = l?.bedarf && typeof l.bedarf === 'object' ? l.bedarf : null;
+  const lokalki = l ? {
+    profilAktiv: l.profilAktiv === true,
+    stufe: KURZ(l.stufe, /^[a-z0-9-]{1,32}$/),
+    modell: KURZ(l.modell, /^[a-z0-9][a-z0-9.-]{0,63}$/),
+    bedarf: b ? {
+      modell: KURZ(b.modell, /^[a-z0-9][a-z0-9.-]{0,63}$/),
+      stufe: KURZ(b.stufe, /^[a-z0-9-]{1,32}$/),
+      gpu: b.gpu === true,
+      kontext: ZAHL(b.kontext, 10_000_000),
+      ramMiB: ZAHL(b.ramMiB, 10_000_000),
+      bytes: ZAHL(b.bytes),
+    } : null,
+    vorhandenBytes: ZAHL(l.vorhandenBytes),
+    vollstaendig: l.vollstaendig === true,
+  } : null;
+  return { gpu, dienste, lokalki, platteFreiBytes: ZAHL(st.platteFreiBytes), ramMiB: ZAHL(st.ramMiB, 10_000_000) };
 }
 
 const FREIGABE_WERTE = ['lan', 'lokal', 'anders'];
@@ -164,6 +230,58 @@ function leseLan(lan) {
     && oktette.every((t) => /^\d{1,3}$/.test(t) && Number(t) >= 0 && Number(t) <= 255);
   if (!ipOk || !Number.isInteger(prefix) || prefix < 1 || prefix > 32) return null;
   return { ip, prefix };
+}
+
+const DUCKDNS_STAENDE = ['ok', 'aktualisiert', 'fremd', 'fehler', 'unbekannt', 'aus'];
+const ISO_ZEIT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+
+function ipv4(v) {
+  if (typeof v !== 'string') return null;
+  const t = v.split('.');
+  return t.length === 4 && t.every((x) => /^\d{1,3}$/.test(x) && Number(x) <= 255) ? v : null;
+}
+
+/** Validiert den DuckDNS-Teil des Heartbeats (festes Vokabular, Adressen, Zeitpunkte). */
+export function leseDuckdnsIp(d) {
+  if (!d || typeof d !== 'object' || Array.isArray(d) || !DUCKDNS_STAENDE.includes(d.stand)) return null;
+  return {
+    stand: d.stand,
+    domain: typeof d.domain === 'string' && /^[a-z0-9-]{1,63}\.duckdns\.org$/.test(d.domain) ? d.domain : null,
+    dns: ipv4(d.dns),
+    eigene: ipv4(d.eigene),
+    geprueftAm: typeof d.geprueftAm === 'string' && ISO_ZEIT.test(d.geprueftAm) ? d.geprueftAm : null,
+    aktualisiertAm: typeof d.aktualisiertAm === 'string' && ISO_ZEIT.test(d.aktualisiertAm) ? d.aktualisiertAm : null,
+  };
+}
+
+/**
+ * Schalter „DuckDNS-Adresse automatisch nachführen“. Standard ist an; nur das
+ * Abschalten hinterlässt eine leere Merkdatei, die der Host-Agent liest. Sie
+ * gehört zum Rechner, nicht zur Sicherung: Eine feste IP ist eine Eigenschaft
+ * des Heimnetzes, nicht der Daten.
+ */
+export async function leseDuckdnsNachfuehren() {
+  try {
+    await fs.lstat(P.duckdnsAus());
+    return false;
+  } catch (err) {
+    if (err?.code === 'ENOENT') return true;
+    throw err;
+  }
+}
+
+export async function setzeDuckdnsNachfuehren(an) {
+  if (typeof an !== 'boolean') throw new Error('an muss true oder false sein.');
+  if (an) {
+    await fs.rm(P.duckdnsAus(), { force: true });
+    return;
+  }
+  await fs.mkdir(UPDATE_DIR, { recursive: true });
+  try {
+    await fs.writeFile(P.duckdnsAus(), '', { mode: 0o644, flag: 'wx' });
+  } catch (err) {
+    if (err?.code !== 'EEXIST') throw err;
+  }
 }
 
 // ── Anforderung (App → Agent) ────────────────────────────────────────────────
@@ -214,14 +332,18 @@ export async function schreibeAnforderung({ zielVersion, erwarteterSha256, angef
   return nonce;
 }
 
-export async function schreibeHostAnforderung({ typ, wert, secret = '', angefordertVon }) {
-  const erlaubte = new Set(['netzwerk', 'module', 'port', 'duckdns', 'freigabe']);
+export async function schreibeHostAnforderung({ typ, wert, secret = '', pfad = '', angefordertVon }) {
+  const erlaubte = new Set(['netzwerk', 'module', 'port', 'duckdns', 'freigabe', 'ablage']);
   if (!erlaubte.has(typ)) throw new Error('Unbekannter Hostauftrag.');
   const sauber = String(wert || '');
   const geheim = String(secret || '');
   if (!/^[A-Za-z0-9.:/_-]{1,300}$/.test(sauber) || (geheim && !/^[A-Za-z0-9._-]{1,512}$/.test(geheim))) {
     throw new Error('Hostauftrag enthält ungültige Werte.');
   }
+  // Ordnerpfad (Auftrag `ablage`): Freitext, deshalb Base64. Inhaltlich prüft
+  // ihn pruefeAblagePfad vorab und der Agent erneut auf dem Host.
+  const pfadB64 = pfad ? Buffer.from(String(pfad), 'utf8').toString('base64') : '';
+  if (pfadB64.length > 1100 || (typ === 'ablage') !== !!pfadB64) throw new Error('Hostauftrag enthält ungültige Werte.');
   const nonce = randomBytes(16).toString('hex');
   const inhalt = [
     `protokoll=${AGENT_PROTOKOLL}`,
@@ -231,6 +353,7 @@ export async function schreibeHostAnforderung({ typ, wert, secret = '', angeford
     `angefordertVon=${String(angefordertVon || 'admin').replace(/[^A-Za-z0-9._-]/g, '').slice(0, 40) || 'admin'}`,
     `wert=${sauber}`,
     ...(geheim ? [`secret=${geheim}`] : []),
+    ...(pfadB64 ? [`pfad=${pfadB64}`] : []),
     '',
   ].join('\n');
   await fs.mkdir(UPDATE_DIR, { recursive: true });
@@ -296,6 +419,9 @@ export async function leseLaufStatus() {
     beendetAm:  txt(o.beendetAm, 40),
     exitCode:   Number.isInteger(o.exitCode) ? o.exitCode : null,
     meldung:    txt(o.meldung, 500),
+    // Fortschritt langer Hostaufträge (Modell-Download).
+    fortschrittBytes: ZAHL(o.fortschrittBytes),
+    gesamtBytes:      ZAHL(o.gesamtBytes),
   };
 }
 

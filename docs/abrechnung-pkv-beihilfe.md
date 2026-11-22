@@ -40,10 +40,41 @@ Jede Periode hat genau einen von fünf Zuständen:
 | `ZURÜCKGEHALTEN` | nur PKV: für die [Beitragsrückerstattung](#beitragsrückerstattung-überwachen) eines Behandlungsjahres zurückgehalten |
 
 Sobald du für einen Menschen PKV oder Beihilfe einschaltest, legt postbuch.net
-automatisch Periode 1 im Status `SAMMELT` an. Der bei Periodenanlage gültige
-Satz wird **in der Periode gespeichert** – ändert sich später der Beihilfesatz
-(etwa bei Renteneintritt), rechnen abgeschlossene Perioden weiter mit dem alten
-Satz.
+automatisch Periode 1 im Status `SAMMELT` an. Gibt es schon frühere Perioden,
+aber keine im Status `SAMMELT`, entsteht die nächste Nummer. Der bei
+Periodenanlage gültige Satz wird **in der Periode gespeichert** – ändert sich
+später der Beihilfesatz (etwa bei Renteneintritt), rechnen abgeschlossene
+Perioden weiter mit dem alten Satz.
+
+### PKV oder Beihilfe abwählen
+
+Endet eine Versicherung oder die Beihilfeberechtigung, schaltest du den
+Kostenträger beim Menschen unter **Einstellungen → Menschen** ab. Eingereichte,
+abgeschlossene und ausgelassene Perioden bleiben dabei erhalten:
+
+- Eine leere `SAMMELT`-Periode wird gelöscht – wer nicht mehr versichert ist,
+  sammelt nichts mehr.
+- Liegen in der `SAMMELT`-Periode schon Rechnungen oder Vormerkungen, fragt
+  postbuch.net vor dem Speichern nach. Mit **Trotzdem speichern** wird
+  abgewählt; die Periode bleibt bestehen und lässt sich weiterhin einreichen.
+  Neue Rechnungen werden ihr aber nicht mehr automatisch zugeordnet.
+- Nach dem Einreichen oder Auslassen entsteht keine neue `SAMMELT`-Periode
+  mehr. Nur wenn beim Einreichen etwas umzubuchen ist (etwa eine bestrittene
+  Rechnung), legt postbuch.net sie trotzdem an, damit nichts verloren geht.
+- Ein Erstattungsbescheid zu einer noch `EINGEREICHT`en Periode wird weiterhin
+  der Person zugeordnet – auch wenn er erst nach der Kündigung eintrifft.
+- Einzelne Bescheidpositionen lassen sich jederzeit
+  [von Hand mit einer Rechnung verknüpfen](dokumentansicht.md#erstattungen-von-hand-verknüpfen),
+  auch mit Rechnungen aus `ABGESCHLOSSEN`en Perioden, etwa bei einer
+  Nachzahlung.
+
+Schaltest du den Kostenträger später wieder ein, sorgt postbuch.net dafür,
+dass es eine `SAMMELT`-Periode gibt. Sie übernimmt immer den Satz, der beim
+Einschalten eingetragen ist – auch wenn sie vorher einen anderen hatte.
+
+Wird ein Mensch aus dem Haushalt entfernt (archiviert), bleiben seine Perioden
+unverändert. Auf der Periodenseite lassen sie sich
+[ausblenden](#inaktive-ausblenden).
 
 ## Der Durchlauf einer Rechnung
 
@@ -155,6 +186,8 @@ offen, auch wenn sie gemeinsam mit anderen gewählt wurde. Der Assistent
 > müssen die Abrechnungsperioden **für jede Person separat** eingereicht und
 > damit auch in postbuch.net separat zusammengestellt und abgeschlossen werden.
 > postbuch.net erkennt das **nicht automatisch**.
+
+#### Prüfen, bestätigen und einreichen
 
 Den Fortschritt siehst du live. Danach kannst und solltest du jedes erzeugte PDF
 im Browser öffnen und prüfen, **bevor** du bestätigst – das ist auch der Moment,
@@ -618,6 +651,18 @@ Link zur Kürzungsübersicht und – solange noch vorgemerkt – demselben
 > [!NOTE]
 > 
 > **Erstattet die PKV** die vorgemerkte Kürzung, erfolgt **keine automatische Zuordnung** zur Rechnung, sie muss manuell erfolgen.
+
+## Inaktive ausblenden
+
+Auf der Periodenseite (![Abrechnung-Symbol](icons/calendar-range.svg) **Analyse
+→ Abrechnungsperioden**) blendet der Schalter **Inaktive ausblenden** die
+Perioden von Menschen aus, die aus dem Haushalt entfernt sind oder den
+jeweiligen Kostenträger nicht mehr haben. Er ist anfangs eingeschaltet, merkt
+sich deine Wahl und erscheint nur, wenn es solche Perioden gibt.
+
+Was noch zu tun ist, bleibt trotzdem sichtbar: eine `EINGEREICHT`e oder
+`ZURÜCKGEHALTEN`e Periode und eine `SAMMELT`-Periode mit Rechnungen,
+Anpinnungen oder Prüffällen.
 
 ## Perioden von Hand korrigieren
 

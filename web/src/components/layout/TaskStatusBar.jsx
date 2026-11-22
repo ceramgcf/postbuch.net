@@ -56,7 +56,11 @@ function TaskItem({ task }) {
   );
 }
 
-export function TaskStatusBar({ compact = false }) {
+/**
+ * aufklappen: 'oben' (Seitenleiste, Anzeige am unteren Rand) oder 'unten'
+ * (mobiles Menü, Anzeige ganz oben). Kompakt klappt die Liste seitlich auf.
+ */
+export function TaskStatusBar({ compact = false, aufklappen = 'oben' }) {
   const { activeTasks, recentTasks } = useTaskStore();
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
@@ -141,8 +145,9 @@ export function TaskStatusBar({ compact = false }) {
 
       {open && (
         <div
-          className="absolute bottom-full left-0 mb-2 w-72 bg-white border border-border/60 rounded-xl shadow-xl z-50 overflow-hidden"
-          style={{ left: compact ? '100%' : 0, bottom: compact ? 'auto' : '100%', top: compact ? 0 : 'auto', marginLeft: compact ? '0.5rem' : 0, marginBottom: compact ? 0 : '0.5rem' }}
+          className={`absolute w-72 bg-white border border-border/60 rounded-xl shadow-xl z-50 overflow-hidden ${
+            compact ? 'left-full top-0 ml-2'
+              : aufklappen === 'unten' ? 'left-0 top-full mt-2' : 'left-0 bottom-full mb-2'}`}
           onMouseEnter={() => setOpen(true)}
           onMouseLeave={() => setOpen(false)}
         >

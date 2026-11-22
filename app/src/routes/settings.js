@@ -23,10 +23,13 @@ import {
 } from '../config.js';
 import db from '../db.js';
 import { appLog } from '../app-log.js';
+import { ladeAbrechnungsPatienten } from '../service/mensch-perioden.js';
+import { umstellungBestaetigen } from '../service/aufgabentypen-umstellung.js';
 import { syncWithSettings as syncDiscordGateway } from '../lib/discord-gateway.js';
 import { sendMessage as sendDiscordMessage } from '../lib/discord.js';
 import * as onedriveAuth from '../lib/storage/onedrive.js';
 import * as nextcloud from '../lib/storage/nextcloud.js';
+import * as lokal from '../lib/storage/lokal.js';
 import { getActiveAdapter, getAdapter, BACKENDS } from '../lib/storage/index.js';
 import {
   setupFolderStructure, SYSTEM_FOLDERS, ermittleWurzelPfad, pruefeWurzel, WURZEL_DIREKT, GEMEINSAM_ORDNER, OHNE_DATUM_ORDNER, RICHTUNG_ORDNER,
@@ -49,6 +52,8 @@ import { stopAutoCacheMode } from '../lib/cache-mode.js';
 import { holeScannerCapabilities, normalisiereScannerEndpoint } from '../lib/scanner-capabilities.js';
 import { scannerProfilAutoSchalten, embeddingProfilAutoSchalten } from '../service/host-agent.js';
 import { starteNeuberechnung, neuberechnungStatus } from '../service/embedding-neuberechnung.js';
+import { schwellenFuer } from '../lib/embedding-schwellen.js';
+import { inhaltSkala } from '../service/suche.js';
 import {
   findeScannerImCidr, bauCidr, netzVorschlagAusIp,
 } from '../service/scanner-discovery.js';
@@ -66,6 +71,8 @@ import {
   PROVIDER_ID_RE, PROVIDER_TYPES, PROVIDER_PRESETS, BUILTIN_PROVIDER_IDS, DIALEKTE,
   defaultCapsForType, CAP_KEYS, normalizeRasterMaxSeiten, RASTER_MAX_SEITEN_GRENZE,
   normalizeMaxOutputTokens, MAX_OUTPUT_TOKENS_MIN, MAX_OUTPUT_TOKENS_GRENZE,
+  normalizeKontextTokens, KONTEXT_TOKENS_MIN, KONTEXT_TOKENS_GRENZE,
+  LOKAL_ID, EINGEBAUT_ID,
 } from '../lib/llm/registry.js';
 // Nur für die Anzeige des Standardwerts im Provider-Dialog: der Default gehört
 // dem Rasterizer, nicht der Provider-Registry.
@@ -75,7 +82,8 @@ import {
   embeddingConfig, embeddingSlot, probeEmbeddingDimension, signatureOf, STORAGE_DIM, VORSILBE_MAX,
 } from '../lib/embedding.js';
 import { vorsilbenVorschlag } from '../lib/embedding-vorsilben.js';
-import { EINGEBAUTES_EMBEDDING } from '../lib/embedding-eingebaut.js';
+import { EINGEBAUTES_EMBEDDING, eingebautesModell } from '../lib/embedding-eingebaut.js';
+import { modellZustaende, modellHolen, ramReicht } from '../lib/embedding-dienst.js';
 import { getHelpEmbeddingStatus, startHelpEmbeddingJob } from '../service/help-corpus.js';
 import { buildLxdClassificationPrompt } from '../prompts/classification-lxd.js';
 import { PRE_ANALYSIS_SYSTEM_PROMPT, PRE_ANALYSIS_USER_MESSAGE } from '../prompts/pre-analysis.js';
@@ -98,6 +106,10 @@ const ALLOWED_SETTING_KEYS = new Set([
   'app_host',
   'nav_visibility',
   'pipeline_max_parallel',
+  // Plätze je knapper Ressource (lib/ressourcen.js)
+  'ki_parallel_lokal',
+  'ki_parallel_cloud',
+  'rechnen_parallel',
   // Salden-Quellen (freies SQL, ob an ein Dokument oder eine Dokumentklasse
   // gebunden) sind ein undokumentiertes Experten-Feature, per Default
   // deaktiviert (außer bei Altinstanzen mit bereits bestehenden Quellen).
@@ -108,6 +120,8 @@ const ALLOWED_SETTING_KEYS = new Set([
   'onedrive_polling',
   // KI: Modellwahl (einfach/gestaffelt) und Modell je Stufe
   'llm_modellwahl',
+  'llm_aufgabe_routine',
+  'llm_aufgabe_komplex',
   'llm_model_analyse',
   'llm_model_preanalysis',
   'llm_model_large',
@@ -115,6 +129,7 @@ const ALLOWED_SETTING_KEYS = new Set([
   'llm_model_mittel',
   'llm_model_schwierig',
   'llm_model_fallback',
+  'llm_model_nachlese',
   'chat_model_research',
   'chat_model_synthesis',
   'chat_model_title',
@@ -153,7 +168,13 @@ const ALLOWED_SETTING_KEYS = new Set([
   'llm_cache_mode_auto_tier',
   // Duplikaterkennung
   'duplicate_embedding_threshold',
+  // Suche: Ähnlichkeit, die das Embedding-Modell auch für Unsinn liefert
+  // (0 % der Inhaltsanzeige), und die Ähnlichkeit, ab der sie 100 % zeigt.
+  // Beide setzt ein Modellwechsel aus der kuratierten Liste.
+  'embedding_unsinnsschwelle',
+  'embedding_aehnlichkeit_voll',
   'duplicate_decision_timeout_min',
+  'duplicate_ki_pruefung',
   // Scanner
   'scanner_device_url',
   'scanner_default_dpi',
@@ -161,6 +182,7 @@ const ALLOWED_SETTING_KEYS = new Set([
   'scanner_has_adf',
   'scanner_supports_a3',
   'scanner_adf_duplex',
+  'stapel_ohne_rueckfrage',
   // Cleaner (OCR/Bildbereinigung)
   'cleaner_ocr_enabled',
   'cleaner_ocr_langs',
@@ -371,8 +393,8 @@ router.put('/onedrive/auth-mode', async (req, res) => {
 // ohne Kopie/Prüfung umschalten.
 router.put('/storage/initial-backend', async (req, res) => {
   const backend = req.body?.backend;
-  if (!['onedrive', 'nextcloud'].includes(backend)) {
-    return res.status(400).json({ error: 'Backend muss "onedrive" oder "nextcloud" sein.' });
+  if (!['onedrive', 'nextcloud', 'lokal'].includes(backend)) {
+    return res.status(400).json({ error: 'Backend muss "onedrive", "nextcloud" oder "lokal" sein.' });
   }
   const client = await db.connect();
   try {
@@ -476,7 +498,7 @@ router.delete('/storage/initial-backend', async (_req, res) => {
   }
 });
 
-const BACKEND_LABEL = { onedrive: 'OneDrive', nextcloud: 'Nextcloud' };
+const BACKEND_LABEL = { onedrive: 'OneDrive', nextcloud: 'Nextcloud', lokal: 'Lokaler Ordner' };
 
 // Mischbestand: Dokumente, deren storage_backend vom aktuell aktiven Backend
 // abweicht — Rest eines angefangenen, nicht abgeschlossenen Ablage-Umzugs
@@ -514,6 +536,20 @@ router.get('/storage/status', async (_req, res) => {
     const settings = await loadDynamicSettings();
     const backend = getActiveBackendName(settings);
     const mischbestand = await ermittleMischbestand(backend);
+
+    if (backend === 'lokal') {
+      try {
+        await lokal.testeVerbindung();
+        return res.json({
+          backend, label: 'Lokaler Ordner', konfiguriert: true, verbunden: true, problem: null, mischbestand,
+        });
+      } catch (err) {
+        return res.json({
+          backend, label: 'Lokaler Ordner', konfiguriert: true, verbunden: false,
+          problem: 'nicht_erreichbar', meldung: clientSafeError(err), mischbestand,
+        });
+      }
+    }
 
     if (backend === 'nextcloud') {
       const konfiguriert = !!(settings.nextcloud_base_url && settings.nextcloud_username
@@ -778,6 +814,26 @@ router.put('/:key', async (req, res) => {
   let normalizedValue = value;
   // Vom Admin gepflegter Freitext für den Klassifikations-Prompt: Typ erzwingen +
   // Längen-Cap (Schutz vor Runaway-Kosten, da der Text in JEDEN Analyse-Prompt fliesst).
+  if (['ki_parallel_lokal', 'ki_parallel_cloud', 'rechnen_parallel'].includes(key)) {
+    const n = Math.trunc(Number(value));
+    // Leer bzw. null = Standard (lib/ressourcen.js)
+    if (value === null || value === '') {
+      normalizedValue = null;
+    } else if (!Number.isFinite(n) || n < 1 || n > 16) {
+      return res.status(400).json({ error: 'Erlaubt sind ganze Zahlen von 1 bis 16.' });
+    } else {
+      normalizedValue = n;
+    }
+  }
+  // Ähnlichkeitsschwellen sind Kosinuswerte; die Suche prüft das Paar
+  // unsinn < voll selbst (inhaltSkala) und fällt sonst auf Startwerte zurück.
+  if (['embedding_unsinnsschwelle', 'embedding_aehnlichkeit_voll', 'duplicate_embedding_threshold'].includes(key)) {
+    const n = Number(value);
+    if (value === null || value === '' || !Number.isFinite(n) || n < 0 || n > 1) {
+      return res.status(400).json({ error: 'Erlaubt sind Zahlen von 0 bis 1.' });
+    }
+    normalizedValue = n;
+  }
   if (key === 'classification_custom_rules') {
     normalizedValue = typeof value === 'string' ? value.slice(0, 6000) : '';
   }
@@ -813,6 +869,8 @@ router.put('/:key', async (req, res) => {
       alteScannerUrl = alt.rows[0]?.value ?? null;
     }
     await upsertSetting(key, normalizedValue);
+    // Aufgabentyp gespeichert ⇒ der Umstellungshinweis auf dem Dashboard ist erledigt.
+    if (key === 'llm_aufgabe_routine' || key === 'llm_aufgabe_komplex') await umstellungBestaetigen();
     if (key === 'scanner_device_url' && alteScannerUrl !== null && alteScannerUrl !== normalizedValue) {
       // Fähigkeiten gehören exakt zu einer Geräteadresse. Bei einem Wechsel
       // darf der Importdialog niemals Werte des vorigen Scanners anbieten.
@@ -821,6 +879,19 @@ router.put('/:key', async (req, res) => {
     // Scanner entfernt (URL geleert): das Compose-Profil hat dann nichts mehr
     // zu tun. Best-effort — kein Host-Agent oder ein laufender Auftrag darf
     // das Löschen der Einstellung nicht verhindern.
+    // Scanner eingetragen oder geändert: Ohne laufenden Scan-Dienst käme kein
+    // Scan an. Gegenstück zum Ausschalten unten; ein schon laufendes Profil
+    // bleibt unberührt (bereits-erreicht). Den ausgelösten Auftrag bekommt der
+    // Aufrufer zurück, damit er ihn verfolgt, statt einen zweiten zu schicken.
+    let hostAuftrag = null;
+    if (key === 'scanner_device_url' && normalizedValue !== null && normalizedValue !== alteScannerUrl) {
+      try {
+        const auto = await scannerProfilAutoSchalten(true, req.session?.username || null);
+        if (auto?.nonce) hostAuftrag = { nonce: auto.nonce, typ: 'module', wert: 'scanner:an' };
+      } catch (err) {
+        console.error('[settings] Scannerprofil-Auto-An fehlgeschlagen:', err.message);
+      }
+    }
     if (key === 'scanner_device_url' && alteScannerUrl !== null && normalizedValue === null) {
       scannerProfilAutoSchalten(false, req.session?.username || null).catch((err) => {
         console.error('[settings] Scannerprofil-Auto-Aus fehlgeschlagen:', err.message);
@@ -851,7 +922,7 @@ router.put('/:key', async (req, res) => {
       }
     }
 
-    res.json({ ok: true, key, value: normalizedValue });
+    res.json({ ok: true, key, value: normalizedValue, ...(hostAuftrag ? { hostAuftrag } : {}) });
   } catch (err) {
     console.error('[settings] PUT /%s Fehler:', key, err);
     res.status(500).json({ error: err.message });
@@ -1505,6 +1576,23 @@ router.get('/datenbank/test', async (_req, res) => {
   }
 });
 
+// ── GET /api/settings/storage/lokal/status ───────────────────────────────────
+// Ist auf diesem Rechner ein lokaler Ablageordner eingebunden? Nur dann bieten
+// Einrichtung und Einstellungen die lokale Ablage an. Schreibt und löscht beim
+// Prüfen eine temporäre Datei im Ordner, sonst nichts.
+router.get('/storage/lokal/status', async (_req, res) => {
+  const settings = await loadDynamicSettings().catch(() => ({}));
+  const aktiv = getActiveBackendName(settings) === 'lokal';
+  try {
+    const r = await lokal.testeVerbindung();
+    res.json({ verfuegbar: true, festgelegt: true, aktiv, pfad: r.pfad, freiBytes: r.freiBytes, gesamtBytes: r.gesamtBytes });
+  } catch (err) {
+    res.json({
+      verfuegbar: false, festgelegt: lokal.istFestgelegt(), aktiv, pfad: lokal.wurzelAnzeige(), meldung: clientSafeError(err),
+    });
+  }
+});
+
 router.get('/storage/:backend/free-space', async (req, res) => {
   try {
     const adapter = getAdapter(req.params.backend);
@@ -1609,6 +1697,8 @@ router.get('/ai/providers', async (_req, res) => {
       rasterMaxSeitenGrenze: RASTER_MAX_SEITEN_GRENZE,
       maxOutputTokensMin: MAX_OUTPUT_TOKENS_MIN,
       maxOutputTokensGrenze: MAX_OUTPUT_TOKENS_GRENZE,
+      kontextTokensMin: KONTEXT_TOKENS_MIN,
+      kontextTokensGrenze: KONTEXT_TOKENS_GRENZE,
     });
   } catch (err) {
     console.error('[settings] ai/providers Fehler:', err);
@@ -1651,6 +1741,17 @@ function normalisiereProviderEingabe(body, vorhanden) {
       maxOutputTokens = normalizeMaxOutputTokens(roh);
     }
   }
+  let kontextTokens = vorhanden?.kontextTokens;
+  if ('kontextTokens' in body) {
+    const roh = body.kontextTokens;
+    if (roh === null || roh === '' || roh === undefined) {
+      kontextTokens = undefined;
+    } else if (!Number.isFinite(Number(roh))) {
+      throw new Error('Kontextfenster muss eine Zahl sein.');
+    } else {
+      kontextTokens = normalizeKontextTokens(roh);
+    }
+  }
   const eintrag = {
     id: vorhanden?.id,
     typ,
@@ -1661,6 +1762,7 @@ function normalisiereProviderEingabe(body, vorhanden) {
     caps,
     rasterMaxSeiten,
     maxOutputTokens,
+    kontextTokens,
     erlaubtPrivateZiele: body.erlaubtPrivateZiele === true,
   };
   // Ein openai-kompatibles Ziel ohne baseUrl ist unbrauchbar.
@@ -1672,6 +1774,11 @@ function normalisiereProviderEingabe(body, vorhanden) {
     try { u = new URL(eintrag.baseUrl); } catch { throw new Error('Basis-URL ist keine gültige URL.'); }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') throw new Error('Basis-URL muss http:// oder https:// verwenden.');
     if (u.username || u.password) throw new Error('Zugangsdaten gehören nicht in die URL — bitte den Key separat hinterlegen.');
+    const endpunkt = /\/(embeddings|chat\/completions|completions|models)\/*$/i.exec(u.pathname);
+    if (endpunkt) {
+      throw new Error(`Die Basis-URL darf nicht auf /${endpunkt[1]} enden – postbuch.net hängt diesen Pfad selbst an. `
+        + 'Richtig ist die Adresse bis einschließlich /v1 (z. B. http://10.0.0.5:11434/v1).');
+    }
   }
   return eintrag;
 }
@@ -1695,7 +1802,7 @@ router.put('/ai/providers/:id', async (req, res) => {
     // (registry.js, EINGEBAUT_ID); ein gespeicherter Eintrag würde ohnehin
     // ignoriert und soll gar nicht erst entstehen.
     if (vorhanden?.fest) {
-      return res.status(400).json({ error: 'Der eingebaute Embedding-Dienst ist nicht einstellbar.' });
+      return res.status(400).json({ error: 'Eingebaute Dienste sind nicht einstellbar.' });
     }
     const eintrag = { ...normalisiereProviderEingabe(req.body || {}, vorhanden), id };
     if (eintrag.typ === 'subscription' && !subscriptionFeatureUnlocked()) {
@@ -1765,7 +1872,7 @@ router.put('/ai/providers/:id/key', async (req, res) => {
       return res.status(404).json({ error: 'Provider nicht gefunden.' });
     }
     if (eintrag.fest) {
-      return res.status(400).json({ error: 'Der eingebaute Embedding-Dienst braucht keinen Schlüssel.' });
+      return res.status(400).json({ error: 'Eingebaute Dienste brauchen keinen Schlüssel.' });
     }
     const provider = getProvider(settings, id);
     if (provider?.typ === 'subscription' && !subscriptionFeatureUnlocked()) {
@@ -1831,7 +1938,19 @@ router.post('/ai/providers/:id/test', async (req, res) => {
     // Fehler-Body eines privaten Ziels NICHT durchreichen — sonst wäre diese
     // Route ein generisches HTTP-Lesegerät fürs LAN.
     console.warn('[settings] Provider-Test "%s" fehlgeschlagen:', id, err.message);
-    res.status(502).json({ ok: false, error: clientSafeError(err) });
+    // Die eingebauten Dienste sind nur erreichbar, solange ihr Container läuft.
+    // Statt einer DNS-Meldung sagen, woran es liegt und wo es weitergeht.
+    if ((id === LOKAL_ID || id === EINGEBAUT_ID) && /DNS-Auflösung|ENOTFOUND|EAI_AGAIN|ECONNREFUSED/.test(err.message || '')) {
+      const dienst = id === LOKAL_ID ? 'Die lokale KI' : 'Der eingebaute Embedding-Dienst';
+      return res.status(503).json({
+        ok: false,
+        error: `${dienst} läuft noch nicht. Ist der Dienst unter Einstellungen → Stack eingeschaltet, wird womöglich gerade sein Modell geladen; den Fortschritt zeigt derselbe Reiter.`,
+      });
+    }
+    // Eingebauter Dienst startet oder lädt noch sein Modell (Texte aus lib/ai-health.js).
+    const laedt = (id === LOKAL_ID || id === EINGEBAUT_ID)
+      && /lädt gerade (ihr|sein) Modell|läuft noch nicht\. Ist der Dienst unter Einstellungen → Stack/.test(err.message || '');
+    res.status(laedt ? 503 : 502).json({ ok: false, error: laedt ? err.message : clientSafeError(err) });
   }
 });
 
@@ -1853,8 +1972,17 @@ router.get('/ai/embedding', async (_req, res) => {
     const passend = verteilung.rows.find((r) => r.signatur === aktiv)?.anzahl || 0;
     const gesamt = verteilung.rows.reduce((n, r) => n + r.anzahl, 0);
     const hilfe = await getHelpEmbeddingStatus(settings);
+    // Skala der Inhalts- und Übereinstimmungswerte; generisch, wenn die
+    // kuratierte Liste das Modell nicht kennt (Startwerte, anpassbar).
+    const skala = inhaltSkala(settings);
+    const schwellen = cfg.model ? {
+      unsinn: skala.unsinn,
+      voll: skala.voll,
+      generisch: !(await schwellenFuer(cfg.model)),
+    } : null;
     res.json({
       ...cfg,
+      schwellen,
       vorsilben: cfg.vorsilben || { anfrage: '', dokument: '' },
       signature: aktiv,
       storageDim: STORAGE_DIM,
@@ -1897,6 +2025,43 @@ function vorsilbenAusBody(vorsilben, model) {
   return erg;
 }
 
+// GET /api/settings/ai/embedding/eingebaut – Modelle des eingebauten Dienstes
+// mit Zustand (bereit, Download läuft, zu wenig Arbeitsspeicher …).
+router.get('/ai/embedding/eingebaut', async (_req, res) => {
+  try {
+    res.json(await modellZustaende());
+  } catch (err) {
+    res.status(500).json({ error: clientSafeError(err) });
+  }
+});
+
+/**
+ * Prüft vor dem Wechsel auf ein Modell des eingebauten Dienstes, ob das Gerät
+ * genug Arbeitsspeicher hat und die Modelldatei bereitliegt. Fehlt sie, stößt
+ * es den Download an. Gibt null zurück, wenn gewechselt werden kann, sonst
+ * { status, body } für die Antwort; 202 heißt „Download läuft, später erneut“.
+ */
+async function eingebautVorbereiten(model) {
+  if (!eingebautesModell(model)) {
+    return { status: 400, body: { error: `Der eingebaute Dienst bietet „${model}“ nicht an.` } };
+  }
+  if (!ramReicht(model)) {
+    return { status: 400, body: { error: `„${model}“ braucht ein Gerät mit mindestens 2 GB Arbeitsspeicher.` } };
+  }
+  const { laeuft, modelle } = await modellZustaende();
+  const z = modelle.find((m) => m.model === model);
+  if (!laeuft || z.zustand === 'bereit' || z.zustand === 'unbekannt') return null;
+  const neu = z.zustand === 'laedt' ? z : { ...z, ...(await modellHolen(model)) };
+  if (neu.zustand === 'bereit') return null;
+  if (neu.zustand === 'fehler') {
+    return { status: 502, body: { error: `Das Modell ließ sich nicht herunterladen: ${neu.fehler || 'unbekannter Fehler'}` } };
+  }
+  return {
+    status: 202,
+    body: { ok: false, vorbereitung: { zustand: 'laedt', prozent: Number(neu.prozent) || 0, groesseMb: z.groesseMb } },
+  };
+}
+
 // PUT /api/settings/ai/embedding — { providerId, model, vorsilben? }
 // Die Dimension wird NICHT vom Client übernommen, sondern per Probing ermittelt:
 // ein einziger embed("test")-Call, Ergebnis autoritativ. Das ist die einzige
@@ -1914,6 +2079,12 @@ router.put('/ai/embedding', async (req, res) => {
     return res.status(400).json({ error: err.message });
   }
   try {
+    if (providerId === EINGEBAUTES_EMBEDDING.providerId) {
+      const vorbereitung = await eingebautVorbereiten(model.trim());
+      if (vorbereitung) return res.status(vorbereitung.status).json(vorbereitung.body);
+      // Beim eingebauten Dienst sind die Vorsilben fest (wie die Modelle).
+      vorsilben = { ...eingebautesModell(model.trim()).vorsilben };
+    }
     const settings = await loadDynamicSettings();
     const prov = getProvider(settings, providerId);
     if (!prov) return res.status(404).json({ error: 'Provider nicht gefunden.' });
@@ -2083,6 +2254,14 @@ router.post('/ai/empfehlungen/anwenden', async (req, res) => {
       return res.status(400).json({ error: 'Es wurde keine Klasse angegeben.' });
     }
     const ergebnis = await empfehlungen.anwenden(klassen, { von: req.session?.username || 'admin' });
+    // Übernommene Empfehlung für einen Aufgabentyp ist eine bewusste Wahl –
+    // der Umstellungshinweis auf dem Dashboard ist damit erledigt. Das gilt auch,
+    // wenn der Aufgabentyp schon auf der Empfehlung stand („Bereits eingestellt“).
+    const aufgabentyp = (a) => a.key === 'routine' || a.key === 'komplex';
+    if (ergebnis.angewendet.some(aufgabentyp)
+      || (ergebnis.uebersprungen || []).some((u) => aufgabentyp(u) && u.bereitsAktiv)) {
+      await umstellungBestaetigen();
+    }
     res.json(ergebnis);
   } catch (err) {
     console.error('[settings] ai/empfehlungen/anwenden Fehler:', err);
@@ -2197,12 +2376,7 @@ router.get('/prompts-preview', async (req, res) => {
 
     // Alle PKV/Beihilfe-Patienten (auch archivierte) → EB-Parse-Prompt
     // (wie in service/erstattungsbescheid.js)
-    const ebPatients = await db.query(
-      `SELECT kurzname, anzeigename AS vollname, ist_tier, pkv, beihilfe, pkv_satz, beihilfe_satz
-         FROM postbuch.mensch
-        WHERE pkv = true OR beihilfe = true
-        ORDER BY kurzname`
-    );
+    const ebPatients = await ladeAbrechnungsPatienten((sql, params) => db.query(sql, params));
 
     const customRules = settings.classification_custom_rules || '';
 
@@ -2236,7 +2410,7 @@ router.get('/prompts-preview', async (req, res) => {
         title: 'Erstattungsbescheid-Parsing',
         description: 'Extraktion aus Erstattungsbescheiden/Leistungsmitteilungen (service/erstattungsbescheid.js). Variable: alle PKV/Beihilfe-Patienten (auch archivierte).',
         dynamic: false,
-        system: buildEbParsePrompt(ebPatients.rows),
+        system: buildEbParsePrompt(ebPatients),
       },
       {
         id: 'arz-positionen',

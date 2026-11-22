@@ -1,10 +1,12 @@
 /**
- * service/duplicate-notifier.js — Duplikat-Entscheidungs-Benachrichtigung
+ * service/duplicate-notifier.js – Duplikat-Entscheidungs-Benachrichtigung
  *
  * Wählt automatisch den richtigen Modus:
  *   - Bot konfiguriert → Embed mit drei Buttons (native Interactions)
  *   - Nur Webhook → Embed mit Magic-Link
- *   - Nichts konfiguriert → silent no-op
+ *   - Nichts konfiguriert → nur Push
+ *
+ * Läuft die Frist ab, werden beide Dokumente behalten (jobs/duplicate-timeout-job.js).
  *
  * @returns {Promise<string|null>} Discord-Message-ID (Bot-Modus) oder null
  */
@@ -14,7 +16,7 @@ import { sign as signToken } from '../lib/decision-token.js';
 import { loadDynamicSettings } from '../config.js';
 import { sendPushToAllUsers } from '../lib/webpush.js';
 
-const TIMEOUT_MIN_DEFAULT = 60;
+const TIMEOUT_MIN_DEFAULT = 10080; // 7 Tage
 
 /**
  * Sendet die Duplikat-Entscheidungs-Anfrage an Discord.
@@ -22,7 +24,7 @@ const TIMEOUT_MIN_DEFAULT = 60;
  * @param {object} params
  * @param {string}  params.jobId
  * @param {string}  params.reservedPostID
- * @param {object}  params.dup             - { match: { postid, similarity, confidence, webUrl, betreff } }
+ * @param {object}  params.dup             - { match: { postid, similarity, confidence, webUrl, betreff }, begruendung? }
  * @param {object}  params.extractedData   - LLM-Ergebnis mit qualityFlags
  * @param {string}  [params.onedriveWeburl] - WebURL der neuen Datei
  * @param {Date}    params.expiresAt
@@ -38,11 +40,7 @@ export async function requestDecision({ jobId, reservedPostID, dup, extractedDat
 
   const newConfidence = Number(qf.sicherheitsgrad || 0);
   const oldConfidence = Number(dup.match?.confidence || 0);
-  const betterQuality = newConfidence > oldConfidence;
-  const autoDecision = betterQuality ? 'replace' : 'discard';
-  const autoDecisionLabel = betterQuality
-    ? `🔄 Auto-Replace — neues Dokument (${Math.round(newConfidence * 100)}%) überschreibt ${dup.match?.postid} (${Math.round(oldConfidence * 100)}%)`
-    : `🗑️ Auto-Discard — neues Dokument (${Math.round(newConfidence * 100)}%) hat keine höhere Qualität als ${dup.match?.postid} (${Math.round(oldConfidence * 100)}%) und wird verworfen`;
+  const fristText = formatFrist(timeoutMin);
 
   const similarityPct = Math.round((dup.match?.similarity || 0) * 100);
   const expiresStr = expiresAt.toLocaleString('de-DE', {
@@ -60,8 +58,8 @@ export async function requestDecision({ jobId, reservedPostID, dup, extractedDat
       `**Neue reservierte ID:** \`${reservedPostID}\`\n` +
       `**Ähnlichkeit:** ${similarityPct}%\n` +
       `**Neue Qualität:** ${Math.round(newConfidence * 100)}% | **Alte Qualität:** ${Math.round(oldConfidence * 100)}%\n` +
-      (betterQuality ? '\n📌 **Empfehlung: Bestehendes ersetzen** (neue Qualität ist höher)' : '') +
-      `\n\n⏱️ Keine Reaktion in ${timeoutMin} Min. → **${autoDecisionLabel}**\n(Frist: ${expiresStr})`,
+      (dup.begruendung ? `**Begründung:** ${dup.begruendung}\n` : '') +
+      `\n⏱️ Keine Entscheidung innerhalb von ${fristText} → **beide Dokumente werden behalten**\n(Frist: ${expiresStr})`,
     fields: [
       { name: 'Bestehendes Dokument', value: dup.match?.webUrl ? `[${dup.match.postid} öffnen](${dup.match.webUrl})` : dup.match?.postid || '–', inline: true },
       { name: 'Neues Dokument', value: onedriveWeburl ? `[Auf OneDrive ansehen](${onedriveWeburl})` : '(kein Link)', inline: true },
@@ -77,17 +75,17 @@ export async function requestDecision({ jobId, reservedPostID, dup, extractedDat
       components: [
         {
           type: 2, style: 3, // SUCCESS (green)
-          label: 'Bestehendes ersetzen',
+          label: 'Neue Fassung behalten',
           custom_id: `dup:replace:${jobId}`,
         },
         {
           type: 2, style: 1, // PRIMARY (blue)
-          label: 'Beide behalten',
+          label: 'Beide behalten (kein Duplikat)',
           custom_id: `dup:keep_both:${jobId}`,
         },
         {
-          type: 2, style: 4, // DANGER (red)
-          label: 'Duplikat verwerfen',
+          type: 2, style: 2, // SECONDARY (grau)
+          label: 'Alte Fassung behalten',
           custom_id: `dup:discard:${jobId}`,
         },
       ],
@@ -127,12 +125,21 @@ export async function requestDecision({ jobId, reservedPostID, dup, extractedDat
 
 function _sendDuplicatePush(s, reservedPostID, pb, similarityPct, jobId) {
   const appHost = (s?.app_host || '').replace(/\/$/, '');
-  const url = appHost ? `${appHost}/logs` : '/logs';
+  const pfad = `/import/duplikat/${encodeURIComponent(jobId)}`;
+  const url = appHost ? `${appHost}${pfad}` : pfad;
   sendPushToAllUsers({
-    title: '⚠️ DUPLIKAT-VERDACHT — Entscheidung erforderlich!',
+    title: '⚠️ Duplikatverdacht – bitte vergleichen',
     body: `"${pb.betreff || '(kein Betreff)'}" · ${similarityPct}% Übereinstimmung · ID: ${reservedPostID}`,
     tag: `dup-${jobId}`,
     url,
     requireInteraction: true,
   }, { category: 'duplicate' }).catch((e) => console.warn('[duplicate-notifier] Push-Fehler:', e.message));
+}
+
+/** Frist in Minuten als lesbarer Text („7 Tagen“, „3 Stunden“, „45 Minuten“). */
+export function formatFrist(min) {
+  const m = Math.max(1, Math.round(Number(min) || 0));
+  if (m % 1440 === 0) return m === 1440 ? '1 Tag' : `${m / 1440} Tagen`;
+  if (m % 60 === 0) return m === 60 ? '1 Stunde' : `${m / 60} Stunden`;
+  return m === 1 ? '1 Minute' : `${m} Minuten`;
 }

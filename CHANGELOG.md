@@ -17,7 +17,30 @@ Manifest – drei gepflegte Listen wären drei Stände.
 Die Stichpunkte gehen wörtlich ins Manifest und werden im GUI jeder Instanz
 angezeigt. Sie sind an Endnutzer gerichtet, nicht an Entwickler.
 
+Zwischen den Releases sammelt der Abschnitt `## Unveröffentlicht` die
+Stichpunkte der kommenden Version. Er trägt keine Versionsnummer und wird vom
+Generator übergangen. Zum Release wird seine Überschrift durch
+`## <version> – <YYYY-MM-DD>` ersetzt.
+
 ---
+
+## 3.0.0 – 2026-11-22
+
+- Neu: Betriebsart „komplett lokal“. Dokumente liegen in einem Ordner auf dem eigenen Rechner, Analyse und Chat laufen über eine lokale KI ohne Cloud-Dienst.
+- Neu: Installation unter Windows mit eigenem Installer, Eintrag unter Programme und Funktionen und Deinstallation.
+- Neu: Lokale Ablage als drittes Ablageziel neben OneDrive und Nextcloud, auch als Quelle und Ziel beim Ablage-Umzug. Verschobene Dateien werden wiedergefunden.
+- Neu: Eine Suche statt zwei Modi. Sie wertet Wortlaut und Inhalt zusammen aus, findet Wortteile und zeigt je Treffer die Übereinstimmung. Deutlich schneller bei großen Beständen.
+- Neu: Dokumentenstapel aus dem Einzug scannen. Die KI schlägt die Trennung vor, du prüfst sie im Eingang. Dasselbe geht mit dem Upload-Modus „Stapel auftrennen“ für Sammel-PDFs.
+- Neu: Reiter „Eingang“ unter Importieren. Angenommene PDFs, die noch kein Dokument sind, lassen sich neu auslösen, manuell ablegen oder verwerfen.
+- Neu: Duplikatverdacht mit optionaler KI-Prüfung und Vergleichsansicht. Du entscheidest mit einem Klick; nach 7 Tagen ohne Entscheidung bleiben beide Dokumente.
+- Neu: Der eingebaute Embedding-Dienst bietet Voyage 4 Nano und EmbeddingGemma 2 an.
+- Einfachere KI-Modellwahl mit nur zwei Aufgabentypen, „Einfach & Routine“ und „Anspruchsvoll & Komplex“.
+- Updates: Der Installer der neuen Version übernimmt das Update. Der Dialog nennt bei Fehlern den Weg zurück.
+- Sicherheit: Basis-Images aktualisiert (nginx, Caddy, PostgreSQL). Update-Archive werden nur noch mit signierter Prüfsumme akzeptiert, interne Adressen sind von außen gesperrt.
+- Die Anmeldung läuft gleitend (abgemeldet erst nach 7 Tagen ohne Nutzung) und überlebt Updates.
+- Sicherungen merken sich die Betriebsart, verpasste automatische Sicherungen werden nachgeholt, die DuckDNS-Adresse folgt der Heimnetz-IP.
+- Die Metadaten von Arztrechnungen lassen sich vollständig bearbeiten.
+- Viele kleinere Verbesserungen und Korrekturen an Einrichtung, Scan-Fehlermeldungen, Abrechnungsperioden, Dateinamen und Handy-Ansicht.
 
 ## 2.14.1 – 2026-11-07
 

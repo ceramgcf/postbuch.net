@@ -16,40 +16,85 @@ import { positionToken } from '@/lib/erstattung';
 
 const FELDER = ['behandlungs_datum', 'goa_goz_gebueh_pzn', 'leistung', 'faktor', 'betrag', 'begruendung', 'zusatzangaben'];
 
-// Server-Zeile → Formularwerte (alles Strings, Dezimalkomma wie bei der Eingabe)
+const BELEG_FELDER = [
+  { feld: 'beleg', label: 'Belegname' },
+  { feld: 'nummer', label: 'Nummer' },
+  { feld: 'leistung', label: 'Leistung' },
+  { feld: 'menge', label: 'Menge', dezimal: true },
+  { feld: 'einzelpreis', label: 'Einzelpreis (€)', dezimal: true },
+  { feld: 'betrag', label: 'Betrag (€)', dezimal: true },
+];
+
+function dezimalPayload(wert) {
+  const s = String(wert ?? '').trim();
+  if (!s.includes(',')) return s || null;
+  const deutsch = /^[+-]?(?:\d+|\d{1,3}(?:\.\d{3})+|),\d+$/;
+  return deutsch.test(s) ? s.replaceAll('.', '').replace(',', '.') : s;
+}
+
 function zuEntwurf(pos) {
-  const zahl = (v) => (v == null || v === '' ? '' : String(v).replace('.', ','));
-  return {
-    behandlungs_datum: pos?.behandlungs_datum ? String(pos.behandlungs_datum).split('T')[0] : '',
-    goa_goz_gebueh_pzn: pos?.goa_goz_gebueh_pzn ?? '',
-    leistung: pos?.leistung ?? '',
-    faktor: zahl(pos?.faktor),
-    betrag: zahl(pos?.betrag),
-    begruendung: pos?.begruendung ?? '',
-    zusatzangaben: pos?.zusatzangaben ?? '',
-  };
+  const entwurf = Object.fromEntries(FELDER.map(f => [f, pos?.[f] == null ? '' : String(pos[f])]));
+  entwurf.behandlungs_datum = entwurf.behandlungs_datum.split('T')[0];
+  return entwurf;
 }
 
-// Formularwerte → API-Payload (leere Felder als null)
 function zuPayload(entwurf) {
-  const out = {};
-  for (const f of FELDER) {
-    const s = String(entwurf[f] ?? '').trim();
-    // „1.234,56" → 1234.56; ohne Komma gilt ein Punkt als Dezimaltrenner.
-    const zahl = s.includes(',') ? s.replace(/\./g, '').replace(',', '.') : s;
-    out[f] = s === '' ? null : (f === 'faktor' || f === 'betrag' ? zahl : s);
+  return Object.fromEntries(FELDER.map(f => [
+    f, f === 'faktor' || f === 'betrag' ? dezimalPayload(entwurf[f]) : entwurf[f].trim() || null,
+  ]));
+}
+
+function belegPayload(zeilen) {
+  return zeilen.map(z => ({
+    zeile: z.zeile,
+    ...Object.fromEntries(BELEG_FELDER.map(({ feld, dezimal }) => [
+      feld, dezimal ? dezimalPayload(z[feld]) : String(z[feld] ?? '').trim() || null,
+    ])),
+  }));
+}
+
+function BelegzeilenEditor({ zeilen, onChange, pending }) {
+  function hinzufuegen() {
+    const zeile = Math.max(0, ...zeilen.map(z => z.zeile)) + 1;
+    onChange([...zeilen, { zeile }]);
   }
-  return out;
+
+  return (
+    <details className="rounded-lg border p-3">
+      <summary className="cursor-pointer text-sm font-medium">Belegzeilen ({zeilen.length})</summary>
+      <div className="mt-3 space-y-3">
+        {zeilen.map(z => (
+          <fieldset key={z.zeile} className="space-y-2 border-t pt-2" disabled={pending}>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-medium">Belegzeile {z.zeile}</span>
+              <Button type="button" variant="ghost" size="sm" aria-label={`Belegzeile ${z.zeile} entfernen`}
+                onClick={() => onChange(zeilen.filter(andere => andere.zeile !== z.zeile))}>
+                <Trash2 className="h-3.5 w-3.5 text-destructive" />
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {BELEG_FELDER.map(({ feld, label, dezimal }) => (
+                <label key={feld} className="block min-w-0 space-y-1">
+                  <span className="text-xs text-muted-foreground">{label}</span>
+                  <Input className="h-8" value={z[feld] ?? ''} inputMode={dezimal ? 'decimal' : undefined}
+                    onChange={e => {
+                      const wert = e.target.value;
+                      onChange(zeilen.map(andere => andere.zeile === z.zeile ? { ...andere, [feld]: wert } : andere));
+                    }} />
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        ))}
+        <Button type="button" size="sm" variant="outline" disabled={pending} onClick={hinzufuegen}>
+          <Plus className="h-3.5 w-3.5" />Belegzeile hinzufügen
+        </Button>
+      </div>
+    </details>
+  );
 }
 
-// Werte einer bestehenden Zeile im API-Format (für Undo/Wiederherstellen)
-function zeilenPayload(pos) {
-  const out = {};
-  for (const f of FELDER) out[f] = pos[f] == null ? null : String(pos[f]);
-  return out;
-}
-
-function PositionDialog({ offen, titel, entwurf, setEntwurf, fehler, pending, onSpeichern, onSchliessen, istTier }) {
+function PositionDialog({ offen, titel, entwurf, setEntwurf, fehler, pending, onSpeichern, onSchliessen, istTier, belegzeilen, setBelegzeilen }) {
   const set = (f) => (e) => setEntwurf((d) => ({ ...d, [f]: e.target.value }));
   const feld = (label, f, props = {}) => (
     <label className="block space-y-1">
@@ -58,10 +103,10 @@ function PositionDialog({ offen, titel, entwurf, setEntwurf, fehler, pending, on
     </label>
   );
   return (
-    <Dialog open={offen} onOpenChange={onSchliessen} size="lg">
+    <Dialog open={offen} onOpenChange={pending ? undefined : onSchliessen} size="lg">
       <DialogTitle>{titel}</DialogTitle>
       <form
-        className="mt-4 space-y-3"
+        className="mt-4 space-y-3 min-[1024px]:max-h-[75dvh] min-[1024px]:overflow-y-auto min-[1024px]:px-1"
         onSubmit={(e) => { e.preventDefault(); onSpeichern(); }}
       >
         <div className="grid grid-cols-2 gap-3">
@@ -83,7 +128,8 @@ function PositionDialog({ offen, titel, entwurf, setEntwurf, fehler, pending, on
             className="w-full rounded-lg border border-input bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           />
         </label>
-        {fehler && <p className="text-sm text-destructive">{fehler}</p>}
+        <BelegzeilenEditor zeilen={belegzeilen} onChange={setBelegzeilen} pending={pending} />
+        {fehler && <p role="alert" className="text-sm text-destructive">{fehler}</p>}
         <DialogFooter>
           <Button type="button" variant="ghost" onClick={onSchliessen} disabled={pending}>Abbrechen</Button>
           <Button type="submit" disabled={pending}>{pending ? 'Speichern…' : 'Speichern'}</Button>
@@ -139,6 +185,7 @@ export function ArztPositionenCard({ postid, positionen = [], abweichung, istTie
   // dialog: { modus: 'neu' } | { modus: 'bearbeiten', pos } | null
   const [dialog, setDialog] = useState(null);
   const [entwurf, setEntwurf] = useState(zuEntwurf(null));
+  const [belegzeilen, setBelegzeilen] = useState(null);
   const [fehler, setFehler] = useState(null);
   const [loeschen, setLoeschen] = useState(null);
   const [loeschFehler, setLoeschFehler] = useState(null);
@@ -150,6 +197,7 @@ export function ArztPositionenCard({ postid, positionen = [], abweichung, istTie
 
   function oeffne(modus, pos = null) {
     setEntwurf(zuEntwurf(pos));
+    setBelegzeilen(null);
     setFehler(null);
     setDialog({ modus, pos });
   }
@@ -167,6 +215,7 @@ export function ArztPositionenCard({ postid, positionen = [], abweichung, istTie
 
   async function speichern() {
     const payload = zuPayload(entwurf);
+    if (belegzeilen !== null) payload.belegzeilen = belegPayload(belegzeilen);
     if (payload.betrag == null) { setFehler('Bitte einen Betrag angeben.'); return; }
     try {
       if (dialog.modus === 'neu') {
@@ -174,7 +223,8 @@ export function ArztPositionenCard({ postid, positionen = [], abweichung, istTie
         undoFuerNeu(`Position ${res.subid} hinzugefügt`, res.subid, payload);
       } else {
         const { subid } = dialog.pos;
-        const alt = zeilenPayload(dialog.pos);
+        const alt = zuPayload(zuEntwurf(dialog.pos));
+        if (belegzeilen !== null) alt.belegzeilen = belegPayload(dialog.pos.belegzeilen ?? []);
         await updMut.mutateAsync({ postid, subid, ...payload });
         pushAction(
           `Position ${subid} geändert`,
@@ -190,7 +240,7 @@ export function ArztPositionenCard({ postid, positionen = [], abweichung, istTie
 
   async function loescheBestaetigt() {
     const pos = loeschen;
-    const payload = zeilenPayload(pos);
+    const payload = { ...zuPayload(zuEntwurf(pos)), belegzeilen: belegPayload(pos.belegzeilen ?? []) };
     try {
       await delMut.mutateAsync({ postid, subid: pos.subid });
       let aktuell = null;
@@ -378,16 +428,18 @@ export function ArztPositionenCard({ postid, positionen = [], abweichung, istTie
         onSpeichern={speichern}
         onSchliessen={() => setDialog(null)}
         istTier={istTier}
+        belegzeilen={belegzeilen ?? dialog?.pos?.belegzeilen ?? []}
+        setBelegzeilen={setBelegzeilen}
       />
 
-      <Dialog open={!!loeschen} onOpenChange={() => setLoeschen(null)}>
+      <Dialog open={!!loeschen} onOpenChange={delMut.isPending ? undefined : () => setLoeschen(null)}>
         <DialogTitle>Position {loeschen?.subid} löschen?</DialogTitle>
         <DialogDescription>
           {loeschen?.leistung || 'Position'} über {formatCurrency(loeschen?.betrag)} wird entfernt.
         </DialogDescription>
         {loeschFehler && <p className="text-sm text-destructive mt-3">{loeschFehler}</p>}
         <DialogFooter>
-          <Button variant="ghost" onClick={() => setLoeschen(null)}>Abbrechen</Button>
+          <Button variant="ghost" disabled={delMut.isPending} onClick={() => setLoeschen(null)}>Abbrechen</Button>
           <Button variant="destructive" disabled={delMut.isPending} onClick={loescheBestaetigt}>
             {delMut.isPending ? 'Löschen…' : 'Löschen'}
           </Button>

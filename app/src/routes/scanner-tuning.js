@@ -5,7 +5,7 @@ import path from 'node:path';
 import db from '../db.js';
 import { loadDynamicSettings } from '../config.js';
 import { quelleAusCapabilities } from '../lib/scanner-capabilities.js';
-import { scannerFetch } from '../lib/scanner-dienst.js';
+import { scannerFetch, scannerFehlertext } from '../lib/scanner-dienst.js';
 
 const router = Router();
 const ROOT = '/data/scanner_test';
@@ -114,7 +114,7 @@ router.post('/pages/:slot/scan', async (req, res) => {
     res.json({ ok: true, page: await pageInfo(slot) });
   } catch (err) {
     console.error('[scanner-tuning] Test-Scan fehlgeschlagen:', err);
-    res.status(err.name === 'AbortError' ? 504 : 502).json({ error: err.name === 'AbortError' ? 'Scanner-Timeout nach zwei Minuten.' : `Scanner nicht erreichbar: ${err.message}` });
+    res.status(err.name === 'AbortError' ? 504 : 502).json({ error: err.name === 'AbortError' ? 'Scanner-Timeout nach zwei Minuten.' : scannerFehlertext(err) });
   }
 });
 

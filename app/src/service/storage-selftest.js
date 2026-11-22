@@ -28,6 +28,20 @@ import { getAdapter, BACKENDS } from '../lib/storage/index.js';
 import { appLog } from '../app-log.js';
 
 const WURZEL_ORDNER = '_postbuch_selftest';
+
+/**
+ * Löscht einen Ordner samt Inhalt von unten nach oben. `remove` ist laut
+ * Adaptervertrag nur für Dateien und leere Ordner zugesagt.
+ */
+async function raeumeOrdnerAb(adapter, ordnerId, tiefe = 0) {
+  if (tiefe > 8) return;
+  const kinder = await adapter.listChildren(ordnerId).catch(() => []);
+  for (const k of kinder) {
+    if (k.isFolder) await raeumeOrdnerAb(adapter, k.id, tiefe + 1);
+    else await adapter.remove(k.id).catch(() => {});
+  }
+  await adapter.remove(ordnerId).catch(() => {});
+}
 const GESAMT_TIMEOUT_MS = 120_000;
 export const SELFTEST_TOTAL_STEPS = 15;
 
@@ -276,11 +290,7 @@ export async function runAdapterConformance(backendName, onProgress) {
   } finally {
     // Aufräumen IMMER — und ausschließlich innerhalb der eigenen UUID.
     try {
-      if (laufOrdnerId) {
-        const reste = await adapter.listAllFilesRecursive(laufOrdnerId).catch(() => []);
-        for (const f of reste) await adapter.remove(f.id).catch(() => {});
-        await adapter.remove(laufOrdnerId).catch(() => {});
-      }
+      if (laufOrdnerId) await raeumeOrdnerAb(adapter, laufOrdnerId);
       // Auch die Hülle wegräumen — aber nur, wenn sie wirklich leer ist. Läuft
       // parallel noch ein anderer Lauf (oder liegt dort etwas Fremdes), bleibt
       // sie stehen; ein Selbsttest löscht nichts, was er nicht angelegt hat.

@@ -14,6 +14,7 @@ import { GenRechnungDetail } from '@/components/detail/GenRechnungDetail';
 import { ArztberichtDetail } from '@/components/detail/ArztberichtDetail';
 import { ActionBar } from '@/components/detail/ActionBar';
 import { NoteSection } from '@/components/detail/NoteSection';
+import { FachdatenFehlenHinweis } from '@/components/detail/FachdatenFehlenHinweis';
 import { WiedervorlageSection } from '@/components/detail/WiedervorlageSection';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -214,6 +215,15 @@ export default function DocumentDetailPage() {
   const createAkte = useCreateAkte();
   const { data: collectingPerioden } = useCollectingPerioden();
   const { data: pins } = usePins(postid);
+  const queryClient = useQueryClient();
+  const rechnungsblockAnlegen = useMutation({
+    mutationFn: (id) => api.postbuch.rechnungsblockAnlegen(id),
+    onSuccess: () => Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['postbuch'] }),
+      queryClient.invalidateQueries({ queryKey: ['analyse'] }),
+      queryClient.invalidateQueries({ queryKey: ['stats'] }),
+    ]),
+  });
   const pinMutation = usePinDokument();
   const unpinMutation = useUnpinDokument();
   const { pushAction } = useUndoHistory();
@@ -244,6 +254,7 @@ export default function DocumentDetailPage() {
   if (!data) return null;
 
   const { postbuch, arztrechnung, erstattungsbescheid, erstattungsbescheidAusstehend, kuerzungenAusstehend, handwerkerrechnung, generischeRechnung, arztbericht, ki_aufrufe } = data;
+  const arztUebernahme = data.rechnungsblockAnlegbar === 'arztrechnung' && !!generischeRechnung;
   const hasRechnung = !!arztrechnung || !!handwerkerrechnung || !!generischeRechnung;
   const bezahltAm = arztrechnung?.bezahlt_am || handwerkerrechnung?.bezahlt_am || generischeRechnung?.bezahlt_am;
   const isBezahlt = !!bezahltAm;
@@ -474,6 +485,8 @@ export default function DocumentDetailPage() {
       {/* Postbuch Basis */}
       <PostbuchSection data={{ ...postbuch, erstattungsbescheid, ki_aufrufe }} />
 
+      {/* Dateiname in der Ablage (umbenennbar) */}
+
       {/* Benutzernotiz */}
       <NoteSection postid={postid} notiz={postbuch.notiz} />
 
@@ -677,10 +690,30 @@ export default function DocumentDetailPage() {
       </div>}
 
       {/* Typ-spezifische Details */}
+      {canWrite && data.rechnungsblockAnlegbar && (
+        <div className="space-y-2">
+          <Button variant="outline" size="sm" disabled={rechnungsblockAnlegen.isPending}
+            onClick={() => rechnungsblockAnlegen.mutate(postid)}>
+            <Plus className="h-4 w-4" />
+            {arztUebernahme ? 'In Arztrechnungsblock übernehmen'
+              : data.rechnungsblockAnlegbar === 'arztrechnung' ? 'Arztrechnungsblock ergänzen' : 'Rechnungsblock hinzufügen'}
+          </Button>
+          {arztUebernahme && (
+            <p className="text-sm text-muted-foreground">Rechnungsdaten und Zahlungen werden in den Arztrechnungsblock übernommen.</p>
+          )}
+          {rechnungsblockAnlegen.variables === postid && rechnungsblockAnlegen.error && (
+            <p role="alert" className="text-sm text-destructive">{rechnungsblockAnlegen.error.message}</p>
+          )}
+        </div>
+      )}
       <ArztrechnungDetail data={arztrechnung} istTier={postbuch.lebensbereich === 'tier'} />
-      <ErstattungsbescheidDetail data={erstattungsbescheid} ausstehend={erstattungsbescheidAusstehend} kuerzungenAusstehend={kuerzungenAusstehend} />
+      <ErstattungsbescheidDetail key={postid} postid={postid} data={erstattungsbescheid}
+        ausstehend={erstattungsbescheidAusstehend} kuerzungenAusstehend={kuerzungenAusstehend}
+        istTier={postbuch.lebensbereich === 'tier'} />
+      {data.erstattungsbescheidFehlt && <FachdatenFehlenHinweis key={`fachdaten-${postid}`} postid={postid}
+        istTier={postbuch.lebensbereich === 'tier'} onFertig={() => refreshPdf(postid)} />}
       <HandwerkerrechnungDetail data={handwerkerrechnung} />
-      <GenRechnungDetail data={generischeRechnung} art={postbuch.art} />
+      <GenRechnungDetail data={generischeRechnung} istPflichttyp={data.rechnungsblockPflicht} arztUebernahme={arztUebernahme} />
       <ArztberichtDetail data={arztbericht} />
 
       {/* Remove from Akte confirmation dialog */}

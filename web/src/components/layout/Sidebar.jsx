@@ -37,7 +37,7 @@ function SidebarInner({ isExpanded, isPinned, onTogglePin, onNavClick, onLogout 
   const cls = (isActive) =>
     `${itemBase} ${isExpanded ? itemExpanded : itemCollapsed} ${isActive ? itemActive : itemInactive}`;
 
-  const { haupt: navItems, gruppen, fuss, instanceName, updateVerfuegbar } = useNavigation();
+  const { haupt: navItems, gruppen, fuss, instanceName, updateVerfuegbar, eingangHandlung } = useNavigation();
   const [navHilfe, navEinstellungen] = fuss;
 
   return (
@@ -73,7 +73,15 @@ function SidebarInner({ isExpanded, isPinned, onTogglePin, onNavClick, onLogout 
           <NavLink key={to} to={to} end={to === '/'} onClick={onNavClick}
             className={({ isActive }) => cls(isActive)}
           >
-            <Icon className="h-4 w-4 flex-shrink-0" />
+            <span className="relative flex-shrink-0">
+              <Icon className="h-4 w-4" />
+              {to === '/import' && eingangHandlung && (
+                <span
+                  className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-red-500"
+                  title="Ein Eingang braucht eine Handlung"
+                />
+              )}
+            </span>
             {isExpanded && <span className="truncate">{label}</span>}
           </NavLink>
         ))}

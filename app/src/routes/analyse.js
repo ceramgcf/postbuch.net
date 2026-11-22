@@ -155,6 +155,10 @@ router.get('/perioden', async (req, res) => {
         ab.person, per.ist_tier, ab.kostentraeger, ab.periode, ab.status, ab.eb_postid,
         ab.satz AS periode_satz, ab.ursprungsperiode, ab.bre_jahr, ab.bre_schwelle,
         per.bre_abschlag AS person_bre_abschlag,
+        -- Für den Schalter „Inaktive ausblenden“: archiviert bzw. Kostenträger
+        -- abgewählt. Ohne Menschenzeile gilt beides als inaktiv.
+        COALESCE(per.archiviert, true) AS person_archiviert,
+        COALESCE(CASE ab.kostentraeger WHEN 'PKV' THEN per.pkv ELSE per.beihilfe END, false) AS kostentraeger_aktiv,
         COUNT(a.postid) AS anzahl_rechnungen,
         COALESCE(SUM(a.gesamtbetrag), 0) AS summe_rechnungen,
         COALESCE(SUM(
@@ -219,7 +223,7 @@ router.get('/perioden', async (req, res) => {
           OR (ab.kostentraeger = 'Beihilfe' AND a.abrechnungsperiode_beihilfe = ab.periode)
         )
       GROUP BY ab.person, per.ist_tier, ab.kostentraeger, ab.periode, ab.status, ab.satz, ab.eb_postid, ab.ursprungsperiode,
-               ab.bre_jahr, ab.bre_schwelle, per.bre_abschlag
+               ab.bre_jahr, ab.bre_schwelle, per.bre_abschlag, per.archiviert, per.pkv, per.beihilfe
       ORDER BY per.ist_tier, ab.person, ab.kostentraeger, ab.periode DESC
     `), query(`
       SELECT ist_tier

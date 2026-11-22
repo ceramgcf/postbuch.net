@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { QrCode } from 'lucide-react';
 import { api } from '@/api/client';
+import { useUngespeichert } from '@/lib/ungespeichert';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Switch } from '@/components/ui/switch';
@@ -37,6 +38,11 @@ export default function EtikettQrCard() {
   const liste = aliase.split(/[\s,;]+/).map((a) => a.trim()).filter(Boolean);
   const geaendert = alle !== (gespeichert.alleAdressen === true)
     || liste.join('\n') !== (gespeichert.aliase ?? []).join('\n');
+  useUngespeichert('etikett-qr', {
+    aktiv: !!data && geaendert, label: 'Etiketten im Kamerascan',
+    speichern: () => speichern.mutateAsync({ aliase: liste, alleAdressen: alle }),
+    verwerfen: () => { setAliase((gespeichert.aliase ?? []).join('\n')); setAlle(gespeichert.alleAdressen === true); },
+  });
   const host = typeof window !== 'undefined' ? window.location.host : '';
 
   return (

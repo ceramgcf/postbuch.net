@@ -9,7 +9,10 @@ import { Router } from 'express';
 import { getClient, query } from '../db.js';
 import { hashPassword } from '../auth-salt.js';
 import { revokeUserAccess } from '../service/session-revocation.js';
-import { ensureMenschCollectingPeriods } from '../service/mensch-perioden.js';
+import {
+  ensureMenschCollectingPeriods, abgewaehlteKostentraeger, eingeschalteteKostentraeger,
+  findeBelegteSammelperioden, entferneLeereSammelperioden,
+} from '../service/mensch-perioden.js';
 import {
   erstelleVorschau, loescheMensch, startePapierkorbLauf, LoeschFehler,
 } from '../service/mensch-loeschung.js';
@@ -207,7 +210,7 @@ router.post('/', async (req, res) => {
         daten.breUeberwachen, daten.breBetrag, daten.breAbschlag],
     );
     const id = m.rows[0].id;
-    await ensureMenschCollectingPeriods(client.query.bind(client), {
+    await ensureMenschCollectingPeriods(client, {
       kurzname: daten.kurzname,
       pkv: daten.pkv,
       beihilfe: daten.beihilfe,
@@ -269,15 +272,36 @@ router.patch('/:id', async (req, res) => {
       loginRename,
       passwordHash,
     });
+    // Abwählen von PKV/Beihilfe: Perioden bleiben unverändert, aber in eine
+    // belegte Sammelperiode fallen danach keine neuen Rechnungen mehr. Das
+    // braucht eine ausdrückliche Bestätigung.
+    const abgewaehlt = abgewaehlteKostentraeger(alt, daten);
+    if (abgewaehlt.length && req.body?.bestaetigt_kostentraeger_entfernen !== true) {
+      const belegt = await findeBelegteSammelperioden(client, daten.kurzname, abgewaehlt);
+      if (belegt.length) {
+        await client.query('ROLLBACK');
+        return fehler(res, 409, 'Für diesen Kostenträger gibt es eine offene Abrechnungsperiode mit Inhalt.', {
+          code: 'KOSTENTRAEGER_OFFENE_PERIODE',
+          perioden: belegt.map(({ kostentraeger, periode, rechnungen, vormerkungen }) => ({
+            kostentraeger, periode, rechnungen, vormerkungen,
+          })),
+        });
+      }
+    }
+
     if (zugangGeaendert) await revokeUserAccess({ menschId: alt.id, username: alt.anmeldename }, client.query.bind(client));
 
-    await ensureMenschCollectingPeriods(client.query.bind(client), {
+    await ensureMenschCollectingPeriods(client, {
       kurzname: daten.kurzname,
       pkv: daten.pkv,
       beihilfe: daten.beihilfe,
       pkvSatz: daten.pkvSatz,
       beihilfeSatz: daten.beihilfeSatz,
+      satzUebernehmen: eingeschalteteKostentraeger(alt, daten),
     });
+    // Wer nicht mehr versichert ist, sammelt nichts mehr: leere Sammelperioden
+    // des abgewählten Kostenträgers verschwinden, belegte bleiben bestehen.
+    const geloeschtePerioden = await entferneLeereSammelperioden(client, daten.kurzname, abgewaehlt);
 
     await client.query(
       `UPDATE postbuch.mensch SET kurzname=$2,anzeigename=$3,email=$4,aktiv=$5,
@@ -295,6 +319,14 @@ router.patch('/:id', async (req, res) => {
     );
     await client.query('COMMIT');
     appLog('INFO', 'mensch', 'Mensch aktualisiert', { entity: 'mensch', entityId: alt.id });
+    if (abgewaehlt.length) {
+      const geloeschtText = geloeschtePerioden.length
+        ? `leere Perioden gelöscht: ${geloeschtePerioden.map((p) => `${p.kostentraeger} ${p.periode}`).join(', ')}`
+        : 'keine leere Periode gelöscht';
+      appLog('INFO', 'mensch', `Kostenträger abgewählt: ${abgewaehlt.join(', ')} (${geloeschtText})`, {
+        entity: 'mensch', entityId: alt.id,
+      });
+    }
     res.json({ ok: true, reauthenticate: zugangGeaendert });
     if (daten.kurzname !== alt.kurzname) {
       benennePersonenordnerUm(alt.id, daten.kurzname)

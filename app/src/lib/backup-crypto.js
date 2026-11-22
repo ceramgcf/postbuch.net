@@ -60,7 +60,26 @@ export function generateDek() {
   return randomBytes(DEK_LEN);
 }
 
+/**
+ * Die scrypt-Parameter stehen unverschlüsselt in Backup-Datei und
+ * Schlüsseldatei, kommen also aus der Ablage oder einem Upload. Den
+ * Speicherbedarf deckelt `maxmem`, die Rechenzeit aber nicht: Sie wächst linear
+ * mit `p`. Angenommen wird deshalb nur, was höchstens das Vierfache der eigenen
+ * Parameter kostet; alles andere gilt als beschädigte Datei.
+ */
+export function scryptParamsZulaessig(params) {
+  const { N, r, p } = params ?? {};
+  return Number.isInteger(N) && N >= 1024 && N <= 131072 && (N & (N - 1)) === 0
+    && Number.isInteger(r) && r >= 1 && r <= 8
+    && Number.isInteger(p) && p >= 1 && p <= 4;
+}
+
 async function deriveKey(passwort, salt, params) {
+  if (!scryptParamsZulaessig(params)) {
+    const err = new Error('Backup-Datei oder Schlüsseldatei ist beschädigt (unzulässige Schlüsselparameter).');
+    err.code = 'BACKUP_DATEI_BESCHAEDIGT';
+    throw err;
+  }
   return scryptAsync(String(passwort), salt, DEK_LEN, {
     N: params.N, r: params.r, p: params.p, maxmem: SCRYPT_MAXMEM,
   });

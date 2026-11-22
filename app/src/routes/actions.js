@@ -39,6 +39,8 @@ import { effektiveGruppe } from '../lib/taxonomie.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { setzeBescheidwirkungZurueck } from '../service/periodenabschluss.js';
 
+import { starteFehleintragLauf, KonfliktError } from '../service/offene-eingaenge.js';
+
 const router = Router();
 
 const POSTID_RE = /^P\d{6}$/;
@@ -463,27 +465,18 @@ router.post('/reprocess-failed/:onedriveId', async (req, res) => {
     }
     const failedDoc = failedResult.rows[0];
 
-    // Datei aus _failed Ordner zurück in Inbox verschieben
-    // Signatur ist create(type, label, totalSteps) — ein einzelnes Argument
-    // ließ `label` undefined, der INSERT in _jobs (label NOT NULL) scheiterte
-    // still im .catch(), und der Lauf tauchte im Jobs-Monitor nie auf.
-    const jobId = tracker.create('doc-process', `Wiederverarbeitung ${failedDoc.failed_filename}`, 10);
-
     // Der _failed_documents-Eintrag bleibt bewusst stehen, bis der Lauf ihn
     // erledigt hat (document-processor löscht ihn bei Erfolg/Abbruch, bei
-    // erneutem Fehlschlag schreibt moveToFailed ihn mit der neuen Job-ID fort).
-    // Vorab gelöscht ging das Dokument bei einem zweiten Fehlschlag verloren:
-    // Datei im _failed-Ordner, aber kein Eintrag und damit kein Retry im UI.
-
-    enqueueDocument({
-      onedriveFileId: failedDoc.storage_id || onedriveId,
-      storageBackend: failedDoc.storage_backend,
-    }, jobId, 0, {
-      onError: (err) => {
-        console.error('[actions] reprocess-failed %s fehlgeschlagen:', onedriveId, err.message);
-        appLog('ERROR', 'actions', `reprocess-failed fehlgeschlagen: ${err.message}`);
-      },
-    });
+    // erneutem Fehlschlag schreibt moveToFailed ihn fort). Die Datei wird
+    // schon hier als „in Arbeit“ beansprucht: ein zweiter Klick oder ein
+    // zweiter Tab erhält 409 statt eines doppelten Laufs.
+    let jobId;
+    try {
+      jobId = starteFehleintragLauf(failedDoc);
+    } catch (err) {
+      if (err instanceof KonfliktError) return res.status(409).json({ error: err.message });
+      throw err;
+    }
 
     appLog('INFO', 'actions', `Fehlgeschlagenes Dokument wird erneut verarbeitet: ${onedriveId}`);
     res.json({ ok: true, jobId });

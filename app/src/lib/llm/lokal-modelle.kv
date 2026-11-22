@@ -1,0 +1,24 @@
+# Lokale KI (Compose-Profil lokalki): das eine kuratierte Modell und seine Stufen.
+#
+# Eine Quelle für App (lokal-modelle.js) und Host-Agent (postbuch-hostconfig.sh).
+# Zeilenformat statt JSON, damit der Agent es ohne jq lesen kann. Der Agent liest
+# die Datei nur aus dem installierten, signierten Release – nie aus einem Auftrag.
+# Neues Modell oder neue Stufenwerte = neue Version.
+#
+# modell|<schluessel>|<anzeige>|<lizenz>
+# datei|<rolle>|<dateiname>|<sha256>|<bytes>|<url>
+#   rolle: modell, mmproj (Bildmodul), mtp (Entwurfsmodell, nur Stufen mit mtp=ja)
+#   url: nur https://huggingface.co/unsloth/…, auf einen festen Stand gepinnt
+# stufe|<name>|<vram_ab_mib>|<gpu>|<kontext>|<gpu_schichten>|<mtp>|<warnung>|<ram_mib>|<anzeige>
+#   Der Agent wählt die erste Stufe, deren Bedingung die erkannte Karte erfüllt.
+#   gpu_schichten: all, auto (llama.cpp verteilt selbst auf GPU und RAM) oder 0
+#   warnung=ja: nur nach ausdrücklicher Bestätigung (langsam)
+#   ram_mib: grober Arbeitsspeicherbedarf zur Anzeige
+modell|gemma-4-12b-it-q5km|Gemma 4 12B|Apache-2.0
+datei|modell|gemma-4-12b-it-Q5_K_M.gguf|32c554c7d1338a23837ae39b3db482213a4a642f96df3b2619f516a2375d16cd|8413576000|https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/fc034cfff751157913579611efad8462ac1be606/gemma-4-12b-it-Q5_K_M.gguf
+datei|mmproj|mmproj-F16.gguf|91f086971e56d7a7d8d39e271873fccdb49541bd259d6e02c401a4f1cb7a219e|175115840|https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/fc034cfff751157913579611efad8462ac1be606/mmproj-F16.gguf
+datei|mtp|mtp-gemma-4-12b-it.gguf|145db9094bc0f85f1701e255a2ed216dcc9800fc8bc8631ad00905b456bd451b|465109248|https://huggingface.co/unsloth/gemma-4-12b-it-GGUF/resolve/fc034cfff751157913579611efad8462ac1be606/mtp-gemma-4-12b-it.gguf
+stufe|gpu-voll|11500|ja|65536|all|ja|nein|4096|NVIDIA ab 12 GB
+stufe|gpu-10|9500|ja|32768|all|nein|nein|4096|NVIDIA mit 10 GB
+stufe|gpu-teil|5500|ja|32768|auto|nein|ja|12288|NVIDIA mit 6–8 GB, teils im Arbeitsspeicher
+stufe|cpu|0|nein|32768|0|nein|ja|16384|ohne NVIDIA-Grafikkarte

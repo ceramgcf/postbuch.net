@@ -378,7 +378,7 @@ KERN — immer ausfüllen:
     "kontakt": "Name des nicht-familiären Beteiligten (Aussteller bei Eingang, Empfänger bei Ausgang). Zweckmäßig verkürzt, z. B. 'PVS Süd-West i. A. Dr. Schmidt'. Nicht extrahierbar: null.",
     "betreff": "Aussagekräftige Kurzzusammenfassung",
     "fremdesZeichen": "vom externen Beteiligten vergebenes Zeichen: Aktenzeichen, Rechnungsnummer, Auftragsnummer, Vorgangs-, Kunden-, Patienten-, Fall- oder Befundnummer. Bei Berichten und Befunden ohne Rechnungsnummer ist es die Patienten-, Fall- oder Berichtsnummer. Nur wenn wirklich keine Kennung vorhanden ist: null",
-    "dateiname": "Vorschlag im Format 'YYYY-MM-DD Text'; Text muss den Kontakt mindestens stark verkürzt enthalten, insgesamt max. 100 Zeichen",
+    "dateiname": "Sprechender Name für das Dokument, höchstens 80 Zeichen: Kontakt (verkürzt, falls vorhanden) und Gegenstand. OHNE Datum, PostID und Dateiendung – die ergänzt das System. Nie 'null' oder 'unbekannt' einsetzen, immer ausfüllen",
     "zusammenfassung": "2-4 vollständige Sätze für die spätere semantische Suche: Parteien, Thema, Kontext, relevante Details",
     "schlagwörter": ["keyword1", "keyword2"],
     "bezahlStatus": {

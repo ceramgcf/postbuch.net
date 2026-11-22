@@ -15,11 +15,14 @@ import { PageLoader } from '@/components/ui/spinner';
 import { formatCurrency, formatDate } from '@/lib/utils';
 import { api } from '@/api/client';
 import { ablageLabel } from '@/lib/ablage';
+import { FAILED_DOCS_LAST_SEEN_KEY } from '@/lib/eingang';
 import { empfohlenerSchritt, offeneReste } from '@/pages/AblageUmzugPage';
-import PendingDecisionsCard from '@/components/dashboard/PendingDecisionsCard';
-import FailedDocumentsCard from '@/components/dashboard/FailedDocumentsCard';
+import OffeneEingaengeKarte from '@/components/dashboard/OffeneEingaengeKarte';
+import NachRestoreHinweis from '@/components/dashboard/NachRestoreHinweis';
+import AppInstallierenKarte from '@/components/dashboard/AppInstallierenKarte';
 import PersonenFilter, { useDashboardPersonenFilter } from '@/components/dashboard/PersonenFilter';
 import { MODEL_CLASSES } from '@/components/settings/modelClasses';
+import { AufgabenUmstellungHinweis } from '@/components/settings/AufgabenUmstellungHinweis';
 import { useDarstellung } from '@/hooks/useDarstellung';
 
 /** Begonnene, noch nicht bestätigte Abrechnung – führt in den Assistenten zurück. */
@@ -121,11 +124,27 @@ function UpdateBanner() {
   );
 }
 
+/** Nach der Umstellung auf zwei KI-Aufgabentypen: Admin soll die Auswahl bestätigen. */
+function AufgabenUmstellungBanner() {
+  const { isAdmin } = useAuth();
+  const { data: health } = useQuery({
+    queryKey: ['ai-health-admin'],
+    queryFn: () => api.settings.ai.health(),
+    enabled: isAdmin,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  });
+  if (!isAdmin) return null;
+  return <AufgabenUmstellungHinweis umstellung={health?.aufgabenUmstellung} mitLink />;
+}
+
 function AiHealthBanner() {
   const { isAdmin } = useAuth();
+  // Admins bekommen die Vollversion mit den Fehlertexten der Provider, alle
+  // übrigen die entschärfte Variante ohne Rohantworten fremder APIs.
   const { data: health, isLoading } = useQuery({
-    queryKey: ['ai-health-public'],
-    queryFn: () => api.settingsPublic.ai.health(),
+    queryKey: [isAdmin ? 'ai-health-admin' : 'ai-health-public'],
+    queryFn: () => (isAdmin ? api.settings.ai.health() : api.settingsPublic.ai.health()),
     staleTime: 5 * 60 * 1000,
     retry: false,
   });
@@ -198,10 +217,10 @@ function AiHealthBanner() {
 }
 
 // ── FailedDocumentsBanner ─────────────────────────────────────────────────────
-// Erscheint oben auf dem Dashboard, solange es neue fehlgeschlagene Dokumente
-// seit dem letzten Besuch der Logs/Jobs-Seite gibt. Persistiert dank localStorage.
-
-export const FAILED_DOCS_LAST_SEEN_KEY = 'failed_docs_last_seen';
+// Erscheint oben auf dem Dashboard, wenn seit dem letzten Blick in den Eingang
+// (oder Logs/Jobs) neue Dokumente gescheitert sind und ein Fehler auf
+// aufgebrauchtes API-Guthaben deutet. Alles andere meldet die Karte
+// „Offene Eingänge“. Persistiert dank localStorage.
 
 function FailedDocumentsBanner() {
   const { data: failed = [], isLoading } = useQuery({
@@ -220,6 +239,7 @@ function FailedDocumentsBanner() {
   const hasQuotaError = failed.some(d =>
     /quota|Guthaben|aufgebraucht|rate.?limit|billing|credit/i.test(d.reason || '')
   );
+  if (!hasQuotaError) return null;
   const count = failed.length;
 
   return (
@@ -234,21 +254,15 @@ function FailedDocumentsBanner() {
             ? '1 Dokument konnte nicht verarbeitet werden'
             : `${count} Dokumente konnten nicht verarbeitet werden`}
         </p>
-        {hasQuotaError ? (
-          <p className="mt-0.5 text-xs text-amber-600/80 dark:text-amber-400/80">
-            API-Guthaben möglicherweise aufgebraucht – Guthaben prüfen, dann Dokumente in Logs/Jobs wiederholen.
-          </p>
-        ) : (
-          <p className="mt-0.5 text-xs text-amber-600/80 dark:text-amber-400/80">
-            Details und Wiederholung in Logs/Jobs.
-          </p>
-        )}
+        <p className="mt-0.5 text-xs text-amber-600/80 dark:text-amber-400/80">
+          API-Guthaben möglicherweise aufgebraucht – Guthaben prüfen, dann die Dokumente im Eingang neu auslösen.
+        </p>
       </div>
       <Link
-        to="/logs?tab=jobs"
+        to="/import?tab=eingang"
         className="text-xs text-amber-600 dark:text-amber-400 underline underline-offset-2 whitespace-nowrap flex-shrink-0 mt-0.5"
       >
-        Zu Logs/Jobs →
+        Zum Eingang →
       </Link>
     </div>
   );
@@ -323,71 +337,6 @@ function MissingEmbeddingsBanner() {
   );
 }
 
-// ── ScanRetryBanner ───────────────────────────────────────────────────────────
-// Gelb: Scans warten auf Upload (automatischer Retry läuft).
-// Rot:  Scans konnten nach max. Retries nicht hochgeladen werden → manuelle Aktion nötig.
-
-function ScanRetryBanner() {
-  const { data, isLoading } = useQuery({
-    queryKey: ['scan-retry-queue'],
-    queryFn: () => api.stats.scanRetryQueue(),
-    staleTime: 60_000,
-    retry: false,
-  });
-
-  if (isLoading || !data) return null;
-
-  const { pending, manual_only } = data;
-
-  if (manual_only > 0) {
-    return (
-      <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/8 px-4 py-3">
-        <svg className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-          <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
-          <path d="M12 9v4" /><path d="M12 17h.01" />
-        </svg>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-destructive">
-            {manual_only === 1
-              ? '1 Scan konnte nicht hochgeladen werden – manuelle Aktion erforderlich'
-              : `${manual_only} Scans konnten nicht hochgeladen werden – manuelle Aktion erforderlich`}
-          </p>
-          <p className="mt-0.5 text-xs text-destructive/80">
-            Die maximale Anzahl automatischer Wiederholungsversuche wurde erreicht. Das PDF liegt lokal in
-            <code className="mx-1 font-mono">/data/scan_buffer</code>und muss manuell erneut eingespielt werden.
-          </p>
-        </div>
-        <a href="/logs?tab=jobs" className="text-xs text-destructive underline underline-offset-2 whitespace-nowrap flex-shrink-0 mt-0.5">
-          Zu Logs/Jobs →
-        </a>
-      </div>
-    );
-  }
-
-  if (pending > 0) {
-    return (
-      <div className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/8 px-4 py-3">
-        <svg className="h-4 w-4 text-amber-500 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-          <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
-          <path d="M12 9v4" /><path d="M12 17h.01" />
-        </svg>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-amber-600 dark:text-amber-400">
-            {pending === 1
-              ? '1 Scan wartet auf Upload – automatischer Retry läuft'
-              : `${pending} Scans warten auf Upload – automatischer Retry läuft`}
-          </p>
-          <p className="mt-0.5 text-xs text-amber-600/80 dark:text-amber-400/80">
-            Das PDF ist lokal gesichert. Sobald die Dateiablage wieder erreichbar ist, wird der Upload automatisch wiederholt.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  return null;
-}
-
 /**
  * Warnbanner zur Dateiablage.
  *
@@ -421,6 +370,8 @@ function AblageBanner() {
       ? 'Das Client-Secret ist abgelaufen. Erzeuge in Azure ein neues Secret, trage es in den Dateiablage-Einstellungen ein und verbinde OneDrive danach neu.'
       : status.problem === 'app_konfiguration_ungueltig'
         ? 'Microsoft erkennt die eingetragene App-Registrierung nicht. Prüfe Client-ID und Mandant in den Dateiablage-Einstellungen und verbinde OneDrive danach neu.'
+      : status.backend === 'lokal'
+        ? `Der Ablageordner ist nicht erreichbar${status.meldung ? `: ${status.meldung}` : '.'}`
       : status.backend === 'nextcloud'
         ? `Die Nextcloud antwortet nicht${status.meldung ? `: ${status.meldung}` : '.'}`
         : 'Die Microsoft-Anmeldung ist abgelaufen. Bitte OneDrive neu verbinden.';
@@ -846,9 +797,13 @@ export default function DashboardPage() {
       {/* Backup-Warnung: ganz oben, für alle Rollen sichtbar (Datenverlustrisiko) */}
       <BackupBanner />
 
+      {/* Nach einer Wiederherstellung: Abweichungen zum gesicherten System (nur Admins) */}
+      <NachRestoreHinweis />
+
       {/* KI-Warnung: Provider nicht erreichbar oder konfiguriertes Modell nicht
           mehr gelistet – früh, bevor die ersten Dokumente fehlschlagen */}
       <AiHealthBanner />
+      <AufgabenUmstellungBanner />
 
       {/* Fehler-Warnung (Banner): Neue fehlgeschlagene Dokumente seit letztem Logs-Besuch */}
       <UpdateBanner />
@@ -859,11 +814,12 @@ export default function DashboardPage() {
       <MissingEmbeddingsBanner />
 
       {/* Scan-Retry-Warnung: ausstehende oder dauerhaft fehlgeschlagene Uploads */}
-      <ScanRetryBanner />
 
-      {/* Duplikat-Entscheidungen + fehlgeschlagene Dokumente (sichtbar nur wenn vorhanden) */}
-      <PendingDecisionsCard />
-      <FailedDocumentsCard />
+      {/* Offene Eingänge inkl. Duplikatverdacht (sichtbar nur wenn vorhanden) */}
+      <OffeneEingaengeKarte />
+
+      {/* App-Installation anbieten, solange der Browser sie meldet (abwählbar) */}
+      <AppInstallierenKarte />
 
       {/* Dateiablage erreichbar?? Backend-agnostisch. */}
       <AblageBanner />

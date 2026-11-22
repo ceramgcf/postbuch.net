@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
 import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import {
   useDeletePostbuch, useUpdateStatus, useMarkPaid, useReprocess,
@@ -43,7 +44,8 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
   const [textebeneInfo, setTextebeneInfo] = useState(null); // { hatTextebene, hatScanBild, empfehlungEntfernen }
   // Modellwahl für die Wiederverarbeitung: 'auto' (Default) oder eine feste Stufe.
   const [modelTier, setModelTier] = useState('auto');
-  const [tierModels, setTierModels] = useState(null); // { tiers: {leicht,mittel,schwierig,large}, subscription:{enabled} }
+  // undefined = wird geladen; null = nicht ladbar (dann alle Stufen anbieten)
+  const [tierModels, setTierModels] = useState(undefined); // { tiers: {leicht,mittel,schwierig,large}, subscription:{enabled}, modellwahl }
   const [statusValue, setStatusValue] = useState(currentStatus);
   // Sperrstatus der Wiederverarbeitung – wird beim Laden des Dokuments einmal
   // geprüft, damit der Knopf von Anfang an gesperrt erscheint statt erst nach
@@ -95,6 +97,7 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
     if (!reprocessOpen) return;
     let abgebrochen = false;
     setModelTier('auto');
+    setTierModels(undefined);
     api.settingsPublic.ai.tierModels()
       .then((d) => { if (!abgebrochen) setTierModels(d); })
       .catch(() => { if (!abgebrochen) setTierModels(null); });
@@ -527,9 +530,13 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
         <div className="mt-4">
           <div className="text-sm font-medium mb-1.5">KI-Modell</div>
           <div className="space-y-0.5">
-            {/* Einfache Modellwahl: alle Stufen zeigen aufs Analysemodell, eine
-                Auswahl gäbe es nicht. */}
-            {(tierModels?.modellwahl === 'einfach' ? MODEL_TIER_OPTIONS.slice(0, 1) : MODEL_TIER_OPTIONS).map((opt) => {
+            {/* Einfache Modellwahl: analysiert wird immer mit „Anspruchsvoll &
+                Komplex“ (Stufe schwierig), eine Auswahl gäbe es nicht. */}
+            {/* Erst nach dem Laden zeigen: welche Stufen es gibt, hängt an der Modellwahl. */}
+            {tierModels === undefined && (
+              <div className="flex items-center gap-2 px-2 py-1 text-xs text-gray-500"><Spinner className="h-3.5 w-3.5" /> Modelle werden geladen …</div>
+            )}
+            {tierModels !== undefined && (tierModels?.modellwahl === 'einfach' ? MODEL_TIER_OPTIONS.slice(0, 1) : MODEL_TIER_OPTIONS).map((opt) => {
               const info = opt.key === 'auto' ? null : tierModels?.tiers?.[opt.key];
               const showAbo = !!info && tierModels?.subscription?.enabled && info.providerId === 'anthropic';
               return (
@@ -547,7 +554,7 @@ export function ActionBar({ postid, currentStatus, art, hasRechnung, isBezahlt, 
                   <span className="font-medium w-14">{opt.label}</span>
                   {opt.key === 'auto' && tierModels?.modellwahl === 'einfach' ? (
                     <span className="text-xs text-gray-500">
-                      Analysemodell <span className="font-mono">{tierModels?.tiers?.leicht?.model || '…'}</span>
+                      Anspruchsvoll &amp; Komplex <span className="font-mono">{tierModels?.tiers?.schwierig?.model || '…'}</span>
                     </span>
                   ) : opt.key === 'auto' ? (
                     <span className="text-xs text-gray-500">Standard – automatische Schwierigkeitseinschätzung</span>

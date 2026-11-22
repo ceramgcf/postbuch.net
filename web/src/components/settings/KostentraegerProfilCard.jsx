@@ -82,7 +82,7 @@ function ProfilZeile({ profil, onAktivieren, onDeaktivieren, onLoeschen, onExpor
 
   return (
     <div className="rounded-md border border-border px-3 py-2">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => setOffen((v) => !v)}
@@ -94,7 +94,7 @@ function ProfilZeile({ profil, onAktivieren, onDeaktivieren, onLoeschen, onExpor
         <Badge variant={profil.aktiv ? 'default' : 'secondary'}>{profil.aktiv ? 'Aktiv' : 'Inaktiv'}</Badge>
         <Badge variant="outline">{QUELLE_LABEL[profil.quelle] || profil.quelle}</Badge>
         {updateVerfuegbar && <Badge variant="destructive">Update verfügbar</Badge>}
-        <div className="ml-auto flex items-center gap-1.5">
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
           <Button size="sm" variant="outline" onClick={() => onExportieren(profil)} title="Profil ansehen und als .json-Datei herunterladen">
             <Download className="mr-1.5 h-3.5 w-3.5" />JSON exportieren
           </Button>
@@ -171,7 +171,7 @@ function KatalogBereich({ onAktivieren, pending }) {
       </p>
       <div className="space-y-1.5">
         {verfuegbar.map((eintrag) => (
-          <div key={eintrag.schluessel} className="flex items-center gap-2 rounded-md border border-border px-2.5 py-1.5">
+          <div key={eintrag.schluessel} className="flex flex-wrap items-center gap-2 rounded-md border border-border px-2.5 py-1.5">
             <span className="text-sm">{eintrag.name}</span>
             <Badge variant="outline">{eintrag.kostentraeger}</Badge>
             <Button

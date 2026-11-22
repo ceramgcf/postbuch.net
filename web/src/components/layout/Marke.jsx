@@ -3,7 +3,8 @@
  * Einzige Quelle für Sidebar, mobile Kopfleiste und Burgermenü.
  */
 
-const VERLAUF = 'linear-gradient(90deg, #7d2dbd 0%, #a56bd8 50%, #2cc5dd 100%)';
+/** Markenverlauf der Wortmarke, auch für die Trefferbalken der Suche. */
+export const VERLAUF = 'linear-gradient(90deg, #7d2dbd 0%, #a56bd8 50%, #2cc5dd 100%)';
 
 /**
  * Verlaufstext mit rundum gleichmäßigem Glühen.

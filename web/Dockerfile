@@ -1,7 +1,7 @@
 # Build-Stage
 # Build-Context = Repo-Root (siehe docker-compose.yml), damit die zentrale
 # VERSION-Datei in den Build gelangt.
-FROM node:24-alpine@sha256:a34ab6d7f6f4813f4d0c5469d74685604b962fbdbf5793a7bc7b4998ecb867c8 AS build
+FROM node:24-alpine@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS build
 # Optionaler Node-Heap-Deckel fuer den vite/rollup-Build. Leer = kein Limit
 # (Default fuer das Master-/Produktivsystem und Instanzen mit genug RAM).
 # Der Installer setzt dies im Safe-Mode auf z.B. --max-old-space-size=768,
@@ -36,7 +36,7 @@ COPY VERSION /VERSION
 RUN NODE_OPTIONS="$WEB_BUILD_NODE_OPTIONS" npm run build
 
 # Runtime-Stage
-FROM nginx:alpine@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11
+FROM nginx:alpine@sha256:0563c36f94a6d3ec3584161b77859f740f7e20b4853f52c796a864ce6908e8ea
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY web/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80

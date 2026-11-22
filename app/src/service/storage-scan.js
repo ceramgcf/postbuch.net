@@ -5,14 +5,15 @@
  * Metadaten. Nur ein bestätigter 404 löst markiereDateiFehlend() aus — jeder
  * andere Fehler (Netzwerk, Auth, Timeout) wird geloggt und übersprungen, damit
  * eine vorübergehende Störung der Ablage nie fälschlich Dokumente als fehlend
- * markiert (siehe storage-missing.js).
+ * markiert (siehe storage-missing.js). Gelöst wird erst nach dem Lauf und gar
+ * nicht, wenn die Mehrheit fehlt (loeseFehlendeOderHalte).
  */
 
 import db from '../db.js';
 import { loadDynamicSettings, getActiveBackendName } from '../config.js';
 import { getAdapter } from '../lib/storage/index.js';
 import { appLog } from '../app-log.js';
-import { istBestaetigterDateiFehlt, markiereDateiFehlend } from './storage-missing.js';
+import { istBestaetigterDateiFehlt, loeseFehlendeOderHalte } from './storage-missing.js';
 
 export async function scanForMissingFiles(onProgress) {
   const settings = await loadDynamicSettings();
@@ -31,16 +32,16 @@ export async function scanForMissingFiles(onProgress) {
   onProgress?.({ schritt: 0, gesamt: Math.max(1, total), name: total ? 'Dateien werden geprüft' : 'Keine Dateien zu prüfen' });
   appLog('INFO', 'storage-scan', `Fehlende-Dateien-Scan gestartet — ${total} Dokument(e) mit Ablage-ID`);
 
-  let checked = 0, missing = 0, errors = 0;
+  let checked = 0, errors = 0;
   let schritt = 0;
+  const fehlend = [];
   for (const row of rows.rows) {
     try {
       await storage.getMeta(row.storage_id);
       checked++;
     } catch (err) {
       if (istBestaetigterDateiFehlt(err)) {
-        await markiereDateiFehlend(row.postid, 'storage-scan');
-        missing++;
+        fehlend.push(row.postid);
       } else {
         errors++;
         appLog('WARN', 'storage-scan',
@@ -52,8 +53,12 @@ export async function scanForMissingFiles(onProgress) {
     }
   }
 
-  appLog('INFO', 'storage-scan',
-    `Fehlende-Dateien-Scan abgeschlossen — geprüft: ${checked}, fehlend markiert: ${missing}, übersprungen: ${errors}`);
+  const zurueckgehalten = await loeseFehlendeOderHalte(fehlend, checked, 'storage-scan');
+  const missing = fehlend.length - zurueckgehalten;
 
-  return { total, checked, missing, errors };
+  appLog('INFO', 'storage-scan',
+    `Fehlende-Dateien-Scan abgeschlossen — geprüft: ${checked}, fehlend markiert: ${missing}, ` +
+    `zurückgehalten: ${zurueckgehalten}, übersprungen: ${errors}`);
+
+  return { total, checked, missing, zurueckgehalten, errors };
 }

@@ -4,6 +4,7 @@ import { uiLog } from '../log.js';
 import { loadDynamicSettings } from '../config.js';
 import { callLLM, resolveKlassenModell, parseJsonFromText, providerForRef } from '../lib/llm.js';
 import { runAkteOp, getAkteEmbeddingQueue, AkteServiceError } from '../service/akten-service.js';
+import { ohneSuchspalten } from '../lib/suchspalten.js';
 
 const router = Router();
 
@@ -154,6 +155,7 @@ router.get('/:akteid', async (req, res) => {
     // Capture has_embedding before stripping the vector (too large to send)
     const hasEmbedding = akte.embedding != null;
     delete akte.embedding;
+    ohneSuchspalten(akte);
     akte.has_embedding = hasEmbedding;
 
     // Dokumente mit Basisdaten und sort_order
@@ -204,7 +206,7 @@ router.get('/:akteid/snapshot', async (req, res) => {
     );
 
     res.json({
-      akte: akteResult.rows[0],
+      akte: ohneSuchspalten(akteResult.rows[0]),
       dokumente: dokResult.rows,
     });
   } catch (err) {
@@ -425,7 +427,11 @@ router.post('/:akteid/ki-vorschlag', async (req, res) => {
       const kiResult = await callLLM(
         kiCfg,
         userPrompt,
-        { maxTokens: 512, system: systemPrompt },
+        // Ohne maxTokens (Grenze des Providers, siehe MAX_TOKENS_OHNE_GRENZE):
+        // Neuere Modelle denken vor der Antwort, das lässt sich nicht überall
+        // abschalten. Mit 512 kam kein Text mehr an. Die Längenregeln im Prompt
+        // halten das JSON selbst kurz.
+        { system: systemPrompt },
         settings,
         { username: req.session?.username || null, kategorie: 'akte_vorschlag', entity: 'akte', entityId: akteid }
       );

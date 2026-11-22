@@ -72,6 +72,7 @@ const UNTERSEITEN = [
   [/^\/akten\/[^/]+/, 'Akte'],
   [/^\/analyse\/salden\/[^/]+/, 'Saldo'],
   [/^\/hilfe\/[^/]+/, 'Hilfe'],
+  [/^\/import\/eingang\/[^/]+/, 'Eingang'],
   [/^\/importwege/, 'Importwege'],
 ];
 

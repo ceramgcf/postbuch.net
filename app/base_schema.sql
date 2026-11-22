@@ -1123,6 +1123,11 @@ CREATE TABLE IF NOT EXISTS postbuch.erstattungsbescheid_einzelposition (
     PRIMARY KEY (postid, subid)
 );
 
+-- Manuelles Anlegen und Löschen vergibt Positionsnummern nur einmal.
+-- Offene Zuordnungsdialoge und Rückgängig-Aktionen referenzieren diese Nummer.
+ALTER TABLE postbuch.erstattungsbescheid
+    ADD COLUMN IF NOT EXISTS letzte_manuelle_positionsnummer integer NOT NULL DEFAULT 0;
+
 -- Erstattungsbescheid-Kürzung (abhängig von erstattungsbescheid_einzelposition + arztrechnung_einzelposition)
 
 CREATE TABLE IF NOT EXISTS postbuch.erstattungsbescheid_kuerzung (
@@ -1597,6 +1602,28 @@ CREATE TABLE IF NOT EXISTS postbuch._pipeline_suspensions (
 CREATE INDEX IF NOT EXISTS pipeline_suspensions_idx_expires
     ON postbuch._pipeline_suspensions (expires_at);
 
+-- Begründung des Duplikatverdachts (voller Ankertreffer oder KI-Urteil),
+-- angezeigt in der Vergleichsansicht alt/neu.
+ALTER TABLE postbuch._pipeline_suspensions
+    ADD COLUMN IF NOT EXISTS begruendung text;
+
+-- Duplikatverdacht: Nach Fristende werden seit dieser Umstellung beide
+-- Dokumente behalten, die Frist beträgt 7 Tage statt 60 Minuten. Einmalig
+-- (Marker) wird der alte Standardwert 60 angehoben; ein bewusst anders
+-- gesetzter Wert bleibt. Bei einer Neuinstallation fehlt der Schlüssel noch,
+-- dann setzt seed-settings.js den neuen Standard.
+WITH marker AS (
+  INSERT INTO postbuch._settings (key, value, updated_at)
+  VALUES ('duplicate_timeout_umgestellt', 'true'::jsonb, now())
+  ON CONFLICT (key) DO NOTHING
+  RETURNING key
+)
+UPDATE postbuch._settings
+   SET value = '10080'::jsonb, updated_at = now()
+ WHERE key = 'duplicate_decision_timeout_min'
+   AND value IN ('60'::jsonb, '"60"'::jsonb)
+   AND EXISTS (SELECT 1 FROM marker);
+
 CREATE TABLE IF NOT EXISTS postbuch._failed_documents (
     onedrive_id     text PRIMARY KEY,
     failed_filename text NOT NULL,
@@ -1608,8 +1635,13 @@ CREATE TABLE IF NOT EXISTS postbuch._failed_documents (
     betreff         text,
     document_type   text,
     storage_id text,
-    storage_backend text NOT NULL DEFAULT 'onedrive'
+    storage_backend text NOT NULL DEFAULT 'onedrive',
+    original_filename text
 );
+
+-- Name des Eingangs vor der Umbenennung nach FAILED_<Zeit>.pdf.
+ALTER TABLE postbuch._failed_documents
+    ADD COLUMN IF NOT EXISTS original_filename text;
 
 -- Crashfeste Brücke zwischen externem Datei-Move und dem nicht atomar damit
 -- koppelbaren Postgres-Insert. Ein Eintrag entsteht VOR jeder destruktiven
@@ -1696,6 +1728,30 @@ INSERT INTO postbuch._settings (key, value, updated_at)
   VALUES ('storage_backend', '"onedrive"'::jsonb, now())
   ON CONFLICT (key) DO NOTHING;
 
+-- Lokale Ablage (lib/storage/lokal.js): stabile IDs für Dateien und Ordner in
+-- einem Ordner auf dem eigenen Rechner. Die Tabelle spiegelt den Ordner und
+-- wird bei jedem Auflisten mit ihm abgeglichen; der Pfad ergibt sich aus der
+-- Elternkette. Genau eine Wurzelzeile (parent_id NULL, name '').
+-- Eindeutig ohne Beachtung der Groß-/Kleinschreibung, weil Windows-Ordner
+-- „a.pdf“ und „A.pdf“ nicht unterscheiden. ON CONFLICT muss das WHERE-Prädikat
+-- des partiellen Index wiederholen (sonst 42P10).
+CREATE TABLE IF NOT EXISTS postbuch._ablage_lokal (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    parent_id   uuid REFERENCES postbuch._ablage_lokal(id) ON DELETE CASCADE,
+    name        text NOT NULL,
+    ist_ordner  boolean NOT NULL,
+    groesse     bigint,
+    mtime       timestamptz,
+    sha256      text,
+    verwaist    boolean NOT NULL DEFAULT false,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ablage_lokal_uq_name
+    ON postbuch._ablage_lokal (parent_id, lower(name)) NULLS NOT DISTINCT WHERE NOT verwaist;
+CREATE INDEX IF NOT EXISTS ablage_lokal_idx_parent
+    ON postbuch._ablage_lokal (parent_id);
+
 -- Salden-Quellen (freies SQL, ob an ein Dokument gebunden ["statisch"] oder über
 -- eine ganze Dokumentklasse ["dynamisch"] — beide Typen sind reines Freitext-SQL,
 -- der Unterschied ist rein deklarativ) sind ein undokumentiertes Experten-Feature
@@ -1741,6 +1797,80 @@ CREATE TABLE IF NOT EXISTS postbuch._scan_retry_queue (
   last_error        text,
   status            text NOT NULL DEFAULT 'pending',
   CONSTRAINT scan_retry_status_ck CHECK (status IN ('pending', 'manual_only'))
+);
+
+-- Angenommene Pipeline-Aufträge, die einen Neustart überstehen müssen:
+-- Uploads/Scans, deren PDF erst im lokalen Puffer liegt (puffer_job_id), und
+-- zurückgestellte Aufträge (status 'wartet'), deren KI-Dienst nicht erreichbar
+-- war. Die Zeile verschwindet, sobald die Pipeline den Auftrag abschließt,
+-- scheitern lässt oder er abgebrochen wird. eingang enthält den Pipeline-Input
+-- ohne PDF-Buffer.
+CREATE TABLE IF NOT EXISTS postbuch._pipeline_auftrag (
+  job_id          uuid PRIMARY KEY,
+  label           text NOT NULL,
+  step_offset     int NOT NULL DEFAULT 0,
+  eingang         jsonb NOT NULL,
+  puffer_job_id   uuid,
+  status          text NOT NULL DEFAULT 'eingereiht',
+  versuch         int NOT NULL DEFAULT 0,
+  faellig_ab      timestamptz,
+  letzter_fehler  text,
+  erstellt_am     timestamptz NOT NULL DEFAULT now(),
+  geaendert_am    timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT pipeline_auftrag_status_ck CHECK (status IN ('eingereiht', 'wartet'))
+);
+
+-- Briefstapel (service/stapel.js): Ein Einzugslauf mit mehreren Briefen. Der
+-- Scanner schreibt je Blatt eine Datei (adf_*_batch_stapel-<id>_<seq>v<n>.pdf);
+-- die App sammelt die bereinigten Blätter unter /data/scan_buffer/stapel/<id>/
+-- und teilt sie nach Vorschlag der KI und Prüfung im Eingang in Dokumente auf.
+-- Ein verworfener Stapel wird gelöscht; erledigte Zeilen bleiben 30 Tage, damit
+-- ein verspätetes Blatt nicht still einen neuen Stapel eröffnet.
+CREATE TABLE IF NOT EXISTS postbuch._stapel (
+  id               uuid PRIMARY KEY,
+  status           text NOT NULL DEFAULT 'liest_ein',
+  duplex           boolean NOT NULL DEFAULT true,
+  blaetter_n       int,
+  hinweis          text,
+  vorschlag        jsonb,
+  entscheidung     jsonb,
+  automatisch_ab   timestamptz,
+  letzter_fehler   text,
+  letztes_blatt_am timestamptz,
+  erstellt_am      timestamptz NOT NULL DEFAULT now(),
+  geaendert_am     timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT stapel_status_ck CHECK (status IN ('liest_ein', 'vorschlag', 'wartet', 'teilt_auf', 'erledigt')),
+  CONSTRAINT stapel_blaetter_ck CHECK (blaetter_n IS NULL OR blaetter_n BETWEEN 1 AND 200)
+);
+-- Herkunft: 'einzug' (Scanner, Blätter über den Cleaner) oder 'upload'
+-- (eine hochgeladene PDF, jede Seite ein Blatt, ohne Cleaner).
+ALTER TABLE postbuch._stapel ADD COLUMN IF NOT EXISTS quelle text NOT NULL DEFAULT 'einzug'
+  CONSTRAINT stapel_quelle_ck CHECK (quelle IN ('einzug', 'upload'));
+
+-- Ein Blatt je Zeile, weil Anmeldung, Eingang, Leer-Meldung und Ruhezeit
+-- gleichzeitig schreiben. kennung ist die Job-ID, die der Cleaner beim
+-- scan-registered bekommt; meldet er das Blatt nach einem Fehler neu an,
+-- ersetzt die neue Kennung die alte.
+CREATE TABLE IF NOT EXISTS postbuch._stapel_blatt (
+  stapel_id  uuid NOT NULL REFERENCES postbuch._stapel(id) ON DELETE CASCADE,
+  seq        int  NOT NULL,
+  kennung    uuid NOT NULL,
+  zustand    text NOT NULL DEFAULT 'angemeldet',
+  seiten     int,
+  PRIMARY KEY (stapel_id, seq),
+  CONSTRAINT stapel_blatt_zustand_ck CHECK (zustand IN ('angemeldet', 'da', 'leer'))
+);
+CREATE INDEX IF NOT EXISTS stapel_blatt_idx_kennung ON postbuch._stapel_blatt (kennung);
+
+-- Die beim Aufteilen entstandenen Dokumente. Die Zeile entsteht vor dem
+-- Einreihen; eingereiht wird erst gesetzt, wenn der Pipeline-Auftrag dauerhaft
+-- gesichert ist. So setzt ein Neustart das Aufteilen ohne Doppel fort.
+CREATE TABLE IF NOT EXISTS postbuch._stapel_teil (
+  stapel_id  uuid NOT NULL REFERENCES postbuch._stapel(id) ON DELETE CASCADE,
+  nr         int  NOT NULL,
+  job_id     uuid NOT NULL,
+  eingereiht boolean NOT NULL DEFAULT false,
+  PRIMARY KEY (stapel_id, nr)
 );
 
 -- ══════════════════════════════════════════════════════════════════
@@ -2059,7 +2189,7 @@ CREATE INDEX IF NOT EXISTS storage_migration_items_idx_postid
 -- ============================================================================
 -- Beihilfe-Kürzungsworkflow: "Gesehen"-Status, Rechnungszuordnung offen,
 -- PKV-Prüfvormerkung samt gehärteter Abrechnungssession (Plan siehe
--- internaldocs/FEATURE_KUERZUNGEN_GESEHEN_PKV_PRUEFUNG_PLAN.md).
+-- internaldocs/archiv/FEATURE_KUERZUNGEN_GESEHEN_PKV_PRUEFUNG_PLAN.md).
 -- ============================================================================
 
 -- "Gesehen"-Status: instanzweit, nicht pro Nutzer. Rein informativ – hat für
@@ -2434,7 +2564,7 @@ CREATE OR REPLACE TRIGGER tg_block_kuerzung_write_during_session
     FOR EACH ROW EXECUTE FUNCTION postbuch.fn_block_kuerzung_write_during_session();
 
 -- ============================================================================
--- Kostenträger-Profile (Plan siehe internaldocs/FEATURE_KOSTENTRAEGER_PROFILE.md)
+-- Kostenträger-Profile (Plan siehe internaldocs/archiv/FEATURE_KOSTENTRAEGER_PROFILE.md)
 -- Beschreiben rein deskriptiv bekannte Absender-Layouts für den generischen
 -- EB-Parse-Prompt. Ein Profil erweitert/übersteuert nie das Zielmodell.
 -- ============================================================================
@@ -2499,7 +2629,7 @@ END $$;
 
 -- ============================================================================
 -- Rechnungsteile und QR-Codes
--- (Plan siehe internaldocs/FEATURE_RECHNUNGSTEILE_UND_QRCODES.md)
+-- (Plan siehe internaldocs/plaene/FEATURE_RECHNUNGSTEILE_UND_QRCODES.md)
 -- ============================================================================
 
 -- Schritt I — QR-Codes: lokal ausgelesene QR-Codes eines Dokuments (GiroCode,
@@ -2674,3 +2804,49 @@ DO $$ BEGIN
       USING (key = ANY (string_to_array(current_setting('postbuch.backup_keys', true), ',')));
   END IF;
 END $$;
+
+-- ============================================================================
+-- Wortsuche (service/suche.js)
+-- ============================================================================
+-- Suchtext und Wortstämme je Dokument und Akte als gespeicherte Spalten mit
+-- Indizes, damit die Suche nicht bei jeder Anfrage den Text aller Einträge neu
+-- zerlegt: Wortstämme über tsvector, Wortteile („versicherung“ in
+-- „Hausratversicherung“) über Trigramme. Der Suchtext ist kleingeschrieben,
+-- die Suche vergleicht ihn mit LIKE und kleingeschriebenen Mustern.
+-- PostgreSQL rechnet gespeicherte Spalten bei geänderter Funktion nicht nach.
+-- Sollen andere Felder in den Suchtext, deshalb neue Funktionen und Spalten
+-- unter neuem Namen anlegen statt die bestehenden zu ändern.
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA postbuch;
+
+CREATE OR REPLACE FUNCTION postbuch.suchtext_dokument(
+    betreff text, zusammenfassung text, kontakt text, schlagwoerter text[],
+    fremdes_zeichen text, notiz text) RETURNS text
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE
+    AS $$
+  SELECT lower(concat_ws(' ', betreff, zusammenfassung, kontakt,
+                         array_to_string(schlagwoerter, ' '), fremdes_zeichen, notiz))
+$$;
+
+CREATE OR REPLACE FUNCTION postbuch.suchtext_akte(
+    betreff text, beschreibung text, schlagwoerter text[]) RETURNS text
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE
+    AS $$
+  SELECT lower(concat_ws(' ', betreff, beschreibung, array_to_string(schlagwoerter, ' ')))
+$$;
+
+-- Bestandsdatenbanken schreibt das einmal neu (beide Spalten in einem Schritt).
+ALTER TABLE postbuch.postbuch
+    ADD COLUMN IF NOT EXISTS suchtext text GENERATED ALWAYS AS (postbuch.suchtext_dokument(
+        betreff, zusammenfassung, kontakt, schlagwoerter, fremdes_zeichen, notiz)) STORED,
+    ADD COLUMN IF NOT EXISTS suchvektor tsvector GENERATED ALWAYS AS (to_tsvector('german'::regconfig,
+        postbuch.suchtext_dokument(betreff, zusammenfassung, kontakt, schlagwoerter, fremdes_zeichen, notiz))) STORED;
+ALTER TABLE postbuch.akte
+    ADD COLUMN IF NOT EXISTS suchtext text GENERATED ALWAYS AS (postbuch.suchtext_akte(
+        betreff, beschreibung, schlagwoerter)) STORED,
+    ADD COLUMN IF NOT EXISTS suchvektor tsvector GENERATED ALWAYS AS (to_tsvector('german'::regconfig,
+        postbuch.suchtext_akte(betreff, beschreibung, schlagwoerter))) STORED;
+
+CREATE INDEX IF NOT EXISTS postbuch_idx_suchvektor ON postbuch.postbuch USING gin (suchvektor);
+CREATE INDEX IF NOT EXISTS postbuch_idx_suchtext_trgm ON postbuch.postbuch USING gin (suchtext postbuch.gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS postbuch_idx_akte_suchvektor ON postbuch.akte USING gin (suchvektor);
+CREATE INDEX IF NOT EXISTS postbuch_idx_akte_suchtext_trgm ON postbuch.akte USING gin (suchtext postbuch.gin_trgm_ops);

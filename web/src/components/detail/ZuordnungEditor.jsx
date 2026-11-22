@@ -14,10 +14,10 @@ import { DocumentPicker } from './DocumentPicker';
 // (ganzen) Arztrechnung. Zeigt den aktuellen Link mit Lösen-/Ändern-Aktion.
 // Ist keine Rechnung zugeordnet, kann die Position stattdessen als "ohne
 // Rechnungsbezug" geprüft/markiert werden (Abschnitt 8.6 des Featureplans).
-export function ZuordnungEditor({ ebPostid, ep }) {
+export function ZuordnungEditor({ ebPostid, ep, gesperrt = false }) {
   const location = useLocation();
   const { canWrite } = useAuth();
-  const { mutate, mutateAsync, isPending } = useSetErstattungZuordnung();
+  const { mutate, mutateAsync, isPending, error, reset } = useSetErstattungZuordnung();
   const { mutate: setOhneBezug, mutateAsync: setOhneBezugAsync, isPending: ohneBezugPending } = useSetOhneRechnungsbezug();
   const { pushAction } = useUndoHistory();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -25,6 +25,16 @@ export function ZuordnungEditor({ ebPostid, ep }) {
 
   const arzPostid = ep.arz_postid;
   const ohneBezugBestaetigt = !!ep.ohne_rechnungsbezug_bestaetigt_am;
+
+  function oeffneAuswahl() {
+    reset();
+    setPickerOpen(true);
+  }
+
+  function oeffneLoesen() {
+    reset();
+    setConfirmDetach(true);
+  }
 
   function assign(arzToken) {
     const oldArzPostid = arzPostid ?? null;
@@ -84,11 +94,11 @@ export function ZuordnungEditor({ ebPostid, ep }) {
           >
             → {arzPostid}{ep.arz_betreff ? ` (${ep.arz_betreff})` : ''}
           </Link>
-          {canWrite && (
+          {canWrite && !gesperrt && (
             <>
               <button
                 type="button"
-                onClick={() => setPickerOpen(true)}
+                onClick={oeffneAuswahl}
                 disabled={isPending}
                 title="Rechnung ändern"
                 className="text-muted-foreground/40 hover:text-primary transition-colors disabled:opacity-40"
@@ -97,7 +107,7 @@ export function ZuordnungEditor({ ebPostid, ep }) {
               </button>
               <button
                 type="button"
-                onClick={() => setConfirmDetach(true)}
+                onClick={oeffneLoesen}
                 disabled={isPending}
                 title="Zuordnung lösen"
                 className="text-destructive/40 hover:text-destructive transition-colors disabled:opacity-40"
@@ -112,9 +122,9 @@ export function ZuordnungEditor({ ebPostid, ep }) {
           <Badge variant="outline" className="text-slate-600 border-slate-200 bg-slate-50">
             Geprüft · ohne Rechnungsbezug
           </Badge>
-          {canWrite && (
+          {canWrite && !gesperrt && (
             <>
-              <Button size="sm" variant="ghost" onClick={() => setPickerOpen(true)} disabled={isPending || ohneBezugPending}
+              <Button size="sm" variant="ghost" onClick={oeffneAuswahl} disabled={isPending || ohneBezugPending}
                 className="h-6 px-2 text-xs gap-1 text-green-600/70 hover:text-green-600">
                 <Plus className="h-3.5 w-3.5" />Doch Rechnung zuordnen
               </Button>
@@ -131,9 +141,9 @@ export function ZuordnungEditor({ ebPostid, ep }) {
           <span className="inline-flex items-center gap-1 whitespace-nowrap text-orange-700">
             <AlertTriangle className="h-3.5 w-3.5" />Keine Rechnung zugeordnet
           </span>
-          {canWrite && (
+          {canWrite && !gesperrt && (
             <>
-              <Button size="sm" variant="ghost" onClick={() => setPickerOpen(true)} disabled={isPending || ohneBezugPending}
+              <Button size="sm" variant="ghost" onClick={oeffneAuswahl} disabled={isPending || ohneBezugPending}
                 className="h-6 px-2 text-xs gap-1 text-green-600/70 hover:text-green-600">
                 <Plus className="h-3.5 w-3.5" />Rechnung zuordnen
               </Button>
@@ -153,17 +163,19 @@ export function ZuordnungEditor({ ebPostid, ep }) {
         onOpenChange={setPickerOpen}
         arten={ARZTRECHNUNG_ARTEN}
         title={`Rechnung für Position ${ep.subid} zuordnen`}
-        description="Arztrechnung suchen oder SymLink (Postnummer) einfügen."
+        description="Arztrechnung suchen oder SymLink (Postnummer) einfügen. Die Zuordnung kann eine eingereichte Abrechnungsperiode abschließen."
         onSelect={assign}
         isPending={isPending}
+        fehler={error?.message}
       />
 
       <Dialog open={confirmDetach} onOpenChange={setConfirmDetach} size="sm">
         <DialogTitle>Zuordnung lösen?</DialogTitle>
         <DialogDescription>
           Die Verknüpfung von Position {ep.subid} zu Rechnung {arzPostid} wird entfernt.
-          Zugehörige Kürzungen verlieren dabei ihren Positions-Bezug.
+          Zugehörige Kürzungen verlieren dabei ihren Positions-Bezug. Betroffene Abrechnungsperioden werden neu bewertet.
         </DialogDescription>
+        {error && <p role="alert" className="mt-3 text-sm text-destructive">{error.message}</p>}
         <DialogFooter>
           <Button variant="ghost" size="sm" onClick={() => setConfirmDetach(false)} disabled={isPending}>Abbrechen</Button>
           <Button variant="destructive" size="sm" onClick={detach} disabled={isPending}>

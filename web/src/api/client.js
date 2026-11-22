@@ -96,6 +96,13 @@ export const api = {
       return request(`/postbuch?${new URLSearchParams(cleaned)}`);
     },
     get: (postid) => request(`/postbuch/${postid}`),
+    dateiname: {
+      get: (postid) => request(`/postbuch/${postid}/dateiname`),
+      aendern: (postid, stamm) => request(`/postbuch/${postid}/dateiname`, {
+        method: 'PUT',
+        body: JSON.stringify({ stamm }),
+      }),
+    },
     update: (postid, data) => request(`/postbuch/${postid}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
@@ -160,6 +167,14 @@ export const api = {
     deleteArztPosition: (postid, subid) => request(`/postbuch/${postid}/arztrechnung/positionen/${subid}`, {
       method: 'DELETE',
     }),
+    speichereBescheidkopf: (postid, data, neu) => request(`/postbuch/${postid}/erstattungsbescheid`, {
+      method: neu ? 'POST' : 'PATCH',
+      body: JSON.stringify(data),
+    }),
+    speichereBescheidposition: (postid, subid, data, loeschen) => request(
+      `/postbuch/${postid}/erstattungsbescheid/positionen${subid == null ? '' : `/${subid}`}`,
+      { method: loeschen ? 'DELETE' : subid == null ? 'POST' : 'PATCH', body: JSON.stringify(data) },
+    ),
     /**
      * EBP (Erstattungsbescheid-Position) einer ganzen Arztrechnung zuordnen/lösen. arzPostid=null löst.
      * restoreKuerzungenArzSubid: optionale [{kuerzung_id, arz_subid}]-Liste für den Undo-Pfad – stellt die
@@ -207,7 +222,12 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ bestaetigt }),
     }),
+    rechnungsblockAnlegen: (postid) => request(`/postbuch/${postid}/rechnungsblock`, { method: 'POST' }),
     updateGenRechnung: (postid, data) => request(`/postbuch/${postid}/generischerechnung`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+    updateArztbericht: (postid, data) => request(`/postbuch/${postid}/arztbericht`, {
       method: 'PATCH',
       body: JSON.stringify(data),
     }),
@@ -243,27 +263,18 @@ export const api = {
     }),
   },
   search: {
-    fulltext: (q, opts = {}) => {
+    /** Hybride Suche: Nummern-, wörtliche und inhaltliche Treffer in einer Liste. */
+    dokumente: (q, opts = {}) => {
       const params = new URLSearchParams({ q });
       if (opts.historisch) params.set('historisch', opts.historisch);
+      if (opts.offset) params.set('offset', String(opts.offset));
       return request(`/search?${params}`);
     },
-    semantic: (q, opts = {}) => {
+    akten: (q, opts = {}) => {
       const params = new URLSearchParams({ q });
       if (opts.historisch) params.set('historisch', opts.historisch);
       if (opts.offset) params.set('offset', String(opts.offset));
-      return request(`/search/semantic?${params}`);
-    },
-    aktenFulltext: (q, opts = {}) => {
-      const params = new URLSearchParams({ q });
-      if (opts.historisch) params.set('historisch', opts.historisch);
       return request(`/search/akten?${params}`);
-    },
-    aktenSemantic: (q, opts = {}) => {
-      const params = new URLSearchParams({ q });
-      if (opts.historisch) params.set('historisch', opts.historisch);
-      if (opts.offset) params.set('offset', String(opts.offset));
-      return request(`/search/akten/semantic?${params}`);
     },
     /** Leichtgewichtiges Autocomplete für #P/#A-Referenzen (Nummer oder Betreff/Kontakt).
      *  opts.arten (Array oder CSV) schränkt auf Dokument-Arten ein (dann keine Akten),
@@ -339,6 +350,12 @@ export const api = {
     upload: (filename, dataB64, hinweis, batchSize) => request('/import/upload', {
       method: 'POST',
       body: JSON.stringify({ filename, dataB64, ...(hinweis ? { hinweis } : {}), ...(batchSize > 1 ? { batchSize } : {}) }),
+    }),
+    // Modus „Stapel auftrennen“, genau eine PDF: mehrseitig → Dokumentenstapel ({ stapel }),
+    // einseitig → normal in die Pipeline ({ jobId }).
+    uploadStapel: (filename, dataB64, hinweis) => request('/import/upload-stapel', {
+      method: 'POST',
+      body: JSON.stringify({ filename, dataB64, ...(hinweis ? { hinweis } : {}) }),
     }),
     uploadMerged: (filename, files, hinweis) => request('/import/upload-merged', {
       method: 'POST',
@@ -586,8 +603,17 @@ export const api = {
     kanal:     (vorabversionen) => request('/updates/kanal', {
       method: 'PUT', body: JSON.stringify({ vorabversionen }),
     }),
-    hostconfig: (typ, wert, secret) => request('/updates/hostconfig', {
-      method: 'POST', body: JSON.stringify({ typ, wert, ...(secret ? { secret } : {}) }),
+    // bestaetigt: Rückfrage des Servers (409 bestaetigungNoetig) ist beantwortet.
+    // pfad: nur beim Auftrag `ablage` (neuer Ablageordner).
+    hostconfig: (typ, wert, secret, { bestaetigt, pfad } = {}) => request('/updates/hostconfig', {
+      method: 'POST',
+      body: JSON.stringify({
+        typ, wert, ...(secret ? { secret } : {}), ...(bestaetigt ? { bestaetigt: true } : {}), ...(pfad ? { pfad } : {}),
+      }),
+    }),
+    stack: () => request('/updates/stack'),
+    duckdnsNachfuehren: (an) => request('/updates/duckdns-nachfuehren', {
+      method: 'PUT', body: JSON.stringify({ an }),
     }),
     hostconfigBestaetigen: (nonce) => request('/updates/hostconfig/bestaetigen', {
       method: 'POST', body: JSON.stringify({ nonce }),
@@ -615,6 +641,8 @@ export const api = {
     ueberspringen: () => request('/einrichtung/ueberspringen', { method: 'POST' }),
     trotzdemAnsehen: () => request('/einrichtung/trotzdem-ansehen', { method: 'POST' }),
     oeffnen: () => request('/einrichtung/oeffnen', { method: 'POST' }),
+    nachRestoreEingeladen: () => request('/einrichtung/nach-restore/eingeladen', { method: 'POST' }),
+    nachRestoreErledigt: () => request('/einrichtung/nach-restore/erledigt', { method: 'POST' }),
   },
 
   scannerTuning: {
@@ -703,6 +731,8 @@ export const api = {
         set: (providerId, model, vorsilben) => request('/settings/ai/embedding', {
           method: 'PUT', body: JSON.stringify({ providerId, model, vorsilben }),
         }),
+        // Modelle des eingebauten Dienstes samt Zustand (bereit, Download, RAM).
+        eingebaut: () => request('/settings/ai/embedding/eingebaut'),
         vorsilbenVorschlag: (model) => request(
           `/settings/ai/embedding/vorsilben-vorschlag?model=${encodeURIComponent(model)}`,
         ),
@@ -904,6 +934,7 @@ export const api = {
     status: () => request('/settings/storage/status'),
     selftest: (backend) => request(`/settings/storage/${encodeURIComponent(backend)}/selftest`, { method: 'POST' }),
     freeSpace: (backend) => request(`/settings/storage/${encodeURIComponent(backend)}/free-space`),
+    lokalStatus: () => request('/settings/storage/lokal/status'),
   },
 
   // Dateiablage-Migration (Phase 4). Alle Endpunkte liegen unter /settings und sind
@@ -1089,6 +1120,35 @@ export const api = {
       body: JSON.stringify({ decision, token }),
       noRedirect: !!token,
     }),
+  },
+  // Offene Eingänge: angenommene PDFs, die noch kein Dokument sind.
+  eingang: {
+    list: () => request('/eingang'),
+    get: (schluessel) => request(`/eingang/${encodeURIComponent(schluessel)}`),
+    vorschauUrl: (schluessel) => `/api/eingang/${encodeURIComponent(schluessel)}/vorschau`,
+    pdfUrl: (schluessel) => `/api/eingang/${encodeURIComponent(schluessel)}/pdf`,
+    neuAusloesen: (schluessel) => request(`/eingang/${encodeURIComponent(schluessel)}/neu-ausloesen`, {
+      method: 'POST',
+    }),
+    manuellAblegen: (schluessel, angaben) => request(`/eingang/${encodeURIComponent(schluessel)}/manuell-ablegen`, {
+      method: 'POST',
+      body: JSON.stringify(angaben),
+    }),
+    verwerfen: (schluessel) => request(`/eingang/${encodeURIComponent(schluessel)}/verwerfen`, {
+      method: 'POST',
+    }),
+    stapel: {
+      get: (id) => request(`/eingang/stapel/${encodeURIComponent(id)}`),
+      seiteUrl: (id, seq, seite, gross = false) =>
+        `/api/eingang/stapel/${encodeURIComponent(id)}/seite/${seq}/${seite}${gross ? '?gross=1' : ''}`,
+      anhalten: (id) => request(`/eingang/stapel/${encodeURIComponent(id)}/anhalten`, { method: 'POST' }),
+      uebernehmen: (id, entscheidung) => request(`/eingang/stapel/${encodeURIComponent(id)}/uebernehmen`, {
+        method: 'POST',
+        body: JSON.stringify(entscheidung),
+      }),
+      neuVorschlagen: (id) => request(`/eingang/stapel/${encodeURIComponent(id)}/neu-vorschlagen`, { method: 'POST' }),
+      verwerfen: (id) => request(`/eingang/stapel/${encodeURIComponent(id)}/verwerfen`, { method: 'POST' }),
+    },
   },
   failedDocuments: {
     list: () => request('/postbuch/failed'),

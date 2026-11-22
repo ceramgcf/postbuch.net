@@ -41,6 +41,7 @@ import { loadDynamicSettings } from '../config.js';
 import { appLog } from '../app-log.js';
 import { buildCostMap, calculateCost, logLlmCall, getProvider } from './llm.js';
 import { fetchOpenAIEmbedding } from './llm/providers/openai.js';
+import { mitRessource, kiRessource, PRIO } from './ressourcen.js';
 
 /** Speicherbreite der halfvec-Spalten. Siehe Header. */
 export const STORAGE_DIM = 3072;
@@ -187,11 +188,28 @@ export async function embedText(inputText, settings = null, meta = null) {
   };
 
   let result;
-  try {
-    result = await fetchOpenAIEmbedding(cfg.model, mitVorsilbe(String(inputText), cfg, meta?.rolle), provider);
-  } catch (err) {
-    log(null, err);
-    throw err;
+  // Suchanfragen warten auf einen Menschen, der Hilfekorpus auf niemanden.
+  const kiRes = kiRessource(provider, s);
+  const prio = meta?.rolle === 'anfrage' ? PRIO.interaktiv
+    : meta?.entity === 'hilfe' ? PRIO.hintergrund : PRIO.verarbeitung;
+  let text = String(inputText);
+  for (let versuch = 0; ; versuch++) {
+    try {
+      result = await mitRessource(kiRes.name,
+        () => fetchOpenAIEmbedding(cfg.model, mitVorsilbe(text, cfg, meta?.rolle), provider),
+        { kapazitaet: kiRes.kapazitaet, prio });
+      break;
+    } catch (err) {
+      // Zu langer Text: hart kürzen und erneut versuchen, statt das Dokument
+      // ganz ohne Embedding zu lassen (lokale Server haben oft nur 512–1024 Token).
+      const kuerzer = versuch < MAX_KUERZUNGEN ? gekuerzterEmbeddingText(text, err) : null;
+      if (!kuerzer) {
+        log(null, err);
+        throw err;
+      }
+      console.warn(`[embedding] Text zu lang für ${cfg.model} (${text.length} Zeichen), gekürzt auf ${kuerzer.length}`);
+      text = kuerzer;
+    }
   }
 
   const vector = result.vektor;
@@ -206,6 +224,30 @@ export async function embedText(inputText, settings = null, meta = null) {
   log(result.usage, null);
 
   return { vector, literal: toVectorLiteral(vector), signature: signatureOf(cfg), cfg };
+}
+
+const MAX_KUERZUNGEN = 4;
+const ZU_LANG = /too (large|long)|maximum context|context (length|window)|exceed|token limit|input length|max(imum)?[ _-]?(input|tokens?)|batch size/i;
+
+/**
+ * Kürzt einen Embedding-Text, wenn der Server ihn als zu lang abgelehnt hat;
+ * sonst null. Nennt die Meldung zwei Tokenzahlen (verlangt und erlaubt, etwa
+ * llama.cpp „input (1085 tokens) … batch size: 1024" oder OpenAI „maximum
+ * context length is 8192 tokens, however you requested 9000"), wird im
+ * Verhältnis gekürzt, sonst halbiert. Hart am Zeichen abgeschnitten: Der Anfang
+ * (Datum, Art, Betreff, Kontakt) trägt das meiste, das Ende der Zusammenfassung
+ * am wenigsten.
+ */
+export function gekuerzterEmbeddingText(text, err) {
+  const meldung = String(err?.message || '');
+  if (!ZU_LANG.test(meldung) || text.length < 200) return null;
+  // Nur Tokenzahlen, keine HTTP-Statuscodes aus derselben Meldung.
+  const zahlen = [...meldung.matchAll(/(\d+)\s*tokens?|(?:size|length|limit)\D{0,12}(\d+)/gi)]
+    .map((m) => Number(m[1] ?? m[2])).filter((n) => n >= 64);
+  const groesste = Math.max(...zahlen);
+  const kleinste = Math.min(...zahlen);
+  const faktor = zahlen.length >= 2 && kleinste < groesste ? (kleinste / groesste) * 0.9 : 0.5;
+  return text.slice(0, Math.floor(text.length * Math.min(faktor, 0.9)));
 }
 
 /**

@@ -12,7 +12,7 @@ import pool from '../db.js';
 import { processErstattungsbescheid } from './erstattungsbescheid.js';
 import { appLog } from '../app-log.js';
 import { toDate, toNumeric, toStr } from '../lib/coerce.js';
-import { effektiveGruppe } from '../lib/taxonomie.js';
+import { effektiveGruppe, istPflichtRechnung } from '../lib/taxonomie.js';
 import * as tracker from '../jobs/tracker.js';
 import { ergaenzeErkannteZahlung } from './rechnung-zahlung.js';
 import { zieheNachBehandelterPerson } from './ablage-sollort.js';
@@ -203,7 +203,7 @@ export async function insert(postid, extractedData, client, korrekturAnweisung =
     throw new Error(`L×D-Einordnung fehlt für ${postid}`);
   }
 
-  const gruppe = await effektiveGruppe(extractedData.lebensbereich, extractedData.dokumentart);
+  const gruppe = await effektiveGruppe(extractedData.lebensbereich, extractedData.dokumentart, c);
   if (gruppe === 'arztrechnung') {
     await insertArztrechnung(postid, extractedData, c);
     return ergaenzeErkannteZahlung(c, postid);
@@ -220,7 +220,7 @@ export async function insert(postid, extractedData, client, korrekturAnweisung =
     return ergaenzeErkannteZahlung(c, postid);
   }
   if (gruppe === 'arztbericht') return insertArztbericht(postid, extractedData, c);
-  if (extractedData.istRechnung) {
+  if (extractedData.istRechnung || istPflichtRechnung(extractedData.dokumentart)) {
     await insertGenerischeRechnung(postid, extractedData, c);
     // Von der KI erkannte Zahlung („bereits bezahlt am …“) mit Betrag führen.
     return ergaenzeErkannteZahlung(c, postid);

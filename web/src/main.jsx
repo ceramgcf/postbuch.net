@@ -7,8 +7,12 @@ import { UndoHistoryProvider } from '@/hooks/useUndoHistory';
 import { AbrechnungLauncherProvider } from '@/hooks/useAbrechnungLauncher';
 import { PrinterProvider } from '@/contexts/PrinterContext';
 import { DarstellungProvider } from '@/hooks/useDarstellung';
+import { pwaInstallationBeobachten } from '@/lib/pwa-installation';
 import App from './App';
 import './index.css';
+
+// Vor dem ersten Rendern: beforeinstallprompt kommt früh und nur einmal.
+pwaInstallationBeobachten();
 
 const queryClient = new QueryClient({
   defaultOptions: {

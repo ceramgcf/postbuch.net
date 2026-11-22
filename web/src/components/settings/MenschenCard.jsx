@@ -78,6 +78,8 @@ export function MenschDialog({ mensch, open, onOpenChange, vorlage = null, onGes
   const qc = useQueryClient();
   const [form, setForm] = useState(() => ({ ...alsForm(mensch), ...(vorlage || {}) }));
   const [error, setError] = useState('');
+  // Abwählen von PKV/Beihilfe bei belegter Sammelperiode: Server verlangt Bestätigung.
+  const [kostentraegerWarnung, setKostentraegerWarnung] = useState(null);
   const istNeu = !mensch;
 
   const speichern = useMutation({
@@ -89,8 +91,20 @@ export function MenschDialog({ mensch, open, onOpenChange, vorlage = null, onGes
       qc.invalidateQueries({ queryKey: ['einrichtung'] });
       onOpenChange(false);
     },
-    onError: (err) => setError(err.message),
+    onError: (err, payload) => {
+      if (err.status === 409 && err.payload?.code === 'KOSTENTRAEGER_OFFENE_PERIODE') {
+        setKostentraegerWarnung({ payload, perioden: err.payload.perioden || [] });
+        return;
+      }
+      setError(err.message);
+    },
   });
+
+  function trotzdemSpeichern() {
+    const { payload } = kostentraegerWarnung;
+    setKostentraegerWarnung(null);
+    speichern.mutate({ ...payload, bestaetigt_kostentraeger_entfernen: true });
+  }
 
   function set(key, value) {
     setForm((alt) => ({ ...alt, [key]: value }));
@@ -99,6 +113,7 @@ export function MenschDialog({ mensch, open, onOpenChange, vorlage = null, onGes
   function submit(event) {
     event.preventDefault();
     setError('');
+    setKostentraegerWarnung(null);
     if (!form.kurzname.trim() || !form.anzeigename.trim()) {
       setError('Kurzname und Vollname sind erforderlich.');
       return;
@@ -232,10 +247,31 @@ export function MenschDialog({ mensch, open, onOpenChange, vorlage = null, onGes
         </div>}
 
         {error && <p className="text-sm font-medium text-destructive">{error}</p>}
-        <DialogFooter>
+        {kostentraegerWarnung ? (
+          <div role="alert" className="space-y-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+            <p className="font-medium">Offene Abrechnungsperiode vorhanden</p>
+            <ul className="list-disc space-y-0.5 pl-5">
+              {kostentraegerWarnung.perioden.map((p) => (
+                <li key={`${p.kostentraeger}-${p.periode}`}>
+                  {p.kostentraeger}, Periode {p.periode}: {p.rechnungen} {p.rechnungen === 1 ? 'Rechnung' : 'Rechnungen'}
+                  {p.vormerkungen > 0 && `, ${p.vormerkungen} ${p.vormerkungen === 1 ? 'Vormerkung' : 'Vormerkungen'}`}
+                </li>
+              ))}
+            </ul>
+            <p>
+              Die Periode bleibt bestehen und kann weiter eingereicht werden. Neue Rechnungen werden ihr aber nicht mehr
+              automatisch zugeordnet, und nach dem Einreichen entsteht keine neue Sammelperiode. Bescheide zu
+              eingereichten Perioden werden weiterhin erkannt.
+            </p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button type="button" variant="outline" onClick={() => setKostentraegerWarnung(null)} disabled={speichern.isPending}>Zurück</Button>
+              <Button type="button" onClick={trotzdemSpeichern} disabled={speichern.isPending}>Trotzdem speichern</Button>
+            </div>
+          </div>
+        ) : <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={speichern.isPending}>Abbrechen</Button>
           <Button type="submit" disabled={speichern.isPending}>{speichern.isPending ? 'Speichere…' : 'Speichern'}</Button>
-        </DialogFooter>
+        </DialogFooter>}
       </form>
     </Dialog>
   );
@@ -344,7 +380,10 @@ function MenschZeile({ mensch }) {
 
 // Admin schreibt die Zwei-Faktor-Anmeldung für alle Zugänge vor. Der Server
 // lehnt das Einschalten ab, solange der Admin selbst keinen Faktor hat.
-function ZweiFaktorPflicht() {
+// Im Assistenten nur, wenn der Admin schon einen Faktor hat oder die Pflicht
+// bereits gilt: Einrichten lässt sich der eigene Faktor dort nicht, der
+// Schalter wäre eine Sackgasse.
+function ZweiFaktorPflicht({ eingebettet = false }) {
   const qc = useQueryClient();
   const { data: status } = useQuery({ queryKey: ['zweiter-faktor'], queryFn: () => api.zweiterFaktor.status() });
   const setzen = useMutation({
@@ -352,6 +391,7 @@ function ZweiFaktorPflicht() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['zweiter-faktor'] }),
   });
   if (!status) return null;
+  if (eingebettet && !status.aktiv && !status.pflicht) return null;
   return (
     <div className="mb-4 rounded-md border p-3">
       <div className="flex items-center justify-between gap-3">
@@ -383,7 +423,7 @@ export default function MenschenCard({ eingebettet = false }) {
         <div><p className="flex items-center gap-2 text-sm font-medium"><ShieldCheck className="h-4 w-4" />Systemzugang admin</p><p className="mt-1 text-xs text-muted-foreground">Kein Personen-Datensatz. Das Adminpasswort wird auf dem Server über den Installer geändert.</p></div>
         <Badge variant="outline">Systemzugang</Badge>
       </div>
-      <ZweiFaktorPflicht />
+      <ZweiFaktorPflicht eingebettet={eingebettet} />
       <Button size="sm" onClick={() => setAnlegen(true)}><UserPlus className="mr-1.5 h-4 w-4" />Mensch oder Tier anlegen</Button>
       {isLoading ? <p className="py-5 text-sm text-muted-foreground"><Spinner className="mr-2 inline h-4 w-4" />Lade Personen…</p>
         : isError ? <p className="py-5 text-sm text-destructive">{error.message}</p>

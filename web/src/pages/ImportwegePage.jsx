@@ -26,7 +26,7 @@ import {
  * niemandem, der die Datei gerade wirklich ablegen will.
  */
 
-const BACKEND_LABEL = { onedrive: 'OneDrive', nextcloud: 'WebDAV-Speicher' };
+const BACKEND_LABEL = { onedrive: 'OneDrive', nextcloud: 'WebDAV-Speicher', lokal: 'deinem Ablageordner' };
 
 function Pfad({ children }) {
   return <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-[0.85em] break-all">{children}</code>;

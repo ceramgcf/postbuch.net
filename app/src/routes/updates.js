@@ -13,6 +13,7 @@
  *   GET  /api/updates/log        → Log-Schwanz des Agenten als text/plain
  *   POST /api/updates/hostconfig → Hostauftrag (Modul, Port, DuckDNS, Freigabe …)
  *   POST /api/updates/hostconfig/bestaetigen → „Oberfläche nur über HTTPS“ quittieren
+ *   PUT  /api/updates/duckdns-nachfuehren → DuckDNS-Adresse nachführen an/aus
  *
  * **Die App führt nichts aus.** Sie schreibt eine Anforderungsdatei; ausgeführt
  * wird ausschließlich vom Host-Agenten. Ohne Agenten gibt es hier keinen
@@ -30,8 +31,9 @@ import {
 import { signaturKonfiguriert, signaturText, SIGNATUR_STATUS } from '../lib/release-signatur.js';
 import {
   leseAgentStatus, leseAnforderung, schreibeAnforderung, entferneAnforderung,
+  leseWindowsFirewall,
   leseLaufStatus, leseLogTail, laufAktiv, schreibeHostAnforderung,
-  schreibeWebBestaetigung,
+  schreibeWebBestaetigung, leseDuckdnsNachfuehren, setzeDuckdnsNachfuehren,
 } from '../lib/update-agent-datei.js';
 import {
   istNeuer, semver, hatFeedQuelle, feedQuelleFingerprint, githubQuelle,
@@ -39,7 +41,13 @@ import {
 import db from '../db.js';
 import { loadDynamicSettings } from '../config.js';
 import { embeddingConfig } from '../lib/embedding.js';
+import { klassenAufLokalerKi } from '../lib/llm.js';
+import { stackModulWerte, stackZusammenfuehren } from '../lib/stack-dienste.js';
+import { lokalenProviderAbgleichen } from '../service/lokalki-provider.js';
+import { lokalkiEignung } from '../lib/llm/lokal-modelle.js';
 import { EINGEBAUTES_EMBEDDING } from '../lib/embedding-eingebaut.js';
+import { pruefeOrdnerEingabe } from '../lib/storage/lokal.js';
+import { umzugSperrtOrdnerwechsel } from '../service/storage-migration.js';
 
 const router = Router();
 
@@ -47,7 +55,16 @@ const router = Router();
 const FREIGABE_WERTE = ['scanner:lan', 'scanner:lokal', 'web:lan', 'web:lokal'];
 
 /** Compose-Profile, die der Host-Agent ein- und ausschalten kann. */
-const MODULE_WERTE = ['scanner:an', 'scanner:aus', 'embedding:an', 'embedding:aus'];
+// Alle Schalter des Reiters „Stack“ (Register in lib/stack-dienste.js).
+const MODULE_WERTE = stackModulWerte();
+
+/** Capability, die ein Agent für einen module-Wert melden muss. */
+function moduleCapability(wert) {
+  if (wert.endsWith(':entfernen')) return 'entfernen';
+  if (wert.startsWith('lokalki:')) return 'lokalki';
+  if (wert.startsWith('embedding:')) return 'embedding';
+  return 'module';
+}
 
 /**
  * Der Fallback für Instanzen ohne Agenten. Konstanter String — NIE aus dem
@@ -198,7 +215,14 @@ async function gesamtbild() {
       embeddingProfilAktiv: agent.embeddingProfilAktiv,
       freigaben: agent.freigaben,
       webBestaetigungBis: agent.webBestaetigungBis,
+      duckdnsIp: agent.duckdnsIp,
+      // Läuft Caddy? null = der Agent meldet keinen Stack (ältere Version).
+      httpsAktiv: agent.stack
+        ? agent.stack.dienste.some((d) => d.name === 'postbuch-caddy' && d.zustand === 'running')
+        : null,
+      duckdnsNachfuehren: await leseDuckdnsNachfuehren().catch(() => true),
     },
+    windowsFirewall: await leseWindowsFirewall(),
     // Eine geschriebene, aber noch nicht abgeholte Anforderung ist ein eigener
     // Zustand: die GUI zeigt „warte auf den Agenten" statt eines Fortschritts,
     // und nach 3 Minuten „nicht abgeholt" mit der Möglichkeit zurückzunehmen.
@@ -219,6 +243,8 @@ async function gesamtbild() {
       beendetAm: lauf.beendetAm,
       exitCode: lauf.exitCode,
       meldung: lauf.meldung,
+      fortschrittBytes: lauf.fortschrittBytes,
+      gesamtBytes: lauf.gesamtBytes,
     } : null,
     datenbank,
     kopierbefehl: kopierbefehl(vorab, verfuegbar,
@@ -233,6 +259,39 @@ router.get('/', async (_req, res) => {
     res.json(await gesamtbild());
   } catch (err) {
     console.error('[updates] GET fehlgeschlagen:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/updates/stack ───────────────────────────────────────────────────
+// Dienste für den Reiter „Stack“: Register + Heartbeat des Host-Agenten, dazu
+// GPU, freier Platz und die Modellklassen, die auf der lokalen KI liegen.
+
+router.get('/stack', async (_req, res) => {
+  try {
+    const agent = await leseAgentStatus();
+    const stack = agent.vorhanden ? agent.stack : null;
+    // Gleich hier abgleichen: wer die lokale KI eben eingeschaltet hat, soll
+    // den Provider nicht erst nach dem nächsten Job-Lauf auswählen können.
+    await lokalenProviderAbgleichen(agent).catch(() => {});
+    res.json({
+      agent: {
+        vorhanden: agent.vorhanden,
+        letzterLaufAm: agent.letzterLaufAm,
+        stackFaehig: agent.vorhanden && agent.capabilities.includes('stack'),
+        capabilities: agent.capabilities,
+      },
+      dienste: stackZusammenfuehren(stack, {
+        embedding: agent.embeddingProfilAktiv,
+        scanner: agent.scannerProfilAktiv,
+      }),
+      gpu: stack?.gpu ?? null,
+      platteFreiBytes: stack?.platteFreiBytes ?? null,
+      lokalkiEignung: lokalkiEignung(stack),
+      klassenAufLokalerKi: klassenAufLokalerKi(await loadDynamicSettings()),
+    });
+  } catch (err) {
+    console.error('[updates] GET /stack fehlgeschlagen:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -345,18 +404,35 @@ router.post('/hostconfig', async (req, res) => {
     const wert = String(req.body?.wert || '');
     // Das Embedding-Profil kennt erst ein Agent, der es meldet; ein älterer
     // Agent würde den Auftrag sonst annehmen und am unbekannten Wert scheitern.
-    const capability = typ === 'module' && wert.startsWith('embedding:')
-      ? 'embedding'
-      : (['module', 'port', 'freigabe'].includes(typ) ? typ : 'netzwerk');
+    const capability = typ === 'module'
+      ? moduleCapability(wert)
+      : (['port', 'freigabe', 'ablage'].includes(typ) ? typ : 'netzwerk');
     if (typ === 'module') {
       if (!MODULE_WERTE.includes(wert)) return res.status(400).json({ error: 'Unbekanntes Modul.' });
       // Den Dienst abzuschalten, auf dem die Suche gerade läuft, legte sie
       // lahm. Maßgeblich ist die gespeicherte Wahl, nicht die Angabe des Clients.
-      if (wert === 'embedding:aus'
+      if ((wert === 'embedding:aus' || wert === 'embedding:entfernen')
         && embeddingConfig(await loadDynamicSettings()).providerId === EINGEBAUTES_EMBEDDING.providerId) {
         return res.status(409).json({
           error: 'Der eingebaute Dienst ist für die Embeddings gewählt. Zuerst einen anderen Dienst wählen.',
         });
+      }
+      // Lokale KI nur mit genug Speicher und Platz (prüft auch der Agent).
+      if (wert === 'lokalki:an') {
+        const eignung = lokalkiEignung(agent.vorhanden ? agent.stack : null);
+        if (eignung?.sperrgrund) return res.status(409).json({ error: eignung.sperrgrund });
+      }
+      // Lokale KI abschalten, während Modellklassen auf sie zeigen, ist erlaubt
+      // (z. B. Umstieg auf API-Key in Etappen), aber nur ausdrücklich bestätigt.
+      if ((wert === 'lokalki:aus' || wert === 'lokalki:entfernen') && req.body?.bestaetigt !== true) {
+        const klassen = klassenAufLokalerKi(await loadDynamicSettings());
+        if (klassen.length) {
+          return res.status(409).json({
+            error: `Die lokale KI ist noch gewählt für: ${klassen.join(', ')}.`,
+            bestaetigungNoetig: true,
+            klassen,
+          });
+        }
       }
     }
     if (typ === 'freigabe') {
@@ -365,6 +441,16 @@ router.post('/hostconfig', async (req, res) => {
       // sie per http://IP bedient, sperrte sich mit „nur über HTTPS“ selbst aus.
       if (wert.startsWith('web:') && req.protocol !== 'https') {
         return res.status(409).json({ error: 'Nur aus einer Sitzung über HTTPS umschaltbar.' });
+      }
+    }
+    if (typ === 'ablage') {
+      if (wert !== 'setzen') return res.status(400).json({ error: 'Unbekannter Ablageauftrag.' });
+      const fehler = pruefeOrdnerEingabe(req.body?.pfad);
+      if (fehler) return res.status(400).json({ error: fehler });
+      if (await umzugSperrtOrdnerwechsel()) {
+        return res.status(409).json({
+          error: 'Ein Umzug der Dateiablage ist noch offen. Schließe ihn zuerst ab oder brich ihn ab; danach lässt sich der Ordner ändern.',
+        });
       }
     }
     if (!agent.vorhanden || !agent.capabilities?.includes(capability)) {
@@ -380,6 +466,7 @@ router.post('/hostconfig', async (req, res) => {
       typ,
       wert: req.body?.wert,
       secret: req.body?.secret,
+      pfad: typ === 'ablage' ? req.body.pfad : '',
       angefordertVon: req.session?.username || 'admin',
     });
     await merkeHostconfig(typ, req.body?.wert, !!req.body?.secret);
@@ -408,6 +495,23 @@ router.post('/hostconfig/bestaetigen', async (req, res) => {
       details: `nonce=${nonce}`, entity: 'settings', entityId: req.session?.username || 'admin',
     });
     res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ── PUT /api/updates/duckdns-nachfuehren ─────────────────────────────────────
+// Kein Hostauftrag: Der Agent liest die Merkdatei bei jedem Lauf selbst.
+
+router.put('/duckdns-nachfuehren', async (req, res) => {
+  try {
+    const an = req.body?.an;
+    if (typeof an !== 'boolean') return res.status(400).json({ error: 'an muss true oder false sein.' });
+    await setzeDuckdnsNachfuehren(an);
+    await appLog('INFO', 'hostconfig', `DuckDNS-Adresse nachführen ${an ? 'eingeschaltet' : 'ausgeschaltet'}`, {
+      entity: 'settings', entityId: req.session?.username || 'admin',
+    });
+    res.json({ an });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }

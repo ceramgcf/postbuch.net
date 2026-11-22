@@ -26,15 +26,17 @@ import {
 import { countPdfPages, stripTextLayer, extractTextLayer, renderPdfToImages, RASTER_MAX_SEITEN } from './pdf.js';
 import { activeCacheTier, touchCacheMode } from './cache-mode.js';
 import { subscriptionFeatureUnlocked, callClaudeSubscription, isInsideAgentSubprocess } from './claude-subscription.js';
-import { getProvider, listProviders, BUILTIN_PROVIDER_IDS, kannPdfEmpfangen, permanentError, KEINE_CAPS, clampMaxTokens, MAX_TOKENS_NOTFALL, MAX_TOKENS_OHNE_GRENZE, grenzeAusAblehnung } from './llm/registry.js';
+import { getProvider, listProviders, BUILTIN_PROVIDER_IDS, kannPdfEmpfangen, permanentError, KEINE_CAPS, clampMaxTokens, MAX_TOKENS_NOTFALL, MAX_TOKENS_OHNE_GRENZE, grenzeAusAblehnung, istMaxTokensAblehnung } from './llm/registry.js';
+import { dokumentTextImBudget, rasterSeitenImBudget, istKontextUeberlauf, TOKENS_PRO_RASTERSEITE } from './llm/kontext-budget.js';
 import { TIMEOUT_COMPLETION_MS, TIMEOUT_COMPLETION_LANG_MS } from './net-guard.js';
 import { callAnthropic, buildAnthropicUserContent } from './llm/providers/anthropic.js';
 import { callBedrock, getBedrockClient } from './llm/providers/bedrock.js';
 import { callOpenAI } from './llm/providers/openai.js';
 import { ZWECK_EXTRAKTION_NACHDENKEN, extraktionsModus, merkeNachdenkenNoetig } from './llm/thinking-policy.js';
 import { werkseinstellung } from './llm/empfehlungs-standard.js';
-import { MODEL_CLASSES, modellwahl } from './llm/model-classes.js';
+import { MODEL_CLASSES, aktiveModellklassen, modellwahl } from './llm/model-classes.js';
 import { gleichesModell } from './llm/modell-id.js';
+import { mitRessource, kiRessource, prioFuerKategorie } from './ressourcen.js';
 
 export { getBedrockClient };
 export { listProviders, getProvider, kannPdfEmpfangen, kannDokumentSehen } from './llm/registry.js';
@@ -260,15 +262,37 @@ export function resolveModelConfig(val, defaultProvider, defaultModel) {
  * Releases hinweg verstreute Altmodelle entstanden.
  */
 export function resolveKlassenModell(klasseKey, settings) {
-  // In der einfachen Modellwahl stehen die Staffel-Klassen nicht zur Wahl;
-  // wer sie anfragt (Bescheide, Profilierung, Nachprüfung), bekommt das
-  // Analysemodell.
-  const angefragt = MODEL_CLASSES.find((c) => c.key === klasseKey);
-  const cls = angefragt?.modus === 'gestaffelt' && modellwahl(settings) === 'einfach'
-    ? MODEL_CLASSES.find((c) => c.key === 'analyse')
+  // In der einfachen Modellwahl gibt es nur die beiden Aufgabentypen; jede
+  // Klasse der Einzelwahl (Stufen, Fallback, Nachlese, Büroassistent, Akten)
+  // bekommt das Modell ihres Aufgabentyps. „analyse“ ist der Altname der
+  // Dokumentanalyse und gehört zu „komplex“.
+  const key = klasseKey === 'analyse' ? 'komplex' : klasseKey;
+  const angefragt = MODEL_CLASSES.find((c) => c.key === key);
+  const cls = angefragt?.modus === 'gestaffelt' && angefragt.aufgabe && modellwahl(settings) === 'einfach'
+    ? MODEL_CLASSES.find((c) => c.key === angefragt.aufgabe)
     : angefragt;
   if (!cls) return resolveModelConfig(null, undefined, undefined);
   return resolveModelConfig(settings?.[cls.settingKey], cls.provider, cls.model);
+}
+
+/** Basis-URL des Compose-Dienstes der lokalen KI (Profil lokalki). */
+export const LOKALE_KI_BASISURL = 'http://llm:8080';
+
+/**
+ * Modellklassen, deren Provider auf den lokalen KI-Dienst zeigt. Schaltet der
+ * Host-Agent den Dienst ab oder entfernt ihn, laufen genau diese ins Leere –
+ * die Route verlangt dafür eine Bestätigung.
+ *
+ * @returns {string[]} Klassenbezeichnungen
+ */
+export function klassenAufLokalerKi(settings) {
+  const providers = new Map(listProviders(settings).map((p) => [p.id, p]));
+  return aktiveModellklassen(settings)
+    .filter((c) => {
+      const url = providers.get(resolveKlassenModell(c.key, settings)?.providerId)?.baseUrl || '';
+      return url.replace(/\/+$/, '').replace(/\/v1$/, '') === LOKALE_KI_BASISURL;
+    })
+    .map((c) => c.label);
 }
 
 /** Anzeigename eines Kettenglieds: Built-ins nur als Modellname, sonst mit Provider. */
@@ -280,6 +304,13 @@ export function refLabel(ref) {
 }
 
 const refKey = (ref) => `${ref?.providerId}::${ref?.model}`;
+
+/** Nachtrag für einen zweiten Versuch nach unvollständiger Extraktion. */
+function strukturHinweis(strukturFehler) {
+  return `\n\n### HINWEIS ZUR VORIGEN ANTWORT ###\nDeine vorige Antwort war unvollständig: ${strukturFehler}. `
+    + 'Liefere das vollständige JSON nach dem oben beschriebenen Schema, einschließlich dieses Blocks mit allen '
+    + 'genannten Feldern. Unbekannte Werte setzt du auf null.';
+}
 
 /** Kette aus Refs bauen, Duplikate (gleicher Provider UND gleiches Modell) entfernen. */
 function chainOf(...refs) {
@@ -386,20 +417,6 @@ export function capsForRef(settings, ref) {
  * @param {object}  ctx        - { settings, keys }
  * @returns {Promise<{ text: string, usage: object }>}
  */
-/**
- * Lehnt der Provider den Aufruf ab, WEIL max_tokens über der Ausgabegrenze des
- * Modells liegt? Bewusst zweistufig (Feldname UND ein Grenzwort), damit ein
- * beliebiger Fehlertext, der zufällig „max_tokens" enthält, keinen zweiten
- * bezahlten Aufruf auslöst. Anthropic nennt die Grenze im Klartext
- * („… > 8192, which is the maximum allowed number of output tokens"), OpenAI
- * meldet „max_tokens is too large"; lokale Server variieren.
- */
-function istMaxTokensAblehnung(err) {
-  const msg = String(err?.message || '');
-  if (!/max_?tokens|max_completion_tokens/i.test(msg)) return false;
-  return /maximum|too large|too many|exceed|greater than|out of range|zu groß|größer/i.test(msg);
-}
-
 async function callModel(ref, prompt, opts, ctx, meta = null) {
   // Ohne maxTokens gibt es keine künstliche Ausgabegrenze: Es soll so viel
   // herauskommen, wie das Dokument verlangt. Nur kurze Hilfsaufrufe (Titel,
@@ -509,50 +526,67 @@ async function callModel(ref, prompt, opts, ctx, meta = null) {
     });
   };
 
-  let lastErr = null;
-  for (let i = 0; i < attempts.length; i++) {
-    const att = attempts[i];
-    let t0 = Date.now();
-    try {
-      let result;
+  // Der Platz am KI-Server wird erst hier belegt, direkt um den Request. So
+  // zählt die Wartezeit nicht in den Timeout, und Aufrufe außerhalb der
+  // Pipeline (Bescheid, Chat, Suche) teilen sich dieselben Plätze.
+  const kiRes = kiRessource(provider, settings);
+  return mitRessource(kiRes.name, async () => {
+    let lastErr = null;
+    for (let i = 0; i < attempts.length; i++) {
+      const att = attempts[i];
+      let t0 = Date.now();
       try {
-        result = await att.run();
+        let result;
+        try {
+          result = await att.run();
+        } catch (err) {
+          // Ein zu großer max_tokens-Wunsch ist kein Modellversagen, sondern eine
+          // Konfigurationslücke: der Provider hat keine deklarierte Ausgabegrenze
+          // (maxOutputTokens) und lehnt den Wert ab. Statt die Kette auf ein
+          // schwächeres Modell absteigen zu lassen, denselben Provider EINMAL mit
+          // dem kleinsten gängigen Wert wiederholen.
+          if (!istMaxTokensAblehnung(err) || !Number.isFinite(gesendet) || gesendet <= MAX_TOKENS_NOTFALL) throw err;
+          // Die Ablehnung nennt meist das Ausgabemaximum des Modells; dann genau
+          // damit wiederholen, sonst mit dem kleinsten gängigen Wert.
+          const zweiterWert = grenzeAusAblehnung(err.message, gesendet) ?? MAX_TOKENS_NOTFALL;
+          logAttempt(att, null, err, t0);
+          console.warn(`[llm] ${model} via ${att.provider}: max_tokens ${gesendet} abgelehnt → Wiederholung mit ${zweiterWert}`);
+          appLog('WARN', 'llm', `${model} via ${att.provider} lehnt max_tokens ${gesendet} ab → einmalige Wiederholung mit ${zweiterWert}. Dauerhafte Abhilfe: beim Provider unter Einstellungen → KI-Anbieter ein „Limit für Antwort-Tokens" hinterlegen.`);
+          t0 = Date.now();
+          result = await att.run(zweiterWert);
+        }
+        logAttempt(att, result, null, t0);
+        // Welche Schiene tatsächlich bedient hat → für die Kostenberechnung der
+        // aufrufenden Schicht (analyzeDocument speichert ai_cost_usd entsprechend).
+        result.viaSubscription = att.viaSubscription;
+        result.provider = att.provider;
+        return result;
       } catch (err) {
-        // Ein zu großer max_tokens-Wunsch ist kein Modellversagen, sondern eine
-        // Konfigurationslücke: der Provider hat keine deklarierte Ausgabegrenze
-        // (maxOutputTokens) und lehnt den Wert ab. Statt die Kette auf ein
-        // schwächeres Modell absteigen zu lassen, denselben Provider EINMAL mit
-        // dem kleinsten gängigen Wert wiederholen.
-        if (!istMaxTokensAblehnung(err) || !Number.isFinite(gesendet) || gesendet <= MAX_TOKENS_NOTFALL) throw err;
-        // Die Ablehnung nennt meist das Ausgabemaximum des Modells; dann genau
-        // damit wiederholen, sonst mit dem kleinsten gängigen Wert.
-        const zweiterWert = grenzeAusAblehnung(err.message, gesendet) ?? MAX_TOKENS_NOTFALL;
         logAttempt(att, null, err, t0);
-        console.warn(`[llm] ${model} via ${att.provider}: max_tokens ${gesendet} abgelehnt → Wiederholung mit ${zweiterWert}`);
-        appLog('WARN', 'llm', `${model} via ${att.provider} lehnt max_tokens ${gesendet} ab → einmalige Wiederholung mit ${zweiterWert}. Dauerhafte Abhilfe: beim Provider unter Einstellungen → KI-Anbieter ein „Limit für Antwort-Tokens" hinterlegen.`);
-        t0 = Date.now();
-        result = await att.run(zweiterWert);
-      }
-      logAttempt(att, result, null, t0);
-      // Welche Schiene tatsächlich bedient hat → für die Kostenberechnung der
-      // aufrufenden Schicht (analyzeDocument speichert ai_cost_usd entsprechend).
-      result.viaSubscription = att.viaSubscription;
-      result.provider = att.provider;
-      return result;
-    } catch (err) {
-      logAttempt(att, null, err, t0);
-      lastErr = err;
-      const next = attempts[i + 1];
-      if (next) {
-        console.warn(`[llm] ${model} via ${att.provider} fehlgeschlagen (${err.message}) → Seitwärts via ${next.provider}`);
-        // Observability: Ein übersprungener Rail-Fehler (klassisch: Abo-Session-Limit
-        // VOR dem API-Seitwärtsschritt) landet sonst nur im Token-Log und wird im
-        // App-Log vom nachfolgenden Fehler desselben Modells verdeckt.
-        appLog('WARN', 'llm', `${model} via ${att.provider} fehlgeschlagen → Seitwärts via ${next.provider}: ${err.message}`);
+        // Zu lange Eingabe: dieselbe Eingabe scheitert auch auf der nächsten
+        // Schiene und bei jedem Retry – dauerhaft, sofort weiterreichen.
+        if (istKontextUeberlauf(err)) {
+          err.permanent = true;
+          throw err;
+        }
+        lastErr = err;
+        const next = attempts[i + 1];
+        if (next) {
+          console.warn(`[llm] ${model} via ${att.provider} fehlgeschlagen (${err.message}) → Seitwärts via ${next.provider}`);
+          // Observability: Ein übersprungener Rail-Fehler (klassisch: Abo-Session-Limit
+          // VOR dem API-Seitwärtsschritt) landet sonst nur im Token-Log und wird im
+          // App-Log vom nachfolgenden Fehler desselben Modells verdeckt.
+          appLog('WARN', 'llm', `${model} via ${att.provider} fehlgeschlagen → Seitwärts via ${next.provider}: ${err.message}`);
+        }
       }
     }
-  }
-  throw lastErr;
+    throw lastErr;
+  }, {
+    kapazitaet: kiRes.kapazitaet,
+    prio: Number.isInteger(m.prio) ? m.prio : prioFuerKategorie(m.kategorie),
+    abgebrochen: m.correlationId ? () => tracker.isCancelled(m.correlationId) : undefined,
+    abbruchFehler: () => new tracker.CancellationError(),
+  });
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -636,11 +670,11 @@ export function parseJsonFromText(text, { erwartet = 'objekt' } = {}) {
  *
  * Übergeben wird der ganze Provider-Eintrag (providerForRef), nicht nur seine
  * Caps: der Bildpfad braucht zusätzlich `typ` und das providerspezifische
- * `rasterMaxSeiten`. Beides aus einer Quelle, damit strikt-Prüfung, Render und
+ * `rasterMaxSeiten`. Beides aus einer Quelle, damit Render und
  * Warn-Log nie gegen verschiedene Zahlen laufen.
  */
 function makeDocPreparer(pdfOriginal, stripGewuenscht) {
-  const cache = {}; // 'pdf-stripped' | 'text' | 'seitenGesamt'
+  const cache = {}; // 'pdf-stripped' | 'text'
   // Bilder je effektivem Seitenlimit: steigt die Kette von einem Provider mit
   // 30 Seiten auf einen mit 4 ab, darf der zweite nicht den 30-Seiten-Satz aus
   // dem Cache bekommen — der läge über seinem Limit und seinem Kontextfenster.
@@ -653,7 +687,7 @@ function makeDocPreparer(pdfOriginal, stripGewuenscht) {
     return cache.text;
   }
 
-  return async function prepare(provider, { strikt = false } = {}) {
+  return async function prepare(provider) {
     const caps = provider?.caps || KEINE_CAPS;
     if (kannPdfEmpfangen(caps)) {
       if (!stripGewuenscht) return { inputMode: 'pdf', pdf: pdfOriginal, text: null, bilder: null };
@@ -672,25 +706,18 @@ function makeDocPreparer(pdfOriginal, stripGewuenscht) {
     const bilderMoeglich = caps?.vision === true && provider?.typ === 'openai-compatible';
     if (bilderMoeglich) {
       // Ein Provider ohne eigenen Wert erbt den Rasterizer-Default (lib/pdf.js).
-      // Ab hier gilt genau diese eine Zahl — für die strikt-Prüfung, den
-      // Render-Aufruf und den Warn-Text.
-      const maxSeiten = provider.rasterMaxSeiten ?? RASTER_MAX_SEITEN;
+      // Ab hier gilt genau diese eine Zahl — für den Render-Aufruf und den
+      // Warn-Text.
+      // Zusätzlich gedeckelt durch das Kontextbudget: ein kleines Fenster
+      // fasst nicht so viele Bild-Blöcke, wie der Rasterizer liefern könnte.
+      const maxSeiten = rasterSeitenImBudget(provider, provider.rasterMaxSeiten ?? RASTER_MAX_SEITEN);
       const text = await holeText();
       const textReichtNichtAus = (text || '').replace(/\s+/g, '').length < MIN_TEXT_CHARS;
       if (stripGewuenscht || textReichtNichtAus) {
-        if (cache.seitenGesamt === undefined) {
-          cache.seitenGesamt = await countPdfPages(pdfOriginal).catch(() => 1);
-        }
-        // Seitenlimit unabhängig vom Cache prüfen: ein während der Voranalyse
-        // (strikt=false) bereits gerendertes/gecachtes Bild darf die
-        // Klassifikation (strikt=true) nicht am harten Fehler vorbeischleusen.
-        if (strikt && cache.seitenGesamt > maxSeiten) {
-          throw permanentError(
-            `PDF hat ${cache.seitenGesamt} Seiten (Limit ${maxSeiten}) für den `
-            + 'Bildpfad bei der Klassifikation — eine halbe Sicht auf das Dokument ist '
-            + 'riskanter als ein Modellwechsel.',
-          );
-        }
+        // Mehr Seiten als das Bildlimit: das Modell bekommt die ersten
+        // maxSeiten Seiten als Bild und den erkannten Text aller übrigen
+        // Seiten dazu – ein langes Dokument wird nie abgelehnt, und auch die
+        // hinteren Seiten (etwa ein beigelegtes zweites Schreiben) zählen.
         let bilder = bilderCache.get(maxSeiten);
         if (bilder === undefined) {
           const result = await renderPdfToImages(pdfOriginal, { maxSeiten, strikt: false });
@@ -699,13 +726,17 @@ function makeDocPreparer(pdfOriginal, stripGewuenscht) {
           if (!result.bilder.length) {
             throw permanentError('Rastern lieferte keine Bilder — der Bildpfad ist für dieses PDF nicht nutzbar.');
           }
+          let restText = null;
           if (result.abgeschnitten) {
-            appLog('WARN', 'llm', `renderPdfToImages: PDF hat mehr als ${maxSeiten} Seiten, nur die ersten ${maxSeiten} wurden gerastert`);
+            restText = await extractTextLayer(pdfOriginal, { abSeite: maxSeiten + 1 }).catch(() => '');
+            if ((restText || '').replace(/\s+/g, '').length < MIN_TEXT_CHARS) restText = null;
+            appLog('WARN', 'llm', `renderPdfToImages: PDF hat mehr als ${maxSeiten} Seiten, die ersten ${maxSeiten} gehen als Bild, `
+              + (restText ? `die übrigen als erkannter Text (${restText.length} Zeichen)` : 'die übrigen haben keine Textebene und fehlen'));
           }
-          bilder = result.bilder;
+          bilder = { bilder: result.bilder, restText };
           bilderCache.set(maxSeiten, bilder);
         }
-        return { inputMode: 'bilder', pdf: null, text: null, bilder };
+        return { inputMode: 'bilder', pdf: null, text: bilder.restText, textAbSeite: maxSeiten + 1, bilder: bilder.bilder };
       }
       return { inputMode: 'text', pdf: null, text, bilder: null };
     }
@@ -728,9 +759,40 @@ function makeDocPreparer(pdfOriginal, stripGewuenscht) {
   };
 }
 
-/** Text-Eingabe in den Prompt einbetten (nur Text-only-Pfad). */
-function withDocumentText(prompt, text) {
-  return `<dokument_text>\n${text}\n</dokument_text>\n\n${prompt}`;
+/**
+ * Text-Eingabe in den Prompt einbetten (nur Text-only-Pfad). Ein Text, der
+ * neben Prompt und Systemtext nicht ins Kontextbudget des Providers passt,
+ * wird auf Anfang und Ende gekürzt (lib/llm/kontext-budget.js).
+ */
+function withDocumentText(prompt, text, provider = null, system = '') {
+  const { text: imBudget, ausgelassen } = dokumentTextImBudget(text, provider, { prompt, system });
+  if (ausgelassen > 0) {
+    appLog('WARN', 'llm', `Dokumenttext um ${ausgelassen} Zeichen gekürzt (Kontextbudget des Providers „${provider?.name || provider?.id || '?'}")`);
+  }
+  return `<dokument_text>\n${imBudget}\n</dokument_text>\n\n${prompt}`;
+}
+
+/**
+ * Prompt samt Dokumentinhalt, der nicht als Datei mitgeht: beim Textpfad der
+ * ganze Text, beim Bildpfad mit abgeschnittenem Dokument der erkannte Text der
+ * nicht gerasterten Seiten (neben den Bildern im Budget).
+ */
+function promptMitDokument(doc, prompt, provider, system = '') {
+  if (doc.inputMode === 'text') return withDocumentText(prompt, doc.text, provider, system);
+  if (doc.inputMode === 'bilder' && doc.text) {
+    const { text: imBudget, ausgelassen } = dokumentTextImBudget(doc.text, provider, {
+      prompt, system, belegtTokens: (doc.bilder?.length || 0) * TOKENS_PRO_RASTERSEITE,
+    });
+    if (!imBudget.trim()) return prompt;
+    if (ausgelassen > 0) {
+      appLog('WARN', 'llm', `Text der übrigen Seiten um ${ausgelassen} Zeichen gekürzt (Kontextbudget des Providers „${provider?.name || provider?.id || '?'}")`);
+    }
+    return `<weitere_seiten ab_seite="${doc.textAbSeite}">\n`
+      + 'Die Bilder zeigen nur die ersten Seiten. Erkannter Text der übrigen Seiten '
+      + '(Texterkennung, kann Fehler enthalten):\n'
+      + `${imBudget}\n</weitere_seiten>\n\n${prompt}`;
+  }
+  return prompt;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -761,10 +823,14 @@ export async function assessDifficulty(pdfBuffer, settings = null, meta = null, 
     resolveKlassenModell('fallback',    s),
   );
 
-  for (let attempt = 0; attempt <= PRE_ANALYSIS_RETRY_COUNT; attempt++) {
+  const preRetries = options.ohneWartezeit ? 0 : PRE_ANALYSIS_RETRY_COUNT;
+  for (let attempt = 0; attempt <= preRetries; attempt++) {
     if (attempt > 0) {
+      // Pipeline-Aufträge warten nicht im Slot: die Warteschlange stellt sie
+      // zurück und versucht es später erneut (jobs/pipeline-queue.js).
+      if (options.zurueckstellbar) throw new tracker.ZurueckgestelltError('KI-Dienst nicht erreichbar');
       const waitMin = PRE_ANALYSIS_RETRY_DELAY_MS / 60000;
-      console.warn(`[llm] assessDifficulty: Versuch ${attempt + 1}/${PRE_ANALYSIS_RETRY_COUNT + 1}, warte ${waitMin} Minuten…`);
+      console.warn(`[llm] assessDifficulty: Versuch ${attempt + 1}/${preRetries + 1}, warte ${waitMin} Minuten…`);
       appLog('WARN', 'llm', `assessDifficulty: Retry ${attempt}/${PRE_ANALYSIS_RETRY_COUNT} nach Wartezeit`);
       await cancellableSleep(PRE_ANALYSIS_RETRY_DELAY_MS, meta?.correlationId);
     }
@@ -775,12 +841,11 @@ export async function assessDifficulty(pdfBuffer, settings = null, meta = null, 
     let alleDauerhaft = true;
     for (const preRef of preChain) {
       try {
-        const doc = await prepare(providerForRef(s, preRef));
+        const preProvider = providerForRef(s, preRef);
+        const doc = await prepare(preProvider);
         const resp = await callModel(
           preRef,
-          doc.inputMode === 'text'
-            ? withDocumentText(PRE_ANALYSIS_USER_MESSAGE, doc.text)
-            : PRE_ANALYSIS_USER_MESSAGE,
+          promptMitDokument(doc, PRE_ANALYSIS_USER_MESSAGE, preProvider, PRE_ANALYSIS_SYSTEM_PROMPT),
           { pdf: doc.pdf, bilder: doc.bilder, system: PRE_ANALYSIS_SYSTEM_PROMPT, jsonMode: true },
           ctx,
           baseMeta,
@@ -803,7 +868,7 @@ export async function assessDifficulty(pdfBuffer, settings = null, meta = null, 
           preAnalysisCostUsd:     resp.viaSubscription === true ? 0 : calculateCost(preRef.model, preTokensIn, preTokensOut, costMap),
         };
       } catch (err) {
-        console.warn(`[llm] assessDifficulty ${refLabel(preRef)} (Versuch ${attempt + 1}/${PRE_ANALYSIS_RETRY_COUNT + 1}) fehlgeschlagen: ${err.message}`);
+        console.warn(`[llm] assessDifficulty ${refLabel(preRef)} (Versuch ${attempt + 1}/${preRetries + 1}) fehlgeschlagen: ${err.message}`);
         appLog('WARN', 'llm', `assessDifficulty ${refLabel(preRef)} Versuch ${attempt + 1} fehlgeschlagen: ${err.message}`);
         if (!err.permanent) alleDauerhaft = false;
       }
@@ -818,7 +883,7 @@ export async function assessDifficulty(pdfBuffer, settings = null, meta = null, 
   }
 
   // Alle Versuche erschöpft → Fehler werfen (keine Standardwerte — falsches Routing wäre zu kostspielig)
-  const msg = `assessDifficulty: alle ${PRE_ANALYSIS_RETRY_COUNT + 1} Versuche fehlgeschlagen`;
+  const msg = `assessDifficulty: alle ${preRetries + 1} Versuche fehlgeschlagen`;
   console.error(`[llm] ${msg}`);
   appLog('ERROR', 'llm', msg);
   throw new Error(`[llm] ${msg}`);
@@ -832,7 +897,9 @@ export async function assessDifficulty(pdfBuffer, settings = null, meta = null, 
  * @param {string}      classificationPrompt - Klassifikationsprompt (mit Patientenliste befüllt)
  * @param {string|null} [korrekturKontext]   - Korrektur-Anweisungen für Reprocessing-Modus
  * @param {object}      [settings]           - Optional: bereits geladene Settings
- * @param {object}      [options]            - { forceTier, stripTextLayerGewuenscht, validateResult }
+ * @param {object}      [options]            - { forceTier, stripTextLayerGewuenscht, validateResult, zurueckstellbar, ohneWartezeit }
+ *                                            zurueckstellbar: bei Totalausfall ZurueckgestelltError statt Wartezeit
+ *                                            ohneWartezeit: bei Totalausfall sofort scheitern (letzter Versuch aus der Warteschlange)
  */
 export async function analyzeDocument(
   pdfBuffer,
@@ -870,7 +937,7 @@ export async function analyzeDocument(
   // überspringt die Voranalyse (Preclassifier) und nutzt fix das Stufen-Modell.
   const forceTier = options?.forceTier && TIER_DEFAULTS[options.forceTier] ? options.forceTier : null;
 
-  // Einfache Modellwahl: ein Analysemodell für alles, ohne Voranalyse.
+  // Einfache Modellwahl: ein Modell für jedes Dokument, ohne Voranalyse.
   const einfach = !forceTier && modellwahl(s) === 'einfach';
 
   // Cache-Mode? Dann fixes Modell + Prompt-Caching für die Batch-Verarbeitung.
@@ -925,8 +992,9 @@ export async function analyzeDocument(
   } else if (einfach) {
     // Seitenzahl nur lokal für das Log; lange Dokumente laufen über dasselbe Modell.
     try { pages = await countPdfPages(pdfBuffer); } catch { pages = 1; }
-    const fixed = resolveKlassenModell('analyse', s);
-    models = chainOf(fixed, resolveKlassenModell('fallback', s));
+    // Dokumentanalyse über „Anspruchsvoll & Komplex“, dahinter „Einfach & Routine“.
+    const fixed = resolveKlassenModell('komplex', s);
+    models = chainOf(fixed, resolveKlassenModell('routine', s));
     chainReason = `Einfache Modellwahl (${refLabel(fixed)}, ${pages} Seiten)`;
     mitPromptCache(fixed);
   } else if (cacheTier) {
@@ -953,7 +1021,9 @@ export async function analyzeDocument(
     ({
       difficulty, pages, preAnalysisNote, preAnalysisMs, rawPreAnalysisResponse,
       preAnalysisModel, preAnalysisTokensIn, preAnalysisTokensOut, preAnalysisCostUsd,
-    } = await assessDifficulty(pdfBuffer, s, meta, { prepare }));
+    } = await assessDifficulty(pdfBuffer, s, meta, {
+      prepare, zurueckstellbar: options?.zurueckstellbar === true, ohneWartezeit: options?.ohneWartezeit === true,
+    }));
     console.log(`[llm] Dokument: ${pages} Seiten, difficulty=${difficulty}`);
     ({ models, reason: chainReason } = selectModelChain(difficulty, pages, s));
     userPromptForCall = vollständigerPrompt + (korrekturKontext || '');
@@ -966,8 +1036,12 @@ export async function analyzeDocument(
     : userPromptForCall;
 
   // Schritt 4: Analyse mit Fallback-Kette; bei Totalausfall 1x Retry nach 10 Minuten
-  for (let chainAttempt = 0; chainAttempt <= 1; chainAttempt++) {
+  // Der letzte Versuch eines zurückgestellten Auftrags wartet nicht noch einmal:
+  // die Wartezeiten der Warteschlange haben den Retry schon ersetzt.
+  const chainRetries = options?.ohneWartezeit ? 0 : 1;
+  for (let chainAttempt = 0; chainAttempt <= chainRetries; chainAttempt++) {
     if (chainAttempt > 0) {
+      if (options?.zurueckstellbar) throw new tracker.ZurueckgestelltError('KI-Dienst nicht erreichbar');
       const waitMin = ANALYSIS_RETRY_DELAY_MS / 60000;
       console.warn(`[llm] analyzeDocument: Kette vollständig fehlgeschlagen, Retry nach ${waitMin} Minuten…`);
       appLog('WARN', 'llm', `analyzeDocument: Kette fehlgeschlagen, Retry nach ${waitMin}min`);
@@ -984,17 +1058,16 @@ export async function analyzeDocument(
       try {
         console.log(`[llm] analyzeDocument: versuche ${label}…`);
         // Dokument-Aufbereitung fällt HIER, nach der Provider-Auflösung.
-        // strikt:true — bei der Klassifikation (anders als der Voranalyse) ist
-        // eine halbe Sicht auf ein zu langes Dokument riskanter als ein Absteigen
-        // der Kette auf einen PDF-fähigen Provider (siehe makeDocPreparer()).
-        const doc = await prepare(providerForRef(s, ref), { strikt: true });
+        const refProvider = providerForRef(s, ref);
+        const doc = await prepare(refProvider);
         // System/cacheSystem nur für das fixe Cache-Mode-Modell (erstes der Kette).
         const useCache = cacheSystem && refKey(ref) === refKey(models[0]);
         const basisPrompt = useCache ? userPromptForCall : fullPrompt;
-        const versuche = async (zweck) => {
+        const versuche = async (zweck, nachtrag = '') => {
+          const prompt = basisPrompt + nachtrag;
           const r = await callModel(
             ref,
-            doc.inputMode === 'text' ? withDocumentText(basisPrompt, doc.text) : basisPrompt,
+            promptMitDokument(doc, prompt, refProvider, useCache ? systemForCall : ''),
             { pdf: doc.pdf, bilder: doc.bilder, system: useCache ? systemForCall : undefined, cacheSystem: useCache, zweck, jsonMode: true },
             ctx,
             analysisMeta,
@@ -1019,7 +1092,9 @@ export async function analyzeDocument(
             ? await options.validateResult(d)
             : null;
           if (strukturFehler) {
-            throw Object.assign(new Error(`Unvollständige Extraktion: ${strukturFehler}`), { schemaFehler: true });
+            throw Object.assign(new Error(`Unvollständige Extraktion: ${strukturFehler}`), {
+              schemaFehler: true, strukturFehler, daten: d, resp: r,
+            });
           }
           return { resp: r, data: d };
         };
@@ -1028,17 +1103,41 @@ export async function analyzeDocument(
         // es dasselbe Modell sofort mit niedrigem Effort und bleibt ab dann dabei
         // (gemerkt bis zum Neustart).
         const ohneNachdenken = extraktionsModus(ref.providerId, ref.model) === 'aus';
+        // Fehlt nach dem zweiten Versuch weiterhin nur ein Fachblock oder
+        // Pflichtfeld, wird die Antwort angenommen. Phase 2.5 legt den Block
+        // leer zum Nachtragen an; ein Kettenwechsel oder eine Wartefrist
+        // brächte dieselbe Lücke meist nur später.
+        const nimmMitLuecke = (err) => {
+          if (!err.strukturFehler || !err.daten) throw err;
+          console.warn(`[llm] ${label}: ${err.strukturFehler} – Antwort wird mit Lücke übernommen`);
+          appLog('WARN', 'llm', `analyzeDocument ${label}: ${err.strukturFehler}, Antwort mit Lücke übernommen`);
+          err.daten._strukturLuecke = err.strukturFehler;
+          return { resp: err.resp, data: err.daten };
+        };
         let resp, data;
+        let zweck;
         try {
-          ({ resp, data } = await versuche(undefined));
+          ({ resp, data } = await versuche(zweck));
         } catch (err) {
-          if (!ohneNachdenken || !err.schemaFehler) throw err;
-          merkeNachdenkenNoetig(ref.providerId, ref.model);
-          console.warn(`[llm] ${label} ohne Nachdenken ungültig (${err.message}) – erneut mit niedrigem Effort`);
-          appLog('WARN', 'llm', `analyzeDocument ${label}: ohne Nachdenken ungültig, erneut mit niedrigem Effort`);
-          ({ resp, data } = await versuche(ZWECK_EXTRAKTION_NACHDENKEN));
+          if (!ohneNachdenken || !err.schemaFehler) {
+            if (!err.strukturFehler) throw err;
+            // Fehlt nur ein Fachblock oder Pflichtfeld, bekommt dasselbe Modell
+            // einmal den konkreten Hinweis. Ohne ihn liefert ein Modell mit
+            // Temperatur 0 dieselbe Antwort erneut, und die Kette fiele bis zum
+            // 10-Minuten-Retry durch.
+            console.warn(`[llm] ${label}: ${err.message} – erneut mit Hinweis`);
+            appLog('WARN', 'llm', `analyzeDocument ${label}: ${err.message}, erneut mit Hinweis`);
+            ({ resp, data } = await versuche(zweck, strukturHinweis(err.strukturFehler)).catch(nimmMitLuecke));
+          } else {
+            merkeNachdenkenNoetig(ref.providerId, ref.model);
+            console.warn(`[llm] ${label} ohne Nachdenken ungültig (${err.message}) – erneut mit niedrigem Effort`);
+            appLog('WARN', 'llm', `analyzeDocument ${label}: ohne Nachdenken ungültig, erneut mit niedrigem Effort`);
+            ({ resp, data } = await versuche(ZWECK_EXTRAKTION_NACHDENKEN).catch(nimmMitLuecke));
+          }
         }
         const analysisMs = Date.now() - tAnalysis;
+        const strukturLuecke = data._strukturLuecke || null;
+        delete data._strukturLuecke;
 
         // Mindest-Validierung
         const lxdLabel = typeof data.lebensbereich === 'string' && typeof data.dokumentart === 'string'
@@ -1093,6 +1192,7 @@ export async function analyzeDocument(
           cacheMode: cacheTier || null,
           rawPreAnalysisResponse,
           rawAnalysisResponse: resp.text,
+          strukturLuecke,
           // Der effektive Prompt enthält Familien-/Betreiber-Kontext und darf
           // weder in postbuch.metadata noch in dauerhaften Logs landen.
         };
@@ -1105,7 +1205,7 @@ export async function analyzeDocument(
         if (!err.permanent) alleDauerhaft = false;
       }
     }
-    console.warn(`[llm] analyzeDocument: alle Modelle fehlgeschlagen (Versuch ${chainAttempt + 1}/2)`);
+    console.warn(`[llm] analyzeDocument: alle Modelle fehlgeschlagen (Versuch ${chainAttempt + 1}/${chainRetries + 1})`);
     if (alleDauerhaft) {
       const msg = 'analyzeDocument: alle Modelle der Kette melden einen dauerhaften '
         + 'Konfigurationsfehler (z. B. Text-only-Provider ohne Textebene) — Abbruch ohne Retry.';
@@ -1159,10 +1259,11 @@ export async function leseDokument(refs, pdfBuffer, prompt, opts = {}, settings 
   let lastErr = null;
   for (const ref of kette) {
     try {
-      const doc = await prepare(providerForRef(s, ref), { strikt: true });
+      const refProvider = providerForRef(s, ref);
+      const doc = await prepare(refProvider);
       const r = await callModel(
         ref,
-        doc.inputMode === 'text' ? withDocumentText(prompt, doc.text) : prompt,
+        promptMitDokument(doc, prompt, refProvider, opts.system),
         { pdf: doc.pdf, bilder: doc.bilder, system: opts.system, zweck: opts.zweck, jsonMode: opts.jsonMode === true, jsonSchema: opts.jsonSchema ?? null },
         { settings: s, keys },
         fullMeta,

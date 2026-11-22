@@ -199,7 +199,7 @@ export default function EmpfehlungenCard({ llmGesperrt = false, embeddingGesperr
           {empfehlungenSichtbar && (
             <div className="space-y-2">
               <Button
-                className="btn-gradient h-11 w-full text-white font-semibold"
+                className="btn-gradient h-auto min-h-11 py-2 w-full whitespace-normal text-white font-semibold"
                 onClick={() => anwenden.mutate('alle')}
                 disabled={anwenden.isPending || llmGesperrt}
               >
@@ -279,7 +279,7 @@ export default function EmpfehlungenCard({ llmGesperrt = false, embeddingGesperr
                       <div className="flex items-start gap-3">
                         <div className="min-w-0 flex-1">
                           <p className="text-sm font-medium">{kl.label}</p>
-                          <p className="text-xs text-muted-foreground font-mono truncate">
+                          <p className="text-xs text-muted-foreground font-mono [overflow-wrap:anywhere]">
                             {kl.aktuell?.model || '–'}
                             {g && <span className="font-sans"> → </span>}
                             {g && <span className="text-foreground">{g.model}</span>}

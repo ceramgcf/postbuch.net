@@ -104,16 +104,29 @@ selbst in PDFs um. Ein Editor für Entwürfe ist es nicht.
 
 ### Was du brauchst
 
-- **Einen Linux-Rechner, der durchläuft**, z. B. einen Raspberry Pi mit
-  mindestens 2 GB RAM. Docker richtet der Installer auf Debian/Ubuntu-artigen
-  Systemen selbst ein.
-- **Einen Zugang zu einem Sprachmodell**, z. B. einen API-Key bei OpenAI,
-  Mistral oder Anthropic. Bei OpenAI reicht die Mindestaufladung von 5
-  US-Dollar je nach Modellwahl in der Regel für viele Monate privater Nutzung.
+- **Einen Rechner für postbuch.net.** Im Regelfall ein Server, der durchläuft,
+  z. B. ein Raspberry Pi mit mindestens 2 GB RAM unter Linux (Docker richtet
+  der Installer auf Debian/Ubuntu-artigen Systemen selbst ein). Wer
+  postbuch.net nur an einem einzigen Gerät nutzen will, installiert es auf
+  einem Windows-PC (64 Bit, Windows 10 ab Version 2004 oder Windows 11;
+  getestet ist Windows 11). Welche Lösung zu dir passt, erklärt der Abschnitt
+  [Welche Installation passt zu dir?](#welche-installation-passt-zu-dir).
+- **Einen Zugang zu einem Sprachmodell**, z. B. einen API-Key bei Anthropic,
+  OpenAI oder Mistral. Anthropic und OpenAI arbeiten mit vorab aufgeladenem
+  Guthaben; ein niedriger Betrag reicht je nach Modellwahl in der Regel für
+  viele Monate privater Nutzung.
   Alternativ betreibst du einen eigenen KI-Server, etwa mit Ollama oder LM
-  Studio. Die Embeddings für Suche und Duplikatprüfung berechnet postbuch.net
+  Studio, oder die eingebaute lokale KI (siehe unten). Die Embeddings für Suche und Duplikatprüfung berechnet postbuch.net
   mit einem eingebauten Dienst selbst.
-- **Eine Ablage**: ein Microsoft-Konto für OneDrive (der Assistent führt dich
+- **Nur für die eingebaute lokale KI (ganz ohne Cloud):** einen PC, bei dem
+  Arbeitsspeicher und Grafikspeicher zusammen mindestens 24 GB ergeben, am
+  besten mit einer NVIDIA-Grafikkarte ab 12 GB. Unter 8 GB Grafikspeicher läuft
+  sie extrem langsam. Das Modell braucht rund 9 GB Platz, danach müssen noch
+  5 GB frei sein. Im Leerlauf entlädt sich das Modell nach 5 Minuten und gibt
+  den Speicher wieder frei; postbuch.net belegt dann insgesamt knapp 2 GB.
+  Einzelheiten unter [KI-Anbieter](docs/ki-provider.md#eingebaute-lokale-ki).
+- **Eine Ablage**: ein Ordner auf dem Rechner selbst (Betriebsart „Komplett
+  lokal“, ohne Cloud-Konto), ein Microsoft-Konto für OneDrive (der Assistent führt dich
   durch die dafür nötige kostenlose Azure-App-Registrierung) **oder** eine
   Nextcloud bzw. ownCloud, selbst betrieben oder bei einem Anbieter. OneDrive
   und MagentaCLOUD bieten kostenlose Tarife, die für die meisten privaten
@@ -126,20 +139,79 @@ selbst in PDFs um. Ein Editor für Entwürfe ist es nicht.
 
 Einzelheiten stehen unter [Voraussetzungen](docs/voraussetzungen.md).
 
+## Welche Installation passt zu dir?
+
+postbuch.net läuft auf **einem Rechner** (dem Server). Du nutzt es im Browser
+oder als App auf deinen Geräten zuhause, die sich im Heimnetz mit diesem
+Rechner verbinden. Bei der
+Installation entscheidest du zwei Dinge: wo postbuch.net läuft und welche
+Betriebsart du wählst.
+
+### 1. Wo soll postbuch.net laufen?
+
+Die entscheidende Frage: **Soll postbuch.net im Heimnetz jederzeit von
+mehreren Geräten erreichbar sein, oder reicht dir ein einzelner Rechner?**
+
+- **Auf einem Server, der durchläuft (der Regelfall).** Ein Raspberry Pi oder
+  ein anderer Linux-Rechner ist rund um die Uhr an. Im Heimnetz erreichst du
+  postbuch.net jederzeit von allen Geräten zuhause, auch mit der mobilen App.
+  Scans, Fristen-Erinnerungen und Sicherungen laufen von selbst weiter. Das ist
+  die richtige Wahl, wenn du es im Haushalt immer griffbereit haben willst.
+- **Auf einem einzelnen Windows-PC.** Du installierst postbuch.net dort, wo du
+  es ohnehin nutzt. Das ist der einfachste Einstieg, hat aber eine Grenze: Die
+  mobile App und alle anderen Geräte im Heimnetz erreichen postbuch.net nur,
+  **solange dieser PC läuft** (das setzt Windows 11 ab Version 22H2 voraus).
+  Ist er aus oder im Ruhezustand, steht auch postbuch.net still, ebenso
+  Erinnerungen und automatische Sicherungen.
+
+### 2. Welche Betriebsart?
+
+| | **Klassisch** | **Komplett lokal** |
+| --- | --- | --- |
+| Dokumente liegen in | OneDrive oder Nextcloud/WebDAV | einem Ordner auf dem eigenen Rechner |
+| KI für die Auswertung | Cloud-Anbieter mit eigenem API-Key oder eigener KI-Server | eingebaute lokale KI auf dem Rechner |
+| Konto bei einem Cloud-Dienst | ja, für Ablage und KI | nein |
+| Rechner | Raspberry Pi ab 2 GB RAM, Linux-PC oder Windows-PC | PC mit NVIDIA-Grafikkarte, Arbeits- und Grafikspeicher zusammen mindestens 24 GB; unter Windows oder Linux |
+| Laufende Kosten | Guthaben beim KI-Anbieter, je nach Ablage Speicherplatz | keine Anbieterkosten, dafür Strom und passende Hardware |
+| Dokumente verlassen das Haus | ja, zu den gewählten Anbietern | nein |
+| Qualität bei kniffligen Dokumenten | Cloud-Modelle sind derzeit besser | lokale Modelle bleiben derzeit zurück |
+
+Die Betriebsart ist keine feste Entscheidung: Sie ergibt sich aus Ablage und
+KI, und Mischformen sind möglich, etwa lokale Ablage mit einem Cloud-Modell.
+Später lässt sie sich ohne Neuinstallation und ohne Datenverlust wechseln, wie
+unter [Betriebsart einer laufenden Instanz wechseln](docs/installation.md#betriebsart-einer-laufenden-instanz-wechseln)
+beschrieben. Unter Windows schlägt der Installer „Komplett lokal“ vor.
+
 ## Schnellstart
 
 Der empfohlene Weg ist ein einzelner Installationsbefehl – kein manuelles
-`git clone` und kein Editieren einer `.env`:
+`git clone` und kein Editieren einer `.env`.
+
+**Linux** (als normaler Benutzer, ohne `sudo`):
 
 ```bash
 curl -fsSL https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.sh | bash
 ```
 
+**Windows** (PowerShell mit „Als Administrator ausführen“):
+
+```powershell
+irm https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.ps1 | iex
+```
+
+Unter Windows richtet das Skript zuerst WSL 2 und eine eigene Linux-Umgebung
+`postbuch.net` ein und übergibt dann an denselben Installer wie unter Linux.
+Dabei kann ein Neustart von Windows nötig sein; danach führst du denselben
+Befehl erneut aus. Zugriff von anderen Geräten im Heimnetz gibt es unter
+Windows erst ab Windows 11 Version 22H2. Einzelheiten:
+[Installation unter Windows](docs/installation.md#unter-windows).
+
 Der Installer lädt das aktuelle, signierte Release, prüft es, richtet Docker bei
 Bedarf selbst ein und fragt nur, was der Server selbst wissen muss:
 
-- Name der Instanz und Admin-Passwort – Datenbank- und Session-Secret erzeugt
-  der Installer selbst, zufällig,
+- Name der Instanz und die [Betriebsart](#welche-installation-passt-zu-dir)
+  („Komplett lokal“ oder „Klassisch“) sowie das Admin-Passwort –
+  Datenbank- und Session-Secret erzeugt der Installer selbst, zufällig,
 - ob ein vorhandenes Datenbank-Backup eingespielt werden soll (für Umzug oder
   Neuaufbau),
 - optional eine DuckDNS-Domain für automatisches HTTPS und ob die Oberfläche

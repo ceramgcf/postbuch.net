@@ -1,5 +1,6 @@
 import pool from './db.js';
 import { modellwahl } from './lib/llm/model-classes.js';
+import { konfiguriereRessourcen } from './lib/ressourcen.js';
 
 export const config = {
   db: {
@@ -20,6 +21,12 @@ export async function loadDynamicSettings() {
     const erbe = modellwahl(s) === 'einfach' ? s.llm_model_analyse : s.llm_model_schwierig;
     if (erbe) s.llm_model_nachlese = erbe;
   }
+  // Die beiden Aufgabentypen der einfachen Modellwahl kamen später dazu. Bis
+  // die einmalige Umstellung (service/aufgabentypen-umstellung.js) sie
+  // gespeichert hat, gelten die Modelle, die vorher dieselbe Rolle hatten.
+  if (!s.llm_aufgabe_komplex && s.llm_model_analyse) s.llm_aufgabe_komplex = s.llm_model_analyse;
+  if (!s.llm_aufgabe_routine && s.llm_model_fallback) s.llm_aufgabe_routine = s.llm_model_fallback;
+  konfiguriereRessourcen(s);
   return s;
 }
 

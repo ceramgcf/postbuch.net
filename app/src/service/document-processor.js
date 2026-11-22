@@ -26,9 +26,12 @@ import pool from '../db.js';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { loadDynamicSettings, getFolders, getActiveBackendName } from '../config.js';
-import { deleteScanBuffer, SCAN_BUFFER_DIR } from '../lib/scan-buffer.js';
+import { deleteScanBuffer, readScanBuffer, SCAN_BUFFER_DIR } from '../lib/scan-buffer.js';
 import * as tracker from '../jobs/tracker.js';
+import * as auftraege from '../jobs/pipeline-auftrag.js';
 import { getActiveAdapterFor, getAdapter, legacyOnedriveWerte } from '../lib/storage/index.js';
+import { baueDokumentDateiname, namensstammAusAnalyse } from '../lib/storage/paths.js';
+import { modellAnzeigename } from '../lib/llm/registry.js';
 import * as discord from '../lib/discord.js';
 import * as llm from '../lib/llm.js';
 import * as pdf from '../lib/pdf.js';
@@ -38,11 +41,13 @@ import {
   activeSignature as aktuelleEmbeddingSignatur,
 } from '../lib/embedding.js';
 import { buildLxdClassificationPromptParts } from '../prompts/classification-lxd.js';
-import { getAktiveTaxonomie, effektiveGruppe } from '../lib/taxonomie.js';
+import { getAktiveTaxonomie, effektiveGruppe, istPflichtRechnung } from '../lib/taxonomie.js';
 import { leseArztrechnungPositionen } from './arztrechnung-positionen.js';
-import { wendeInvalidierungAn } from './rechnung-invalidierung.js';
-import { pruefeFachblockStruktur, pruefeUndRepariere, fatalMeldung } from './extract-validator.js';
+import { ermittleInvalidierungsLage, wendeInvalidierungAn } from './rechnung-invalidierung.js';
+import { baueManuelleStruktur } from './manuelle-erfassung.js';
+import { pruefeFachblockStruktur, ordneFachblockZu, pruefeUndRepariere, fatalMeldung } from './extract-validator.js';
 import * as duplicateChecker from './duplicate-checker.js';
+import { erstelleKiPruefung } from './duplikat-urteil.js';
 import * as suspensionStore from './suspension-store.js';
 import * as failedHandler from './failed-handler.js';
 import * as duplicateNotifier from './duplicate-notifier.js';
@@ -53,7 +58,7 @@ import { sendPushToAllUsers } from '../lib/webpush.js';
 import { uiLog } from '../log.js';
 import { appLog } from '../app-log.js';
 import { trashName } from './document-replace.js';
-import { ensureAblageOrdner, behandeltePersonSql } from './storage-setup.js';
+import { ensureAblageOrdner, mitAblageOrdner, behandeltePersonSql } from './storage-setup.js';
 import * as pipelineFileJournal from './pipeline-file-journal.js';
 import { oeffneSichereErsetzung } from './reprocess-protection.js';
 import { setzeBescheidwirkungZurueck } from './periodenabschluss.js';
@@ -103,6 +108,10 @@ const { CancellationError } = tracker;
  */
 function classifyApiError(message) {
   const m = String(message || '');
+  // Fehler der Ablage („download Fehler 401 …“) betreffen keinen KI-Schlüssel.
+  if (/^(download|uploadNew|uploadContent|move|remove) Fehler \d{3}\b/.test(m)) {
+    return { code: 'storage_failed', label: 'Zugriff auf die Ablage fehlgeschlagen' };
+  }
   // HTTP 429 oder 402
   if (/\b(429|402)\b/.test(m)) {
     if (/quota|insufficient|billing|credit|exceed|limit/i.test(m)) {
@@ -254,6 +263,9 @@ export async function processDocument(input, jobId, stepOffset = 0) {
   let preservedDokumentPins = [];
   let existingErfassungsdatum = null;
   let duplicateCleanupPending = false;
+  // Zurückgestellt: Die Warteschlange übernimmt den Auftrag samt In-Flight-
+  // Sperre der Datei, damit der Watcher sie in der Wartezeit nicht erneut greift.
+  let zurueckgestellt = false;
 
   // Ein Retry aus der Failed-Liste (routes/actions.js) lässt seinen
   // _failed_documents-Eintrag bewusst stehen, bis dieser Lauf ihn erledigt hat.
@@ -329,8 +341,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         try {
           // Derselbe Sweep, der den Fehleintrag erst erzeugt hat, kann die
           // physische Datei zusätzlich nach _failed verschoben haben, während
-          // storage_id und die postbuch-Zeile unverändert blieben (genau die
-          // P000002-Korruption vom Testsystem). Soll-Ist-Abgleich wie bei einer
+          // storage_id und die postbuch-Zeile unverändert blieben. Soll-Ist-Abgleich wie bei einer
           // manuellen LxD-Korrektur (type-change.js): aktuellen Ordner gegen die
           // aus der DB-Klassifikation berechnete Sollablage prüfen und bei
           // Abweichung dorthin zurückverschieben, bevor der Fehleintrag verschwindet.
@@ -383,7 +394,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       if (tracker.isCancelled(jobId)) throw new CancellationError();
 
       const inboxFolderId = getFolders(settings).inbox;
-      if (!inboxFolderId) throw new Error('Inbox-Ordner der Ablage nicht konfiguriert');
+      if (!inboxFolderId) throw new Error('Inbox-Ordner der Ablage nicht konfiguriert. Lege zuerst die Ordnerstruktur an: im Einrichtungsassistenten im Schritt „Ordner“ oder unter Einstellungen → Dateiablage.');
 
       // ─── In-Flight-Sperre (Pfad B): ID erst nach Upload bekannt ───
       // Der Claim folgt synchron auf das Upload-Ergebnis, noch bevor der Zähler
@@ -411,6 +422,8 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         return; // Datei im Inbox belassen – der andere Prozess verarbeitet sie
       }
       _lockedId = onedriveFileId;
+      await auftraege.merkeAblageId(jobId, onedriveFileId, storage.name).catch((err) =>
+        console.error(`[doc-processor] Ablage-ID für gesicherten Auftrag ${jobId} nicht vermerkt: ${err.message}`));
 
       endPhase('Upload');
 
@@ -436,8 +449,20 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       endPhase('Download');
     }
 
+    // Manuelle Basisablage: Die Einordnung kommt aus dem Formular. KI-Analyse,
+    // Reparatur, Embedding und Duplikatprüfung entfallen; alles Übrige läuft
+    // wie bei jedem Eingang.
+    const manuell = input.manuelleErfassung || null;
+
     // ─── PHASE 2: KI-Analyse ───
-    if (!isResume || !extractedData) {
+    if (manuell) {
+      tracker.setStep(jobId, stepOffset + 2, 'Manuelle Ablage – ohne KI-Analyse');
+      if (tracker.isCancelled(jobId)) throw new CancellationError();
+      extractedData = await baueManuelleStruktur(manuell, manuell.eingangsname || input.filename);
+      appLog('INFO', 'doc-processor',
+        `Manuelle Ablage: L×D=${extractedData.lebensbereich}/${extractedData.dokumentart}`,
+        { entity: 'postbuch', correlationId: jobId || null });
+    } else if (!isResume || !extractedData) {
       // Fallback: kein extractedData im _resume-Payload → Analyse erneut ausführen
       if (!pdfOriginal) {
         pdfOriginal = input.pdfBuffer || await storage.download(onedriveFileId);
@@ -499,7 +524,16 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         {
           forceTier,
           stripTextLayerGewuenscht,
-          validateResult: (data) => pruefeFachblockStruktur(data, aktiveTaxonomie),
+          // Nur Aufträge aus der Warteschlange: sie geben ihren Platz frei und
+          // kommen später wieder, statt im Slot auf den KI-Dienst zu warten.
+          zurueckstellbar: input._zurueckstellbar === true,
+          ohneWartezeit: input._letzterVersuch === true,
+          validateResult: (data) => {
+            if (ordneFachblockZu(data, aktiveTaxonomie)) {
+              console.log(`[doc-processor] Fachblock "${data.dokumentart}" dem erwarteten Block zugeordnet`);
+            }
+            return pruefeFachblockStruktur(data, aktiveTaxonomie);
+          },
         },
       );
       plog = extractedData._pipelineLog || {};
@@ -546,7 +580,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         : '';
       const pipelineSummary =
         `Voranalyse: ${plog.pages || 1} Seite${(plog.pages || 1) !== 1 ? 'n' : ''}, d=${plog.difficulty ?? '?'} in ${plog.preAnalysisMs ?? '?'}ms, ` +
-        `Analyse mit ${plog.analysisModel} (${plog.chainReason ?? '?'}${fallbackHint}) in ${plog.analysisMs ?? '?'}ms`;
+        `Analyse mit ${modellAnzeigename(plog.analysisModel, settings, plog.analysisProviderId)} (${plog.chainReason ?? '?'}${fallbackHint}) in ${plog.analysisMs ?? '?'}ms`;
       appLog('INFO', 'doc-processor', `KI-Analyse: L×D=${extractedData.lebensbereich}/${extractedData.dokumentart}, Sicherheit=${extractedData.qualityFlags?.sicherheitsgrad}`, {
         details: pipelineSummary,
         entity: 'postbuch',
@@ -569,14 +603,21 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     //
     // Kein eigener tracker-Schritt: die Schrittzahl ist Vertrag mit dem
     // WebSocket-UI. Stattdessen nur das Label des laufenden Schritts.
-    tracker.setStep(jobId, stepOffset + 2, 'KI-Analyse — Ausgabe wird geprüft');
-    const pruefung = await pruefeUndRepariere(extractedData, settings, {
-      correlationId: jobId,
-      entity: 'postbuch',
-      entityId: input.modifyPostID || null,
-    });
+    if (!manuell) tracker.setStep(jobId, stepOffset + 2, 'KI-Analyse – Ausgabe wird geprüft');
+    const pruefung = manuell
+      ? { data: extractedData, repariert: false, reparaturen: [], fatal: null }
+      : await pruefeUndRepariere(extractedData, settings, {
+        correlationId: jobId,
+        entity: 'postbuch',
+        entityId: input.modifyPostID || null,
+      });
     extractedData = pruefung.data;
     validierung = pruefung;
+    // Ohne Datum oder Absender lässt die KI den Namensvorschlag oft weg oder
+    // füllt ihn mit Platzhaltern; dann trägt der Name Datum, Kontakt und Betreff.
+    if (!manuell && extractedData?.postbuch) {
+      extractedData.postbuch.dateiname = namensstammAusAnalyse(extractedData.postbuch);
+    }
 
     // Beim Resume nach einer Duplikat-Suspension liegen im Payload bereits die
     // BEREINIGTEN Daten des Erstlaufs — die Prüfung findet dort zu Recht nichts
@@ -609,9 +650,11 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         extractedData.qualityFlags.warnungen = [];
       }
       for (const r of pruefung.reparaturen) {
-        const text = r.ergebnis === 'genullt'
-          ? `Feld "${r.feld}" konnte nicht übernommen werden (${r.roh}) — bitte prüfen und nachtragen`
-          : `Feld "${r.feld}" wurde automatisch korrigiert (${r.roh} → ${r.neu})`;
+        const text = r.ergebnis === 'ergaenzt'
+          ? `Fachblock "${r.feld}" fehlte in der KI-Antwort und wurde leer angelegt – bitte nachtragen`
+          : r.ergebnis === 'genullt'
+            ? `Feld "${r.feld}" konnte nicht übernommen werden (${r.roh}) — bitte prüfen und nachtragen`
+            : `Feld "${r.feld}" wurde automatisch korrigiert (${r.roh} → ${r.neu})`;
         extractedData.qualityFlags.warnungen.push(text);
       }
     }
@@ -630,7 +673,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
 
     // ─── PHASE 3: Duplikaterkennung (Embedding-basiert) ───
     startPhase();
-    tracker.setStep(jobId, stepOffset + 3, 'Duplikaterkennung');
+    tracker.setStep(jobId, stepOffset + 3, manuell ? 'Kennung vergeben' : 'Duplikaterkennung');
     if (tracker.isCancelled(jobId)) throw new CancellationError();
 
     // _resume: Wiederaufnahme nach Suspension (Entscheidung bereits gefallen)
@@ -641,7 +684,9 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     let newEmbeddingSignature = input._resume?.embeddingSignature || null;
     let embErrMessage = null; // gesetzt wenn Embedding-API fehlschlägt (Soft-Fail)
 
-    if (!isResume) {
+    // Manuelle Ablage: Mit Betreff entsteht das Embedding gleich mit (für die
+    // semantische Suche), eine Duplikatprüfung findet dort aber nicht statt.
+    if (!isResume && (!manuell || extractedData.postbuch?.betreff)) {
       try {
         newEmbeddingSignature = await aktuelleEmbeddingSignatur();
         newEmbedding = await fetchEmbeddingForExtractedData(extractedData, settings, {
@@ -664,11 +709,23 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       }
     }
 
-    const threshold = Number(settings.duplicate_embedding_threshold || 0.90);
-    const dupResult = await duplicateChecker.check(
-      { extractedData, embedding: newEmbedding, modifyPostID: input.modifyPostID, threshold },
-      pool
-    );
+    const threshold = Number(settings.duplicate_embedding_threshold || 0.80);
+    // KI-Duplikatprüfung in Zweifelsfällen: nur mit Option und nicht beim
+    // Wiederaufnehmen einer Zurückstellung (die Entscheidung steht dann fest;
+    // ein zweiter kostenpflichtiger Aufruf brächte nichts).
+    const kiPruefung = settings.duplicate_ki_pruefung === true && !isResume && !input.modifyPostID
+      ? erstelleKiPruefung({
+        neuPdf: pdfOriginal || input.pdfBuffer || null,
+        settings,
+        jobId,
+      })
+      : null;
+    const dupResult = manuell
+      ? { isDuplicate: false, matchID: null, match: null }
+      : await duplicateChecker.check(
+        { extractedData, embedding: newEmbedding, modifyPostID: input.modifyPostID, threshold, kiPruefung },
+        pool
+      );
     const { isDuplicate, matchID, match: dupMatch } = dupResult;
 
     // PostID bestimmen
@@ -683,7 +740,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       finalPostID = input._resume.reservedPostid;
     } else if (isDuplicate && !isResume) {
       // Duplikat erkannt, noch keine Entscheidung → Suspension anlegen
-      const timeoutMin = Number(settings.duplicate_decision_timeout_min || 60);
+      const timeoutMin = Number(settings.duplicate_decision_timeout_min || 10080);
       const expiresAt = new Date(Date.now() + timeoutMin * 60_000);
 
       const seqResult = await pool.query(
@@ -750,7 +807,12 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         payload: suspPayload,
         stepOffset,
         expiresAt,
+        begruendung: dupResult.begruendung || null,
       });
+      // Ab hier führt die Duplikat-Entscheidung das Dokument (UI oder Timeout);
+      // ein stehengebliebener Failed-Eintrag zeigte es doppelt und nach
+      // „Verwerfen“ auf eine Datei im Papierkorb.
+      await clearFailedEntry();
 
       // Discord-Benachrichtigung (best-effort)
       const discordMessageId = await duplicateNotifier.requestDecision({
@@ -869,30 +931,30 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     const ablageGruppe = await effektiveGruppe(extractedData.lebensbereich, extractedData.dokumentart);
     const behandelteBlock = ablageGruppe === 'arztrechnung' ? extractedData.arztrechnung
       : ablageGruppe === 'arztbericht' ? extractedData.arztbericht : null;
-    const destFolderId = await ensureAblageOrdner(settings, {
+    // Stamm bereinigen und nur ihn kürzen: PostID und Endung bleiben auch bei
+    // einem sehr langen Namen vollständig (ein `.pdf` am Stamm entfällt).
+    const wunschFileName = baueDokumentDateiname(extractedData.postbuch?.dateiname, finalPostID);
+    // Der Adapter kann den Namen ändern: er saniert ihn (der Wunschname kommt
+    // aus einer LLM-Ausgabe) und weicht bei Namenskollision auf „… (2).pdf"
+    // aus. Ab hier gilt deshalb der zurückgegebene Name – sonst stünde in
+    // storage_filename ein Name, den es in der Ablage so nicht gibt.
+    // mitAblageOrdner() löst eine inzwischen verschwundene Ordner-ID neu auf.
+    let destFolderId = null;
+    const { id: newFileId, webUrl, name: newFileName } = await mitAblageOrdner(settings, {
       lebensbereich: extractedData.lebensbereich,
       dokumentart: extractedData.dokumentart,
       familienmitglied,
       behandelte_person: typeof behandelteBlock?.behandeltePerson === 'string' ? behandelteBlock.behandeltePerson : null,
       briefdatum: extractedData.postbuch?.briefdatum || null,
       richtung,
-    }, storage.name);
-
-    // .pdf am Ende entfernen falls LLM es mitliefert (war in n8n bereits ein Bug)
-    const dateinameRaw = extractedData.postbuch?.dateiname || 'Dokument';
-    const dateiname = dateinameRaw.replace(/\.pdf$/i, '');
-    const wunschFileName = `${dateiname} ${finalPostID}.pdf`;
-    await pipelineFileJournal.noteMoveIntent(jobId, destFolderId, wunschFileName);
-    // Der Adapter kann den Namen ändern: er saniert ihn (der Wunschname kommt
-    // aus einer LLM-Ausgabe) und weicht bei Namenskollision auf „… (2).pdf"
-    // aus. Ab hier gilt deshalb der zurückgegebene Name — sonst stünde in
-    // storage_filename ein Name, den es in der Ablage so nicht gibt.
-    const { id: newFileId, webUrl, name: newFileName } = await storage.move(
-      onedriveFileId, destFolderId, wunschFileName
-    );
+    }, storage.name, async (folderId) => {
+      destFolderId = folderId;
+      await pipelineFileJournal.noteMoveIntent(jobId, folderId, wunschFileName);
+      return storage.move(onedriveFileId, folderId, wunschFileName);
+    });
     movedFileMeta = { id: newFileId, webUrl, name: newFileName, lastModified: null };
     await pipelineFileJournal.noteMoved(jobId, newFileId, newFileName);
-    console.log(`[doc-processor] Datei verschoben: ${newFileName} → ${webUrl}`);
+    console.log(`[doc-processor] Datei verschoben: ${newFileName} → ${webUrl || `Ordner ${destFolderId}`}`);
     appLog('INFO', 'doc-processor', `Ablage-Sortierung: ${newFileName}`, { entity: 'postbuch', entityId: finalPostID });
     endPhase('Sortierung');
 
@@ -904,15 +966,22 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     const isReprocessing = !!input.modifyPostID;
     const isDuplicateReplace = shouldReplace && !isReprocessing;
     await discord.sendMessage(
-      buildDiscordSuccessMessage(extractedData, finalPostID, isDuplicateReplace, webUrl, isReprocessing),
+      manuell
+        ? `### 📥 Manuell abgelegt\nDas Dokument [${newFileName}](${webUrl || '#'}) wurde ohne KI-Auswertung mit Schlüssel ${finalPostID} abgelegt.`
+        : buildDiscordSuccessMessage(extractedData, finalPostID, isDuplicateReplace, webUrl, isReprocessing),
       settings
     );
     // Push-Benachrichtigung (fire-and-forget, kein Fehler nach oben).
     // Kategorie: bei Wiederverarbeitung 'reprocess', sonst 'new_doc' (auch bei Duplikat-Ersetzung,
     // weil aus Nutzersicht ein neues bzw. verbessertes Dokument erscheint).
     const successCategory = isReprocessing ? 'reprocess' : 'new_doc';
+    const pushErfolg = buildPushSuccessPayload(extractedData, finalPostID, isDuplicateReplace, isReprocessing, settings);
+    if (manuell) {
+      pushErfolg.title = '📥 Dokument manuell abgelegt';
+      pushErfolg.body = `${finalPostID}: ${newFileName}`;
+    }
     sendPushToAllUsers(
-      buildPushSuccessPayload(extractedData, finalPostID, isDuplicateReplace, isReprocessing, settings),
+      pushErfolg,
       { category: successCategory },
     ).catch((e) => console.warn('[doc-processor] Push-Fehler:', e.message));
 
@@ -981,7 +1050,8 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       ? 'arztrechnung'
       : neueGruppe === 'handwerker'
         ? 'handwerkerrechnung'
-        : (!['erstattungsbescheid', 'arztbericht'].includes(neueGruppe) && extractedData.istRechnung)
+        : (!['erstattungsbescheid', 'arztbericht'].includes(neueGruppe)
+            && (extractedData.istRechnung || istPflichtRechnung(extractedData.dokumentart)))
           ? 'generische_rechnung'
           : null;
 
@@ -992,6 +1062,12 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       // sind eine einzige DB-Transaktion; nur externe Dateioperationen liegen davor.
       replacementClient = await oeffneSichereErsetzung(resolvedMatchID);
       dbWriter = replacementClient;
+      if (input.rechnungInvalidierung) {
+        const lage = await ermittleInvalidierungsLage(resolvedMatchID, dbWriter);
+        if (!lage.hatBlock || lage.gruende.length > 0) {
+          throw new Error(lage.gruende.join(' ') || 'Der Rechnungsblock wurde zwischenzeitlich entfernt.');
+        }
+      }
 
       const aktenResult = await dbWriter.query(
         `SELECT COALESCE(json_agg(json_build_object(
@@ -1123,7 +1199,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       if (ersetzungRow && zielRechnungstabelle !== ersetzungRow.tabelle) {
         throw new Error('Wiederverarbeitung gesperrt: Die Rechnung ist mit einer Korrekturrechnung verknüpft und muss eine Rechnung derselben Art bleiben. Bitte zuerst die Ersetzung aufheben.');
       }
-      if ((preservedBezahltAm || preservedBestrittenBetrag !== null) && !zielRechnungstabelle) {
+      if ((preservedBezahltAm?.value != null || preservedZahlungen.length || preservedBestrittenBetrag !== null) && !zielRechnungstabelle) {
         throw new Error('Wiederverarbeitung gesperrt: Manueller Zahlungs- oder Streitstatus kann beim Wechsel in einen Nicht-Rechnungstyp nicht erhalten werden.');
       }
       const neuerGesamtbetrag = Number(
@@ -1254,7 +1330,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         storage.name,
         webUrl,
         status,
-        sicherheitsgrad,
+        manuell ? null : sicherheitsgrad,
         JSON.stringify(extractedData),
         existingNotiz || null,                       // Notiz vom alten Eintrag übernehmen
         null,
@@ -1269,8 +1345,11 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         newEmbedding ? newEmbeddingSignature : null,
         // Das Badge am Dokument zeigt das zuletzt lesende Modell, bei einer
         // Arztrechnung also ggf. die Nachlese; alle Aufrufe stehen im Token-Log.
-        plog.letztesModell || plog.analysisModel || null,
-        plog.preAnalysisModel || null,
+        // Bei der lokalen KI das wirklich laufende Modell statt ihres festen Alias.
+        (plog.letztesModell
+          ? modellAnzeigename(plog.letztesModell, settings)
+          : modellAnzeigename(plog.analysisModel, settings, plog.analysisProviderId)) || null,
+        modellAnzeigename(plog.preAnalysisModel, settings) || null,
         plog.analysisTokensIn    ?? null,
         plog.analysisTokensOut   ?? null,
         plog.preAnalysisTokensIn  ?? null,
@@ -1325,7 +1404,9 @@ export async function processDocument(input, jobId, stepOffset = 0) {
       input.korrekturAnweisung || '',
       { deferErstattungsbescheid: true },
     );
-    ebPending = !!detailResult?.erstattungsbescheidAusstehend;
+    // Manuell abgelegt: kein Fachjob. Der Bescheid bleibt ohne Fachdaten, bis
+    // ihn jemand bewusst mit KI auswerten lässt.
+    ebPending = !manuell && !!detailResult?.erstattungsbescheidAusstehend;
     // Auftrag des EB-Fachjobs: wird im Journal mitgespeichert, damit auch eine
     // Wiederholung nach Fehlschlag die Korrektur und Modellwahl des Nutzers kennt.
     const ebAuftrag = {
@@ -1334,7 +1415,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     };
 
     // Manuell gesetztes bezahlt_am wiederherstellen — KI darf diesen Wert nie überschreiben
-    if (preservedBezahltAm) {
+    if (preservedBezahltAm && zielRechnungstabelle) {
       const tables = ['arztrechnung', 'handwerkerrechnung', 'generische_rechnung'];
       let bezahltRestored = false;
       for (const t of tables) {
@@ -1639,6 +1720,16 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     }
 
   } catch (err) {
+    if (err instanceof tracker.ZurueckgestelltError && !dbStateComplete && !insertedPostId
+        && !replacementStarted && !movedFileMeta) {
+      // Bis zur KI-Analyse ist nichts verändert außer dem Upload aus Phase 0.
+      // Die Datei-ID geht mit, damit der nächste Versuch nicht erneut hochlädt.
+      zurueckgestellt = true;
+      err.storageId = onedriveFileId || null;
+      err.storageBackend = onedriveFileId ? (storage?.name || input.storageBackend || null) : null;
+      console.warn(`[doc-processor] Job ${jobId}: ${err.message}`);
+      throw err;
+    }
     // ─── CLEANUP bei Fehler oder Abbruch ───
     console.error(`[doc-processor] Fehler: ${err.message}`);
     if (replacementClient) {
@@ -1735,6 +1826,7 @@ export async function processDocument(input, jobId, stepOffset = 0) {
           sourceJobId: jobId,
           betreff: extractedData?.postbuch?.betreff || null,
           documentType: extractedData?.dokumentart || null,
+          originalFilename: input.filename || input._eingangsname || null,
           settings,
         }).then(async () => {
           await pipelineFileJournal.clear(jobId).catch((journalErr) => {
@@ -1770,12 +1862,17 @@ export async function processDocument(input, jobId, stepOffset = 0) {
         // Eintrag in _scan_retry_queue anlegen: exponentieller Backoff-Retry.
         const _s1BufferJobId = input._retrySourceJobId || jobId;
         await pool.query(
-          `INSERT INTO postbuch._scan_retry_queue
+          `INSERT INTO postbuch._scan_retry_queue AS q
             (job_id, original_filename, local_file_path, next_retry_at, last_error)
            VALUES ($1, $2, $3, now() + interval '30 minutes', $4)
            ON CONFLICT (job_id) DO UPDATE
              SET last_error    = EXCLUDED.last_error,
-                 next_retry_at = now() + interval '30 minutes'`,
+                 status        = CASE WHEN q.retry_count >= q.max_retries THEN 'manual_only' ELSE q.status END,
+                 -- Den Abstand hat die Übernahme des Versuchs schon gesetzt. Ein
+                 -- ausgeschöpfter Eintrag hat keinen nächsten Versuch; seine
+                 -- Sperrfrist gegen Doppelauslösung endet mit diesem Lauf.
+                 next_retry_at = CASE WHEN q.status = 'manual_only' OR q.retry_count >= q.max_retries
+                                      THEN now() ELSE q.next_retry_at END`,
           [
             _s1BufferJobId,
             input.filename || `scan_${_s1BufferJobId}.pdf`,
@@ -1817,7 +1914,98 @@ export async function processDocument(input, jobId, stepOffset = 0) {
     }
   } finally {
     // In-Flight-Sperre immer freigeben – egal ob Erfolg, Fehler oder Abbruch
-    if (_lockedId) releaseInFlight(_lockedId);
+    if (_lockedId && !zurueckgestellt) releaseInFlight(_lockedId);
+  }
+}
+
+/**
+ * Liegt ein inhaltsgleiches PDF schon in der Inbox? Nach einem Absturz zwischen
+ * Upload und Vermerk der Ablage-ID gibt es Puffer und Inbox-Datei zugleich;
+ * dann übernimmt der Watcher die Datei und der Puffer entfällt.
+ */
+export async function inboxHatKopie(pdfBuffer) {
+  if (!pdfBuffer?.length) return false;
+  const settings = await loadDynamicSettings();
+  const inboxId = getFolders(settings).inbox;
+  if (!inboxId) return false;
+  const adapter = getActiveAdapterFor(settings);
+  const soll = createHash('sha256').update(pdfBuffer).digest('hex');
+  const kandidaten = (await adapter.listChildren(inboxId))
+    .filter((c) => !c.isFolder && Number(c.size) === pdfBuffer.length);
+  for (const k of kandidaten) {
+    try {
+      const ist = await adapter.download(k.id);
+      if (createHash('sha256').update(ist).digest('hex') === soll) return true;
+    } catch { /* nächster Kandidat */ }
+  }
+  return false;
+}
+
+/**
+ * Verwirft einen Eingang, der noch kein Dokument ist – beim Abbruch eines
+ * zurückgestellten Auftrags und beim „Verwerfen“ in der Eingangsgalerie.
+ *
+ * Eine schon hochgeladene Datei geht in den Papierkorb ihres Backends. Ein nur
+ * lokal gepuffertes PDF wird in den Papierkorb der aktiven Ablage geladen und
+ * erst danach aus dem Puffer gelöscht. Scheitert das, bleibt der Eingang
+ * sichtbar: die Datei als Fehleintrag, der Puffer als Scan-Retry-Eintrag, der
+ * auf eine Handlung wartet. Die In-Flight-Sperre der Datei wird in jedem Fall
+ * freigegeben.
+ *
+ * @returns {Promise<{ ok: boolean, fehler?: string }>}
+ */
+export async function verwirfZurueckgestellt({ jobId, storageId, storageBackend, pufferJobId, label, praefix = 'Abgebrochen', ohneFehleintrag = false }) {
+  const name = String(label || 'Dokument').replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|]/g, '_').slice(0, 80);
+  const trashDateiname = `[${praefix}] ${name} ${Date.now()}.pdf`;
+  try {
+    if (storageId && storageBackend) {
+      await getAdapter(storageBackend).moveToTrash(storageId, trashDateiname);
+    }
+    if (pufferJobId) {
+      let puffer = null;
+      try {
+        puffer = await readScanBuffer(pufferJobId);
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+      }
+      if (puffer) {
+        const settings = await loadDynamicSettings();
+        const trashId = getFolders(settings).trash;
+        if (!trashId) throw new Error('Papierkorb-Ordner der Ablage nicht konfiguriert.');
+        await getActiveAdapterFor(settings).uploadNew(puffer, trashDateiname, trashId);
+        await deleteScanBuffer(pufferJobId);
+      }
+      await pool.query('DELETE FROM postbuch._scan_retry_queue WHERE job_id = $1', [pufferJobId]);
+    }
+    return { ok: true };
+  } catch (err) {
+    appLog('ERROR', 'doc-processor',
+      `Eingang ${name} konnte nicht verworfen werden: ${err.message}`);
+    if (storageId && ohneFehleintrag) {
+      // Die Quelle ist selbst ein Fehleintrag und bleibt unverändert stehen.
+    } else if (storageId) {
+      await failedHandler.recordOrphanedFailed({
+        onedriveFileId: storageId,
+        reason: 'Verwerfen: Papierkorb-Move fehlgeschlagen',
+        detail: err.message,
+        sourceJobId: jobId,
+        backend: storageBackend,
+      }).catch(() => {});
+    } else if (pufferJobId) {
+      await pool.query(
+        `INSERT INTO postbuch._scan_retry_queue
+           (job_id, original_filename, local_file_path, next_retry_at, last_error, status)
+         VALUES ($1, $2, $3, now(), $4, 'manual_only')
+         ON CONFLICT (job_id) DO UPDATE
+           SET last_error = EXCLUDED.last_error, next_retry_at = now()`,
+        [pufferJobId, label || `scan_${pufferJobId}.pdf`,
+          path.join(SCAN_BUFFER_DIR, `${pufferJobId}.pdf`),
+          `Verwerfen fehlgeschlagen: ${err.message}`.slice(0, 500)],
+      ).catch((e) => console.error(`[doc-processor] Puffer ${pufferJobId} nicht als Eingang vermerkt: ${e.message}`));
+    }
+    return { ok: false, fehler: err.message };
+  } finally {
+    if (storageId) releaseInFlight(storageId);
   }
 }
 

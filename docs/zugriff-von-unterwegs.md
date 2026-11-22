@@ -35,6 +35,10 @@ Prüfe zuerst im Heimnetz, unter welcher Adresse du postbuch.net aufrufst:
   über das VPN, im Browser. Eine installierte App und Push-Nachrichten
   brauchen aber eine HTTPS-Adresse (siehe [Mobil und PWA](mobil-und-pwa.md#als-app-installieren-pwa)).
 
+Läuft postbuch.net auf einem Windows-PC, muss es im Heimnetz erreichbar sein
+(siehe [Zugriff aus dem Heimnetz unter Windows](installation.md#zugriff-aus-dem-heimnetz-unter-windows)),
+und der PC darf nicht schlafen, während du zugreifst.
+
 Hat die Domain zu Hause einen DNS-Rebind-Schutz gebraucht (siehe
 [FAQ](faq.md#betrieb)), gilt dieselbe Ausnahme auch für das VPN, solange das
 Smartphone den Router als DNS-Server nutzt. Bei der FRITZ!Box trägt die

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { PageLoader, EmptyState } from '@/components/ui/spinner';
@@ -9,7 +9,7 @@ import { geteilteDateienEinreichen } from '@/lib/geteilteDateien';
 import {
   Activity, CheckCircle2, XCircle, Ban, AlertTriangle, Loader2,
   Check, X, Clock, Workflow, PauseCircle, GitMerge, Trash2, Copy,
-  Eye, ExternalLink,
+  Eye, ExternalLink, RotateCcw,
 } from 'lucide-react';
 
 const POLL_INTERVAL_MS = 3000;
@@ -78,10 +78,12 @@ function normalizeJob(raw) {
 }
 
 const JOB_TYPE_LABELS = {
+  'scan':          'Scan',
   'doc-process':   'Dokument-Verarbeitung',
   'doc-reprocess': 'Wiederverarbeitung',
   'backup':        'Backup',
   'eb-matching':   'Erstattungsbescheid-Abgleich',
+  'stapel':        'Dokumentenstapel',
 };
 
 function jobTypeLabel(type) {
@@ -103,6 +105,7 @@ const STEP_TEMPLATES = {
       'Datenbank', 'Embedding',
     ],
   },
+  scan: ['Scanner liest ein', 'Texterkennung'],
   'doc-reprocess': [
     'Upload in die Ablage', 'Download aus der Ablage', 'KI-Analyse', 'Duplikaterkennung',
     'Duplikat-Handling', 'Ablage-Sortierung', 'Benachrichtigung', 'PDF rotieren',
@@ -253,10 +256,6 @@ function SuspendedJobCard({ job, onDecide }) {
   const newPdfUrl = job.onedriveId ? api.files.suspendedPdfUrl(job.onedriveId) : null;
   const simPct = job.similarity != null ? Math.round(job.similarity * 100) : null;
 
-  // Auto-decision: replace when new doc is better quality, else discard
-  const autoIsReplace = job.newConfidence != null && job.matchConfidence != null
-    ? job.newConfidence > job.matchConfidence
-    : null;
   const expiresLabel = job.expiresAt
     ? new Date(job.expiresAt).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
     : null;
@@ -358,29 +357,30 @@ function SuspendedJobCard({ job, onDecide }) {
         </div>
       )}
 
-      {/* Auto-decision hint */}
-      {autoIsReplace != null && (
-        <div className={`flex items-start gap-2 rounded-md border px-3 py-2 text-[11px] ${autoIsReplace ? 'border-emerald-500/30 bg-emerald-500/5 text-emerald-300' : 'border-red-500/30 bg-red-500/5 text-red-300'}`}>
-          <span className="mt-0.5 shrink-0">{autoIsReplace ? '🔄' : '🗑️'}</span>
+      {/* Fristende: beide Dokumente bleiben */}
+      {expiresLabel && (
+        <div className="flex items-start gap-2 rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-[11px] text-muted-foreground">
           <span>
-            <span className="font-semibold">Keine Reaktion bis {expiresLabel || '–'}:</span>
-            {autoIsReplace
-              ? ` Auto-Replace – neues Dok. (${Math.round(job.newConfidence * 100)}%) hat höhere Qualität als ${job.matchPostid} (${Math.round(job.matchConfidence * 100)}%), wird übernommen`
-              : ` Auto-Discard – neues Dok. (${Math.round(job.newConfidence * 100)}%) hat keine höhere Qualität als ${job.matchPostid} (${Math.round(job.matchConfidence * 100)}%), wird verworfen`
-            }
+            <span className="font-semibold">Keine Entscheidung bis {expiresLabel}:</span> beide Dokumente werden behalten.
           </span>
         </div>
       )}
 
       {/* Decision buttons */}
       <div className="flex items-center gap-2 flex-wrap">
+        <Link
+          to={`/import/duplikat/${encodeURIComponent(job.id)}`}
+          className="inline-flex items-center gap-1.5 rounded-md border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 text-xs font-semibold text-violet-400 hover:bg-violet-500/20 hover:border-violet-500/60 transition-colors"
+        >
+          Alt und neu vergleichen
+        </Link>
         <button
           onClick={() => handleDecide('replace')}
           disabled={!!busy}
           className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-semibold text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/60 transition-colors disabled:opacity-50 disabled:cursor-wait"
         >
           {busy === 'replace' ? <Loader2 className="h-3 w-3 animate-spin" /> : <GitMerge className="h-3 w-3" />}
-          Bestehendes ersetzen
+          Neue Fassung behalten
         </button>
         <button
           onClick={() => handleDecide('keep_both')}
@@ -388,7 +388,7 @@ function SuspendedJobCard({ job, onDecide }) {
           className="inline-flex items-center gap-1.5 rounded-md border border-sky-500/40 bg-sky-500/10 px-3 py-1.5 text-xs font-semibold text-sky-400 hover:bg-sky-500/20 hover:border-sky-500/60 transition-colors disabled:opacity-50 disabled:cursor-wait"
         >
           {busy === 'keep_both' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Copy className="h-3 w-3" />}
-          Beide behalten
+          Beide behalten (kein Duplikat)
         </button>
         <button
           onClick={() => handleDecide('discard')}
@@ -396,7 +396,7 @@ function SuspendedJobCard({ job, onDecide }) {
           className="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-400 hover:bg-red-500/20 hover:border-red-500/60 transition-colors disabled:opacity-50 disabled:cursor-wait"
         >
           {busy === 'discard' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-          Duplikat verwerfen
+          Alte Fassung behalten
         </button>
       </div>
     </div>
@@ -406,6 +406,7 @@ function SuspendedJobCard({ job, onDecide }) {
 // ── Active job card ─────────────────────────────────────────────────────────
 
 function ActiveJobCard({ job, onCancel }) {
+  const navigate = useNavigate();
   const [, forceTick] = useState(0);
   const [cancelling, setCancelling] = useState(false);
 
@@ -444,6 +445,20 @@ function ActiveJobCard({ job, onCancel }) {
           </div>
           <h3 className="mt-1 text-sm font-medium text-foreground truncate">{job.label}</h3>
         </div>
+        <div className="flex shrink-0 items-center gap-2">
+        {/* Laufende und wartende Eingänge haben in der Eingangsgalerie eine
+            Detailseite unter derselben Job-ID (service/offene-eingaenge.js, „a:“,
+            Dokumentenstapel „t:“);
+            ist der Eingang inzwischen weitergewandert, leitet die Seite weiter. */}
+        {(job.type === 'doc-process' || job.type === 'scan' || job.type === 'stapel') && (
+          <button
+            onClick={() => navigate(`/import/eingang/${encodeURIComponent(`${job.type === 'stapel' ? 't' : 'a'}:${job.id}`)}`)}
+            className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground/80 hover:bg-muted transition-colors"
+          >
+            <Eye className="h-3.5 w-3.5" />
+            Im Eingang ansehen
+          </button>
+        )}
         {job.cancellable && (
           <button
             onClick={handleCancel}
@@ -454,6 +469,7 @@ function ActiveJobCard({ job, onCancel }) {
             {cancelling ? 'Abbrechen…' : 'Abbrechen'}
           </button>
         )}
+        </div>
       </div>
 
       <div className="mb-3">
@@ -488,6 +504,7 @@ function RetryButton({ onedriveId, onRetried }) {
     mutationFn: () => api.failedDocuments.reprocess(onedriveId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['failed-documents'] });
+      queryClient.invalidateQueries({ queryKey: ['offene-eingaenge'] });
       onRetried?.();
     },
     onError: (err) => alert(`Fehler beim Wiederverarbeiten: ${err.message}`),
@@ -657,6 +674,16 @@ function FolgenKarte({ zustand, jobs, onOeffnen, onAbbrechen, weiterleitung }) {
             {weiterleitung ? 'Jetzt öffnen' : 'Dokument öffnen'}
           </button>
         )}
+        {zustand.erneut && (
+          <button
+            type="button"
+            onClick={zustand.erneut}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-primary/40 bg-background px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary/10"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Erneut versuchen
+          </button>
+        )}
       </div>
       {weiterleitung && <AutoForwardRing onCancel={onAbbrechen} />}
     </div>
@@ -694,23 +721,35 @@ function useVerfolgung({ geteilt, folgenIds, scanDateien, onUrlErledigt, fetchJo
       onUrlErledigt?.();
       return;
     }
+    einreichenStarten();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schluessel]);
+
+  // Gescheiterte Uploads bleiben im Zwischenspeicher des Browsers; „Erneut
+  // versuchen“ reicht sie noch einmal ein, bisherige Jobs bleiben verfolgt.
+  function einreichenStarten(bisher = []) {
     setZustand({ phase: 'hochladen' });
-    geteilteDateienEinreichen().then(({ jobIds, fehler, ohnePdf }) => {
+    geteilteDateienEinreichen().then(({ jobIds, fehler, wartend, ohnePdf }) => {
       onUrlErledigt?.();
-      if (jobIds.length === 0) {
+      const alle = [...bisher, ...jobIds];
+      const erneut = wartend > 0 ? () => einreichenStarten(alle) : null;
+      const hinweis = wartend > 0
+        ? `${wartend === 1 ? 'Die Datei bleibt' : `Die ${wartend} Dateien bleiben`} auf diesem Gerät gespeichert (bis zu 24 Stunden). Versuche es erneut, sobald der Server erreichbar ist.`
+        : null;
+      if (alle.length === 0) {
         setZustand({
           phase: 'fehler',
           meldung: ohnePdf ? 'Es lassen sich nur PDF-Dateien übernehmen.'
-            : fehler.length > 0 ? fehler.slice(0, 5).join('\n')
+            : fehler.length > 0 ? [...fehler.slice(0, 5), hinweis].filter(Boolean).join('\n')
             : 'Es wartet keine geteilte Datei (mehr). Teile die PDF bitte erneut.',
+          erneut,
         });
         return;
       }
-      setZustand({ phase: 'laeuft', ziele: jobIds.map(jobId => ({ jobId })), fehler });
+      setZustand({ phase: 'laeuft', ziele: alle.map(jobId => ({ jobId })), fehler: hinweis ? [...fehler, hinweis] : fehler, erneut });
       fetchJobs();
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [schluessel]);
+  }
 
   return zustand;
 }

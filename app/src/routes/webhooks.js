@@ -20,13 +20,14 @@ import { Router } from 'express';
 import express from 'express';
 import { timingSafeEqual } from 'crypto';
 import db from '../db.js';
-import { enqueueDocument } from '../jobs/pipeline-queue.js';
+import { reiheDauerhaftEin } from '../jobs/pipeline-queue.js';
 import { replacePdf } from '../service/document-replace.js';
 import { consumePendingReplace, markReplaceJob, consumeReplaceJob } from '../service/replace-registry.js';
 import { consumePendingHinweisByFile, markHinweisJob, consumeHinweisJob } from '../service/hinweis-registry.js';
 import * as tracker from '../jobs/tracker.js';
+import { scanAngemeldet } from '../jobs/scan-vorgang.js';
 import { appLog } from '../app-log.js';
-import { saveScanBuffer } from '../lib/scan-buffer.js';
+import { blattAngemeldet, blattEingegangen, blattLeer } from '../service/stapel.js';
 
 const router = Router();
 
@@ -77,9 +78,15 @@ router.use(requireWebhookToken);
 // zuvor im Import-Screen einen Replace-Vorgang ausgelöst hat, wird hier die
 // Reservierung konsumiert und der Job als Replace-Auftrag markiert. /scan-complete
 // routet ihn dann in `replacePdf()` statt in die normale Pipeline.
-router.post('/scan-registered', (req, res) => {
+//
+// Ein Blatt eines Dokumentenstapels wird VOR der Ersetzen-Reservierung erkannt,
+// damit es einem gleichzeitigen Ersetzen-Scan nie die Reservierung nimmt. Es
+// bekommt eine Blattkennung statt eines Verarbeitungsauftrags (service/stapel.js).
+router.post('/scan-registered', async (req, res) => {
   try {
     const filename = req.headers['x-filename'] || `scan_${Date.now()}.pdf`;
+    const kennung = await blattAngemeldet(filename);
+    if (kennung) return res.json({ jobId: kennung });
     const replaceForPostId = consumePendingReplace();
 
     let jobId;
@@ -98,6 +105,7 @@ router.post('/scan-registered', (req, res) => {
       tracker.setStep(jobId, 0, 'Scan & OCR');
       markHinweisJob(jobId, consumePendingHinweisByFile(filename));
       appLog('INFO', 'webhooks', `Scan registriert: ${filename} (jobId: ${jobId})`);
+      scanAngemeldet(filename, jobId);
     }
     res.json({ jobId });
   } catch (err) {
@@ -121,6 +129,15 @@ router.post('/scan-complete',
       // Wenn Cleaner einen vorregistrierten Job mitschickt, diesen weiterführen (stepOffset=1).
       // Andernfalls neuen 10-Schritt-Job erstellen (Rückwärtskompatibilität).
       const xJobId = (req.headers['x-job-id'] || '').trim();
+
+      // ─── Sonderpfad: Blatt eines Dokumentenstapels ───
+      // Wird gesammelt statt eingereiht. null → Datei läuft als normaler Scan.
+      const blatt = await blattEingegangen(filename, xJobId, pdfBuffer);
+      if (blatt) {
+        appLog('INFO', 'webhooks', `Dokumentenstapel-Blatt ${blatt.seq} empfangen (${(pdfBuffer.length / 1024).toFixed(1)} KB)`,
+          { entity: 'stapel', entityId: blatt.stapelId });
+        return res.json({ jobId: xJobId || null, stapel: blatt.stapelId, message: 'Blatt übernommen' });
+      }
 
       // ─── Sonderpfad: Replace-Auftrag ───
       // Der zugehörige scan-registered-Aufruf hat den Job als Replace markiert.
@@ -174,21 +191,19 @@ router.post('/scan-complete',
       }
 
       appLog('INFO', 'webhooks', `Scan empfangen: ${filename} (${(pdfBuffer.length / 1024).toFixed(1)} KB, stepOffset=${stepOffset})`);
+      // Ohne vorherige Anmeldung übernimmt der Auftrag erst hier den Scan-Job.
+      scanAngemeldet(filename, jobId);
 
       // Benutzer-Hinweis: aus dem jobId-Mapping (via scan-registered gesetzt) oder
       // per Dateiname (Fallback wenn scan-registered nicht lief).
       const userHinweis = consumeHinweisJob(xJobId) || consumeHinweisJob(jobId) || consumePendingHinweisByFile(filename);
 
-      // PDF sofort auf Disk sichern — verhindert Datenverlust wenn Phase 0 (OD-Upload) scheitert.
-      // Buffer wird von Phase 0 nach erfolgreichem Upload gelöscht.
-      saveScanBuffer(jobId, pdfBuffer).catch(e =>
-        console.error(`[webhooks] saveScanBuffer fehlgeschlagen (kein Retry möglich): ${e.message}`)
-      );
-
       // Pipeline im Hintergrund starten (geht durch die Queue).
       // fromScanner: true → Dunkelverarbeitung verwirft die (Tesseract-)OCR-Textebene
       // vor der KI-Analyse. Nur der echte Scan-Pfad setzt dieses Flag.
-      enqueueDocument({ pdfBuffer, filename, fromScanner: true, ...(userHinweis ? { userHinweis } : {}) }, jobId, stepOffset, {
+      // reiheDauerhaftEin sichert das PDF (fsync) und den Auftrag, bevor der
+      // Cleaner seine Antwort bekommt. Phase 0 löscht den Puffer nach dem Upload.
+      await reiheDauerhaftEin({ pdfBuffer, filename, fromScanner: true, ...(userHinweis ? { userHinweis } : {}) }, jobId, stepOffset, {
         onError: (err) => {
           console.error(`[webhooks] Scan-Verarbeitung fehlgeschlagen für ${filename}: ${err.message}`);
           appLog('ERROR', 'webhooks', `Scan-Verarbeitung fehlgeschlagen: ${filename}: ${err.message}`);
@@ -206,13 +221,15 @@ router.post('/scan-complete',
 
 // POST /api/webhooks/scan-aborted — Cleaner meldet, dass ein Scan verworfen wurde
 // (z.B. alle Seiten leer). Markiert den Job als fehlgeschlagen.
-router.post('/scan-aborted', (req, res) => {
+router.post('/scan-aborted', async (req, res) => {
   try {
     const xJobId = (req.headers['x-job-id'] || '').trim();
     const reason = req.headers['x-reason'] || 'Scan verworfen';
     if (!xJobId) {
       return res.status(400).json({ error: 'X-Job-Id fehlt' });
     }
+    // Leeres Blatt eines Dokumentenstapels: nur das Blatt als leer vermerken.
+    if (await blattLeer(xJobId)) return res.json({ ok: true });
     tracker.fail(xJobId, reason);
     appLog('WARN', 'webhooks', `Scan abgebrochen: jobId=${xJobId}, Grund: ${reason}`);
     res.json({ ok: true });

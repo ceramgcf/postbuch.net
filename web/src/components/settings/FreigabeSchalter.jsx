@@ -2,7 +2,8 @@
  * Port-Freigaben über den Host-Agenten (admin-only)
  *
  *   • ScannerFreigabe – Scan-Webhook für andere Geräte im Netz (SCANNER_BIND).
- *   • ErreichbarkeitCard – Oberfläche nur über HTTPS (WEB_BIND).
+ *   • ErreichbarkeitCard – Oberfläche nur über HTTPS (WEB_BIND) und das
+ *     Nachführen der DuckDNS-Adresse.
  *
  * Die App ändert nichts selbst: Sie schreibt einen Hostauftrag „freigabe“, der
  * Host-Agent setzt den Wert in der .env und erstellt den betroffenen Container
@@ -20,6 +21,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Testergebnis } from '@/components/ui/testergebnis';
+import { Switch } from '@/components/ui/switch';
 import { Lock } from 'lucide-react';
 
 const AUFTRAG_LIEGT = 'Der Auftrag liegt beim Host-Agenten. Er führt ihn beim nächsten Lauf aus (in der Regel innerhalb einer Minute).';
@@ -132,6 +134,57 @@ function Countdown({ bis }) {
   return <span className="tabular-nums">{Math.floor(rest / 60)}:{String(rest % 60).padStart(2, '0')}</span>;
 }
 
+// Nur bei eingerichteter DuckDNS-Domain. Der Agent liest den Schalter bei
+// jedem Lauf selbst; ein Hostauftrag ist dafür nicht nötig.
+function DuckdnsNachfuehren({ agent, neuLaden }) {
+  const umschalten = useMutation({
+    mutationFn: (an) => api.updates.duckdnsNachfuehren(an),
+    onSuccess: () => neuLaden(),
+  });
+  const domain = agent?.duckdnsIp?.domain;
+  if (!domain) return null;
+  const kann = !!agent.capabilities?.includes('duckdns-schalter');
+  const an = agent.duckdnsNachfuehren !== false;
+  return (
+    <CardContent className="space-y-2 border-t pt-4">
+      <div className="flex items-start justify-between gap-4">
+        <span>
+          <span className="block text-sm font-medium">IP-Adresse bei DuckDNS automatisch nachführen</span>
+          <span className="block text-xs text-muted-foreground">
+            {!kann
+              ? 'Der installierte Host-Agent führt die Adresse immer nach. Abschalten lässt sich das nach dem nächsten Update.'
+              : an
+                ? `Bekommt dieser Rechner im Heimnetz eine neue Adresse, trägt postbuch.net sie selbst für ${domain} bei DuckDNS ein.`
+                : `Die Adresse von ${domain} bleibt so, wie sie bei DuckDNS steht. Passend für einen Rechner mit fester IP im Heimnetz; ändert sie sich doch, trägst du sie auf duckdns.org selbst ein.`}
+          </span>
+        </span>
+        <Switch checked={an} disabled={!kann || umschalten.isPending} onCheckedChange={(wert) => umschalten.mutate(wert)} label="IP-Adresse automatisch nachführen" />
+      </div>
+      {umschalten.isError && <Testergebnis status="fehler">{umschalten.error.message}</Testergebnis>}
+    </CardContent>
+  );
+}
+
+function WindowsNetzwerkzugriff({ status }) {
+  const zeit = status.zeit
+    ? new Date(status.zeit).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })
+    : null;
+  return (
+    <CardContent className="space-y-2">
+      <p className="text-sm font-medium">Netzwerkzugriff unter Windows</p>
+      <p className="text-sm">
+        {status.aktiv === true ? 'Freigabe aktiv' : status.aktiv === false ? 'Freigabe aus' : 'Firewall-Status unbekannt'}
+        {zeit && <span className="text-muted-foreground"> · zuletzt vom Installer geprüft am {zeit}</span>}
+      </p>
+      <p className="text-xs text-muted-foreground">
+        Öffne auf dem Server-PC <strong>Windows-Einstellungen → Apps → Installierte Apps → postbuch.net Server → Ändern</strong>.
+        Wähle im Installer <strong>Netzwerkfreigabe ändern</strong>. Den Eintrag findest du auch unter
+        <strong> Systemsteuerung → Programme und Features</strong>.
+      </p>
+    </CardContent>
+  );
+}
+
 export function ErreichbarkeitCard() {
   const { agent, lauf, schalten, steuerbar, laeuft, updates } = useFreigabe();
   const [frage, setFrage] = useState(false);
@@ -145,27 +198,36 @@ export function ErreichbarkeitCard() {
     onSuccess: () => updates.refetch(),
   });
   const ueberHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
-  if (!agent?.vorhanden) return null;
+  const windowsFirewall = updates.data?.windowsFirewall;
+  if (!agent?.vorhanden && !windowsFirewall) return null;
 
-  const zustand = agent.freigaben?.web;
+  const zustand = agent?.freigaben?.web;
   const nurHttps = zustand === 'lokal';
+  // Ohne laufendes HTTPS gibt es nichts umzuschalten; die Karte sagt nur, wie es ist.
+  const ohneHttps = agent?.httpsAktiv === false;
   const offeneBestaetigung = !!offenerLauf;
 
   return (
     <Card>
       <CardHeader className="pb-3">
         <div className="flex items-center gap-2"><Lock className="h-5 w-5 text-primary" /><CardTitle className="text-base">Erreichbarkeit</CardTitle></div>
-        <CardDescription className="text-xs pt-1">
-          {!steuerbar
+        {agent?.vorhanden && <CardDescription className="text-xs pt-1">
+          {windowsFirewall?.aktiv === false
+            ? 'Bei der letzten Prüfung durch den Windows-Installer war die Firewall-Freigabe ausgeschaltet.'
+            : ohneHttps
+            ? (nurHttps
+              ? 'HTTPS läuft nicht, die Oberfläche ist aber nur auf diesem Rechner selbst erreichbar (WEB_BIND=127.0.0.1 in der .env). Andere Geräte kommen erst wieder hinein, wenn HTTPS läuft oder WEB_BIND leer ist.'
+              : 'Die Oberfläche ist über die IP-Adresse dieses Rechners im Heimnetz erreichbar, ohne Verschlüsselung. HTTPS über DuckDNS richtest du im Einrichtungsassistenten unter Instanz ein.')
+            : !steuerbar
             ? 'Der installierte Host-Agent kann die Erreichbarkeit noch nicht umschalten. Nach dem nächsten Update geht das hier.'
             : zustand === 'anders'
               ? 'Die Oberfläche ist von Hand auf eine bestimmte Adresse beschränkt (WEB_BIND in der .env).'
               : nurHttps
                 ? 'Die Oberfläche ist nur über HTTPS erreichbar. Der direkte Zugang über die IP-Adresse im Heimnetz ist geschlossen.'
                 : 'Die Oberfläche ist über HTTPS und zusätzlich direkt über die IP-Adresse im Heimnetz erreichbar, dort ohne Verschlüsselung.'}
-        </CardDescription>
+        </CardDescription>}
       </CardHeader>
-      {steuerbar && zustand !== 'anders' && (
+      {steuerbar && zustand !== 'anders' && !ohneHttps && (
         <CardContent className="space-y-3">
           {offeneBestaetigung ? (
             <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">
@@ -198,6 +260,8 @@ export function ErreichbarkeitCard() {
           {!offeneBestaetigung && <LaufMeldung lauf={lauf} laeuft={laeuft} fehler={schalten.error} />}
         </CardContent>
       )}
+      {windowsFirewall && <WindowsNetzwerkzugriff status={windowsFirewall} />}
+      {agent?.vorhanden && <DuckdnsNachfuehren agent={agent} neuLaden={() => updates.refetch()} />}
 
       <Dialog open={frage} onOpenChange={(o) => { if (!o) setFrage(false); }}>
         <DialogTitle>Nur noch über HTTPS erreichbar machen?</DialogTitle>

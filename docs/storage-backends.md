@@ -1,21 +1,22 @@
 # Dateiablage-Backends
 
-Die PDFs selbst liegen nie auf dem postbuch.net-Server, sondern immer in einer
-externen **Dateiablage**. In der Datenbank steht nur, welches Dokument zu welcher
+Die PDFs selbst liegen nicht in der Datenbank, sondern in einer
+**Dateiablage** – einem Cloud-Speicher, deinem eigenen Server oder einem Ordner
+auf dem Rechner, auf dem postbuch.net läuft. In der Datenbank steht nur, welches Dokument zu welcher
 Datei gehört. Damit ist die Dateiablage der Ort, an dem deine Dokumente wirklich
 wohnen – und der Ort, den dein eigenes Backup erfassen muss (siehe
 [Backup und Wiederherstellung](backup-wiederherstellung.md)).
 
 > [!IMPORTANT]
 >
-> **Eine funktionsfähige Dateiablage ist zwingend.** Ohne verbundenes OneDrive- oder
-> WebDAV-Backend kann postbuch.net keine Dokumente aufnehmen, verarbeiten oder
+> **Eine funktionsfähige Dateiablage ist zwingend.** Ohne eingerichtete
+> Dateiablage kann postbuch.net keine Dokumente aufnehmen, verarbeiten oder
 > sichern. Bereits einmal geöffnete PDFs liegen zusätzlich als begrenzte,
 > regenerierbare Zwischenkopie in der Datenbank und bleiben dadurch teils auch
 > ohne Dateiablage lesbar – einen sinnvollen Betriebsmodus ohne Dateiablage ergibt das
 > aber nicht; wählbar ist nur, welches Backend du verwendest.
 
-postbuch.net kennt zwei Dateiablagen:
+postbuch.net kennt drei Dateiablagen:
 
 - **OneDrive** – Microsofts Cloud, angebunden über Microsoft Graph und eine
   eigene, kostenlose Azure-App.
@@ -23,8 +24,11 @@ postbuch.net kennt zwei Dateiablagen:
   `nextcloud`, der Adapter spricht aber generisches WebDAV der ownCloud-Familie
   (`oc:fileid`). Verifiziert gegen **Nextcloud** und **ownCloud**;
   **MagentaCLOUD** ist Nextcloud-basiert und funktioniert ebenfalls.
+- **Ordner auf diesem Rechner** – ein gewöhnlicher Ordner auf dem Rechner, auf
+  dem postbuch.net läuft. Intern heißt dieses Backend `lokal`. Es steht nur
+  zur Wahl, wenn die Installation einen solchen Ordner eingebunden hat.
 
-Beide werden über dieselbe interne Schnittstelle angesprochen
+Alle drei werden über dieselbe interne Schnittstelle angesprochen
 (`app/src/lib/storage/`). Alles, was oberhalb davon liegt – Pipeline,
 Sortierung, Backup, Export, Disaster Recovery – kennt nur diese Schnittstelle
 und nicht das konkrete Backend.
@@ -211,18 +215,105 @@ Servers geklärt werden.
 
 ---
 
-## Was die beiden Dateiablagen unterscheiden
+## Ordner auf diesem Rechner
+
+Die Dokumente liegen als gewöhnliche PDF-Dateien in einem Ordner des Rechners,
+auf dem postbuch.net läuft. Es gibt nichts zu verbinden und kein Konto bei einem
+Anbieter. Bei der Betriebsart „Komplett lokal“ legt der Installer den Ordner
+fest; postbuch.net legt darin beim Einrichten seine
+[Ordnerstruktur](#die-ordnerstruktur) an. Im Schritt **Ordner** schlägt der
+Assistent vor, die Ablage direkt in den Ablageordner zu legen; ein eigener
+Unterordner ist nur nötig, wenn sich mehrere Instanzen denselben Ordner teilen
+(**Stattdessen einen Unterordner verwenden**).
+
+Der Einrichtungsassistent bietet im Schritt **Dateiablage** zusätzlich
+![Festplatten-Symbol](icons/hard-drive.svg) **Ordner auf diesem Rechner** an.
+Ist noch kein Ordner festgelegt, etwa nach einer klassischen Installation,
+zeigt die Karte danach **Ordner festlegen**; es gelten dieselben Regeln wie
+beim [Wechsel des Ordners](#anderen-ordner-wählen).
+Der Ordner liegt nie im Installationsverzeichnis: Eine Deinstallation löscht
+es ganz, der Ablageordner bleibt mit allen Originalen stehen. Unter
+![Einstellungen-Symbol](icons/settings.svg) **Einstellungen → Dateiablage** zeigt
+die Karte den Ordner, wie ihn der Rechner selbst benennt (unter Windows etwa
+`C:\Users\…\Documents\postbuch.net`), und den freien Platz. Den
+[Selbsttest](#selbsttest) gibt es auch hier.
+
+Was dabei zu beachten ist:
+
+- **Sicherung:** Die Dokumente liegen nur auf diesem Rechner. postbuch.net
+  sichert seine Datenbank in den Ordner `_backup` der Ablage – den ganzen Ordner
+  musst du selbst regelmäßig auf ein anderes Laufwerk oder in einen
+  Cloud-Speicher deiner Wahl sichern (siehe
+  [Backup und Wiederherstellung](backup-wiederherstellung.md)).
+- **Umbenennen und Verschieben:** Du kannst Dateien und Ordner im Explorer
+  bzw. Dateimanager umbenennen und verschieben. postbuch.net findet sie über
+  ihren Fingerabdruck wieder (siehe
+  [Dateien manuell in der Dateiablage verschieben oder umbenennen](#dateien-manuell-in-der-dateiablage-verschieben-oder-umbenennen)).
+  Neue Dateien in den Eingangsordner `_inbox` zu legen ist ausdrücklich
+  vorgesehen.
+- **Umzug in beide Richtungen:** Bestehende Dokumente aus OneDrive oder einem
+  WebDAV-Speicher ziehen mit dem [Migrationsassistenten](#umzug-zwischen-den-dateiablagen)
+  in diesen Ordner um, und genauso wieder zurück in eine Cloud. Den Ordner
+  selbst wechselst du dagegen unter [Anderen Ordner wählen](#anderen-ordner-wählen).
+
+### Anderen Ordner wählen
+
+Der Ordner lässt sich nachträglich wechseln, etwa auf ein größeres Laufwerk,
+ohne neu zu installieren. In der Karte unter
+![Einstellungen-Symbol](icons/settings.svg) **Einstellungen → Dateiablage**
+führt **Ordner ändern** dorthin. Das Feld nimmt einen vollständigen Pfad an,
+unter Windows etwa `D:\postbuch-ablage`, unter Linux etwa
+`/home/name/postbuch-ablage`. Liegt der eingegebene Ordner in OneDrive, weist
+das Feld darauf hin, dass Windows die Ablage dann in die Microsoft-Cloud
+synchronisiert. Der Abschnitt erscheint nur in einer Admin-Sitzung und nur,
+wenn der Host-Agent den Wechsel unterstützt.
+
+Nach einer Rückfrage übernimmt der Host-Agent:
+
+1. postbuch.net hält kurz an und ist währenddessen nicht erreichbar.
+2. Der Agent kopiert die ganze Ablage einschließlich `_backup` in den neuen
+   Ordner und vergleicht danach Anzahl und Größe der Dateien.
+3. postbuch.net startet mit dem neuen Ordner neu.
+
+Der bisherige Ordner bleibt unverändert erhalten. Löschen kannst du ihn selbst,
+sobald du dich überzeugt hast, dass alles da ist. Scheitert ein Schritt, bleibt
+der bisherige Ordner aktiv, und die Karte nennt den Grund.
+
+Für den neuen Ordner gilt:
+
+- Er muss leer sein oder wird neu angelegt; der übergeordnete Ordner muss
+  bereits existieren.
+- Erlaubt sind Ordner unterhalb des eigenen Benutzerverzeichnisses und auf
+  weiteren Laufwerken. Unter Windows sind das das eigene Profil unter
+  `C:\Users\…` (nicht `Public` oder `Default`) sowie die Laufwerke `D:` bis
+  `Z:`, unter Linux zusätzlich Ordner unter `/mnt/…/…`, `/media/…/…/…` und
+  `/srv/…`. Nicht erlaubt sind Systemordner, der Installationsordner und der
+  Modellordner der lokalen KI. Unter Windows muss es ein Windows-Ordner sein;
+  ein Ordner im Linux-Teil der Instanz ginge bei einer Deinstallation verloren.
+- Ordnernamen dürfen nicht mit einem Punkt oder einem Leerzeichen beginnen und
+  nicht mit einem Leerzeichen enden. Die Zeichen `$`, `#`, `"`, `'` und der
+  Gravis (`` ` ``) sowie unter Linux der Backslash sind nicht erlaubt; Leerzeichen, Umlaute und Klammern
+  sind kein Problem.
+- Verknüpfungen (Symlinks) im Pfad oder in der bisherigen Ablage werden
+  abgelehnt.
+- Solange ein [Umzug](#umzug-zwischen-den-dateiablagen) von oder zu diesem
+  Ordner Dateien kopiert hat und weder aufgeräumt noch abgebrochen ist, lässt
+  sich der Ordner nicht ändern.
+
+---
+
+## Was die Dateiablagen unterscheiden
 
 Die Adapter melden ihre Fähigkeiten deklarativ; es wird nichts „ausprobiert".
 
-| Eigenschaft                           | OneDrive | WebDAV-Speicher |
-| ------------------------------------- | -------- | --------------- |
-| Anmeldung                             | OAuth    | App-Passwort    |
-| Pfadauflösung (Datei → lesbarer Pfad) | ja       | ja              |
-| Prüfsumme in den Metadaten            | nein     | nein            |
-| Freier Speicherplatz abfragbar        | ja       | nein            |
+| Eigenschaft                           | OneDrive | WebDAV-Speicher | Ordner auf diesem Rechner |
+| ------------------------------------- | -------- | --------------- | ------------------------- |
+| Anmeldung                             | OAuth    | App-Passwort    | keine                     |
+| Pfadauflösung (Datei → lesbarer Pfad) | ja       | ja              | ja                        |
+| Prüfsumme in den Metadaten            | nein     | nein            | nein                      |
+| Freier Speicherplatz abfragbar        | ja       | nein            | ja                        |
 
-Dass beide Backends **keine** Prüfsumme in den Metadaten liefern, hat eine
+Dass die Backends **keine** Prüfsumme in den Metadaten liefern, hat eine
 praktische Folge: Wo postbuch.net eine Datei wirklich verifizieren muss – Umzug,
 Disaster Recovery –, wird sie heruntergeladen und lokal gehasht. Das kostet Zeit
 und Datenvolumen, ist aber der einzige belastbare Weg.
@@ -232,9 +323,10 @@ und Datenvolumen, ist aber der einzige belastbare Weg.
 ## Die Ordnerstruktur
 
 Konfiguriert wird **nur der Wurzelordner** (Standard `postbuch`, mehrstufige
-Pfade wie `archiv/postbuch` sind erlaubt; bei OneDrive im App-Ordner liegt die
-Struktur standardmäßig direkt im App-Ordner, als Wurzel `/`; diese Wurzel gibt
-es nur dort) – festgelegt im
+Pfade wie `archiv/postbuch` sind erlaubt; bei OneDrive im App-Ordner und bei
+einem [Ordner auf diesem Rechner](#ordner-auf-diesem-rechner) liegt die Struktur
+standardmäßig direkt in diesem Ordner, als Wurzel `/`; diese Wurzel gibt es nur
+dort) – festgelegt im
 Pflichtschritt
 ![Ordner-Symbol](icons/folder-open.svg) **Ordner** des
 [Einrichtungsassistenten](installation.md#der-einrichtungsassistent). Alles
@@ -481,12 +573,17 @@ aufgreifen.
 
 ## Umzug zwischen den Dateiablagen
 
-Der Klick auf **Auf … umziehen** in ![Einstellungen-Symbol](icons/settings.svg)
-**Einstellungen → Dateiablage** öffnet einen eigenständigen **Migrationsassistenten**
+In ![Einstellungen-Symbol](icons/settings.svg) **Einstellungen → Dateiablage**
+steht unter der aktiven Dateiablage für jede andere Dateiablage ein Knopf
+**Umziehen**. Er öffnet einen eigenständigen **Migrationsassistenten**
 (`/ablage-umzug`, analog zum Einrichtungsassistenten) statt Karten direkt in den
-Einstellungen aufzuklappen. Der Umzug ist symmetrisch: OneDrive → WebDAV und
-zurück sind derselbe Ablauf mit vertauschten Parametern. Er verkraftet
-Unterbrechungen – bei einigen tausend Dokumenten läuft er Stunden.
+Einstellungen aufzuklappen. Der Umzug funktioniert zwischen allen drei
+Dateiablagen in jede Richtung – OneDrive, WebDAV-Speicher und
+[Ordner auf diesem Rechner](#ordner-auf-diesem-rechner) –, immer mit demselben
+Ablauf. Der Ordner auf diesem Rechner wird als Ziel angeboten, sobald er
+eingebunden ist oder sich noch festlegen lässt; festgelegt wird er dann im
+ersten Schritt des Assistenten. Der Umzug verkraftet Unterbrechungen – bei
+einigen tausend Dokumenten läuft er Stunden.
 
 Der Assistent lässt sich jederzeit über das ![Schließen-Symbol](icons/x.svg)
 oben schließen, ohne dass Fortschritt verloren geht: Der Zustand steht im
@@ -496,10 +593,13 @@ Assistenten – genau an die Stelle, an der es weitergeht.
 
 ![Migrationsassistent im Schritt „Kopieren" mit Fortschrittsbalken und den Schaltflächen Pausieren/Fortsetzen](screenshots/ablage-umzug.png)
 
+### Überblick und Trockenlauf
+
 Der Assistent führt durch fünf Schritte:
 
 **1. Überblick.** Zeigt Quelle und Ziel und verlangt, dass das Zielbackend
-verbunden ist. Die Verbindungskarte des Zielbackends bleibt dabei **immer**
+verbunden ist (beim Ordner auf diesem Rechner: dass er festgelegt und
+eingebunden ist). Die Verbindungskarte des Zielbackends bleibt dabei **immer**
 sichtbar, nicht nur solange die Verbindung fehlt – so lässt sich eine
 bestehende Verbindung auch trennen und mit einem anderen Konto neu aufbauen,
 ohne den Assistenten zu verlassen.
@@ -518,6 +618,8 @@ Bestand im Quellbackend – eine Begrenzung gibt es nicht mehr. Das Ergebnis
 nennt die Zahl kopierbarer Dokumente, Dokumente ohne Datei, Dokumente ohne
 Zielordner sowie das, was bewusst in der Quelle zurückbleibt (fehlgeschlagene
 Verarbeitungen, pausierte Duplikate).
+
+### Kopieren, Pausieren und Abbrechen
 
 **3. Kopieren.** Der Start („Kopieren starten") sitzt bewusst hier und nicht
 schon im Trockenlauf-Schritt, erst nach einer bestätigten Checkbox. Pro
@@ -553,6 +655,8 @@ gelöscht, sie bleiben nur unverknüpft liegen – der Rückbau ist damit
 verlustfrei. Der Lauf gilt danach als abgebrochen; ein neuer Umzug beginnt bei
 Schritt 1.
 
+### Umschalten und Abschluss
+
 **4. Umschalten.** Bis hierher landen neue Dokumente weiterhin in der alten
 Dateiablage. Unmittelbar vor dem eigentlichen Umschalten prüft der Assistent noch
 einmal auf **Nachzügler** – Dokumente in der alten Dateiablage, die kein Teil dieses
@@ -574,12 +678,12 @@ Fehler-Dokument zeigt, bleiben liegen. „Jetzt nicht" verlässt den Assistenten
 ohne etwas zu entscheiden – der Hinweisbanner im Dashboard bleibt bestehen und
 führt jederzeit hierher zurück. Wer das Aufräumen bewusst nie nachholen will,
 kann es über „Aufräumen dauerhaft überspringen" (mit eigener Rückfrage)
-abschließend ausblenden; erst dann steht statt „Jetzt nicht" ein schlichtes
-„Fertig".
+abschließend ausblenden; der Assistent kehrt danach zu den Einstellungen
+zurück.
 
-Ist aufgeräumt, bietet der Assistent zusätzlich an, die Verbindung zur alten
-Dateiablage gleich mit zu trennen – sie wird ab hier nicht mehr gebraucht. Das ist
-optional und lässt sich ebenso gut später nachholen, unter **Einstellungen →
+Ist aufgeräumt und war die alte Dateiablage eine Cloud, bietet der Assistent
+zusätzlich an, die Verbindung zu ihr gleich mit zu trennen – sie wird ab hier
+nicht mehr gebraucht. Das ist optional und lässt sich ebenso gut später nachholen, unter **Einstellungen →
 Dateiablage** (siehe nächster Abschnitt).
 
 > [!IMPORTANT]
@@ -642,6 +746,31 @@ wird pro Dokument nicht der Pfad, sondern eine unveränderliche **Datei-ID**
 ownCloud überstehen Verschieben und Umbenennen unbeschadet – die ID bleibt
 gleich, der Pfad wird bei Bedarf live neu aufgelöst. Genau das prüft auch der
 [Selbsttest](#selbsttest) des WebDAV-Speichers automatisiert.
+
+Beim [Ordner auf diesem Rechner](#ordner-auf-diesem-rechner) vergibt
+postbuch.net die ID selbst, denn ein gewöhnliches Dateisystem kennt keine.
+Findet es eine Datei unter ihrer ID nicht mehr am gewohnten Platz, gleicht es
+die ganze Ablage ab und erkennt die Datei an ihrem SHA-256-Fingerabdruck
+wieder, egal unter welchem Namen und in welchem Ordner sie jetzt liegt. Die ID
+wandert mit, das Dokument öffnet sich wie zuvor. Ordner erkennt postbuch.net
+an den Namen der Dateien und Unterordner, die sie enthalten; ein umbenannter
+Ordner behält so seine ID und mit ihr seine Rolle in der Ordnerstruktur.
+
+- **Kopien:** Eine Datei, deren Original noch an seinem Platz liegt, ist eine
+  Kopie und bekommt eine eigene ID. Das Dokument bleibt mit dem Original
+  verknüpft.
+- **Gleicher Inhalt mehrfach:** Fehlt eine von mehreren inhaltsgleichen
+  Dateien, übernimmt eine inhaltsgleiche Datei ohne eigene Verknüpfung ihren
+  Platz. Welche das ist, spielt keine Rolle, der Inhalt ist identisch.
+- **Veränderter Inhalt:** Eine Datei, die außerhalb von postbuch.net
+  bearbeitet wurde, hat einen anderen Fingerabdruck und wird nicht
+  wiedererkannt. Das Dokument gilt dann als fehlend (siehe
+  [Wenn eine Datei endgültig fehlt](#wenn-eine-datei-endgültig-fehlt)).
+- **Ordner:** Ein Ordner wird nur wiedererkannt, wenn sein Inhalt beim
+  Umbenennen oder Verschieben gleich bleibt. Wird zugleich etwas hinzugefügt
+  oder entfernt, finden sich die Dateien darin trotzdem einzeln wieder.
+
+Die folgenden Punkte beziehen sich auf OneDrive und den WebDAV-Speicher.
 
 Aufgelöst wird eine ID dabei nie durch Durchsuchen der Dateiablage, sondern **direkt**
 – bei OneDrive über den Graph-Endpunkt `/items/{id}`, bei Nextcloud über
@@ -708,6 +837,12 @@ Dateien prüfen** in ![Dateiablage-Symbol](icons/hard-drive.svg)
 **Einstellungen → Dateiablage**. Betroffene Dokumente findest du in der
 Dokumentliste über den Filter **„Nur wenn Datei in der Dateiablage fehlt"** (siehe
 [Die Oberfläche](oberflaeche.md#dokumente)).
+
+Fehlt bei der Prüfung oder beim wöchentlichen Abgleich mehr als die Hälfte der
+Dateien (und mindestens drei), ist eher der Ablageordner falsch eingebunden, als
+dass jede Datei einzeln verschwunden wäre – etwa wenn eine Sicherung in einen neuen,
+leeren Ordner eingespielt wurde. Dann löst postbuch.net keine Verknüpfung, und die
+Prüfung meldet, dass der Ablageordner zu kontrollieren ist.
 
 Auf der Dokumentendetailseite ersetzt in diesem Fall der Knopf
 ![PDF-ersetzen-Symbol](icons/file-up.svg) **Fehlende PDF reimportieren** den

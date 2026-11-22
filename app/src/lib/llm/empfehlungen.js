@@ -37,6 +37,8 @@ import {
   EMBEDDING_DEFAULT, embeddingConfig, embeddingSlot, probeEmbeddingDimension, signatureOf,
 } from '../embedding.js';
 import { vorsilbenVorschlag } from '../embedding-vorsilben.js';
+import { eingebautesModell } from '../embedding-eingebaut.js';
+import { geraeteRamMb, modellZustaende, modellHolen } from '../embedding-dienst.js';
 import { startHelpEmbeddingJob } from '../../service/help-corpus.js';
 import { starteNeuberechnung } from '../../service/embedding-neuberechnung.js';
 import { clientSafeError } from '../net-guard.js';
@@ -197,6 +199,13 @@ function listetModell(bericht, model, feld = 'models') {
  */
 function bewerte(kandidat, berichte, { embedding = false } = {}) {
   const feld = embedding ? 'embeddingModels' : 'models';
+  if (kandidat.ramMinMb && geraeteRamMb() < kandidat.ramMinMb) {
+    return {
+      status: 'kein_zugriff',
+      grund: `„${kandidat.label || kandidat.model}" braucht mindestens ${Math.ceil(kandidat.ramMinMb / 1024)} GB Arbeitsspeicher.`,
+      providerId: kandidat.providerId || null,
+    };
+  }
   const b = findeProvider(kandidat, berichte, feld);
   if (!b) {
     return { status: 'nicht_konfiguriert', grund: `Provider „${kandidat.providerId || kandidat.providerTyp}" ist auf dieser Instanz nicht eingerichtet.`, providerId: null };
@@ -280,6 +289,8 @@ export async function aufloesen({ fresh = false } = {}) {
         preisOut: k.preisOut,
         preisCacheWrite: k.preisCacheWrite ?? null,
         preisCacheRead: k.preisCacheRead ?? null,
+        ramMinMb: k.ramMinMb ?? null,
+        schwellen: k.schwellen ?? null,
         status,
         grund,
       };
@@ -313,6 +324,27 @@ export async function aufloesen({ fresh = false } = {}) {
     fehler: cache.fehler ?? null,
     klassen,
   };
+}
+
+/**
+ * Erster Kandidat einer Klasse, auf den diese Instanz Zugriff hat — dieselbe
+ * Regel wie in aufloesen(), aber unabhängig von der gerade gewählten
+ * Modellwahl. Ohne nachweisbaren Zugriff der erste nicht verifizierbare
+ * Kandidat (z. B. Abo), sonst null.
+ *
+ * @returns {Promise<{providerId:string, model:string, label:string}|null>}
+ */
+export async function ersteVerfuegbareEmpfehlung(klasseKey) {
+  const [quelle, health] = await Promise.all([
+    ONLINE_EMPFEHLUNGEN_AKTIV ? leseCache() : leseReleaseEmpfehlungen(),
+    buildAiHealth(),
+  ]);
+  const berichte = health.providers || {};
+  const bewertet = ((quelle.klassen || {})[klasseKey] || [])
+    .map((k) => ({ ...k, ...bewerte(k, berichte) }));
+  const ziel = bewertet.find((k) => k.status === 'ok')
+    || bewertet.find((k) => k.status === 'nicht_verifizierbar');
+  return ziel ? { providerId: ziel.providerId, model: ziel.model, label: ziel.label } : null;
 }
 
 // ── Snapshot ─────────────────────────────────────────────────────────────────
@@ -490,7 +522,7 @@ export async function anwenden(klassenKeys, { auto = false, von = 'admin' } = {}
       // worden sein, ohne dass je ein Preis hinterlegt wurde.
       const preisErgebnis = await setzePreis(ziel);
       if (preisErgebnis === 'gesetzt') etwasGeschrieben = true;
-      uebersprungen.push({ key: kl.key, grund: 'Bereits eingestellt.' });
+      uebersprungen.push({ key: kl.key, grund: 'Bereits eingestellt.', bereitsAktiv: true });
       continue;
     }
 
@@ -498,6 +530,16 @@ export async function anwenden(klassenKeys, { auto = false, von = 'admin' } = {}
     // bisherige Konfiguration unangetastet — und es entsteht kein Snapshot,
     // der einen nie erfolgten Wechsel dokumentiert.
     let dim = null;
+    if (kl.art === 'embedding' && ziel.providerId === EINGEBAUT_ID && eingebautesModell(ziel.model)) {
+      // Modelle, die der eingebaute Dienst erst herunterladen muss: Download
+      // anstoßen statt eine Probe scheitern zu lassen. Die Übernahme gelingt,
+      // sobald die Datei da ist.
+      const vorbereitung = await eingebautVorbereitet(ziel.model);
+      if (vorbereitung) {
+        uebersprungen.push({ key: kl.key, grund: vorbereitung });
+        continue;
+      }
+    }
     if (kl.art === 'embedding') {
       try {
         dim = await probeEmbeddingDimension(ziel.providerId, ziel.model);
@@ -515,8 +557,10 @@ export async function anwenden(klassenKeys, { auto = false, von = 'admin' } = {}
 
     await sichereSnapshotEinmalig();
     if (kl.art === 'embedding') {
+      const fest = ziel.providerId === EINGEBAUT_ID ? eingebautesModell(ziel.model) : null;
       const cfg = embeddingSlot({
-        providerId: ziel.providerId, model: ziel.model, dim, vorsilben: vorsilbenVorschlag(ziel.model),
+        providerId: ziel.providerId, model: ziel.model, dim,
+        vorsilben: fest?.vorsilben || vorsilbenVorschlag(ziel.model),
       });
       await schreibeSetting('llm_embedding', cfg);
       await schreibeSetting('llm_embedding_signature', signatureOf(cfg));
@@ -554,6 +598,26 @@ export async function anwenden(klassenKeys, { auto = false, von = 'admin' } = {}
   }
 
   return { angewendet, uebersprungen };
+}
+
+/**
+ * Ist das Modell im eingebauten Dienst bereit? Sonst wird der Download
+ * angestoßen und ein Hinweis für den Nutzer zurückgegeben; null heißt bereit
+ * (oder Zustand unbekannt – dann entscheidet die Probe).
+ */
+async function eingebautVorbereitet(model) {
+  try {
+    const { laeuft, modelle } = await modellZustaende();
+    const m = modelle.find((x) => x.model === model);
+    if (!laeuft || !m || m.zustand === 'bereit' || m.zustand === 'unbekannt') return null;
+    if (m.zustand === 'zu_wenig_ram') return `„${m.label}" braucht mindestens 2 GB Arbeitsspeicher.`;
+    const stand = m.zustand === 'laedt' ? m : { ...m, ...(await modellHolen(model)) };
+    const prozent = Number.isFinite(stand.prozent) ? ` (${stand.prozent} %)` : '';
+    return `„${m.label}" wird gerade heruntergeladen${prozent}. Bitte danach erneut übernehmen.`;
+  } catch (err) {
+    console.warn('[llm-empfehlungen] Modellzustand des eingebauten Dienstes:', err.message);
+    return null;
+  }
 }
 
 /**

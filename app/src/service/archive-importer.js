@@ -43,7 +43,7 @@ import * as tracker from '../jobs/tracker.js';
 // Signaturfilter unsichtbar, obwohl sie exakt passen.
 const ARCHIV_LEGACY_SIGNATUR = 'openai/text-embedding-3-large/3072';
 import { appLog } from '../app-log.js';
-import { ensureAblageOrdner } from './storage-setup.js';
+import { mitAblageOrdner } from './storage-setup.js';
 import { ergaenzeErkannteZahlung } from './rechnung-zahlung.js';
 
 export const ARCHIVE_LIMITS = Object.freeze({
@@ -692,17 +692,17 @@ export async function importArchive(zipPath, {
           const namen = (doc.detail.einzelpositionen || []).map((ep) => ordneZu(ep.behandelte_person));
           if (namen.length && namen.every((n) => n && n === namen[0])) behandeltePerson = namen[0];
         }
-        const destFolderId = await ensureAblageOrdner(
+        const wunschFileName = `${safeFileBase(pb.betreff)} ${finalPostid}.pdf`;
+        // mitAblageOrdner() löst eine inzwischen verschwundene Ordner-ID neu auf.
+        const uploaded = await mitAblageOrdner(
           settings,
           {
             lebensbereich, dokumentart, familienmitglied, behandelte_person: behandeltePerson,
             briefdatum: pb.briefdatum || null, richtung,
           },
           storage.name,
+          (folderId) => storage.uploadNew(pdfBuffer, wunschFileName, folderId),
         );
-
-        const wunschFileName = `${safeFileBase(pb.betreff)} ${finalPostid}.pdf`;
-        const uploaded = await storage.uploadNew(pdfBuffer, wunschFileName, destFolderId);
         uploadedFileId = uploaded.id;
         // Der Adapter kann den Namen geaendert haben (Sanitisierung oder
         // "(2)"-Suffix bei Kollision) — sonst zeigte storage_filename auf einen

@@ -14,6 +14,9 @@ Endpunkte:
   GET /scan/adf/duplex                  — ADF Duplex  (alle Seiten bis ADF leer, EIN Dokument)
   GET /scan/adf/batch/simplex           — ADF-Stapel: jedes Blatt (1 Seite) ein eigenes Dokument
   GET /scan/adf/batch/duplex            — ADF-Stapel: jedes Blatt (Vorder-/Rückseite) ein eigenes Dokument
+  GET /scan/adf/stapel/simplex          – Briefstapel: je Blatt eine Datei, die App trennt in Dokumente
+  GET /scan/adf/stapel/duplex           – Briefstapel mit Vorder- und Rückseite
+                                          (?stapel=<uuid> optional; ohne vergibt der Scanner die Kennung)
   GET /scan/flatbed/single              — Einseitiger Flachbettscan
   GET /scan/flatbed/session/start       — Mehrseitigen Scan starten + erste Seite scannen
   GET /scan/flatbed/session/scan        — Kombiniert: Start wenn keine Session, sonst Seite hinzufügen
@@ -43,6 +46,7 @@ import glob
 import hmac
 import http.client
 import os
+import re
 import ssl
 import shutil
 import subprocess
@@ -51,6 +55,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import uuid
 
 from flask import Flask, request, jsonify
 
@@ -516,6 +521,77 @@ def _scan_adf_batch(duplex: bool):
         return jsonify(resp)
     finally:
         _cleanup(tmpdir)
+
+
+# Briefstapel: gleicher Einzugslauf wie der ADF-Stapel, aber die Dateinamen
+# tragen die Stapelkennung sowie Blattnummer und Blattzahl. Das Präfix
+# adf_<modus>_batch_ bleibt, weil der Cleaner daran Leerseiten-Entfernung und
+# gemeinsamen Duplex-Zuschnitt festmacht. Die App erkennt die Blätter nur an
+# diesem Namen und sammelt sie zu einem Stapel (app/src/service/stapel.js).
+_STAPEL_ID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_STAPEL_MAX_BLAETTER = 200
+
+
+def _scan_adf_stapel(duplex: bool):
+    stapel_id = (request.args.get("stapel") or "").strip().lower()
+    if stapel_id and not _STAPEL_ID_RE.match(stapel_id):
+        return jsonify({"status": "error", "msg": "Ungültige Stapelkennung"}), 400
+    if not stapel_id:
+        stapel_id = str(uuid.uuid4())
+
+    dpi  = _dpi_aus_anfrage()
+    mode = request.args.get("mode", _get_cfg("default_mode"))
+
+    ok, msg = _check_adf()
+    if not ok:
+        return jsonify({"status": "error", "msg": msg}), 400
+
+    tmpdir = tempfile.mkdtemp(prefix="scan_adf_stapel_")
+    try:
+        pages, err = _run_adf(tmpdir, dpi, mode, duplex=duplex, keep_partial=True)
+        if not pages:
+            return jsonify({"status": "error", "msg": "Keine Seiten gescannt", "stderr": err}), 500
+
+        blaetter = _split_in_blaetter(pages, 2 if duplex else 1)
+        if len(blaetter) > _STAPEL_MAX_BLAETTER:
+            return jsonify({
+                "status": "error",
+                "msg": f"Ein Briefstapel darf höchstens {_STAPEL_MAX_BLAETTER} Blätter haben.",
+            }), 400
+        prefix = "adf_duplex_batch" if duplex else "adf_simplex_batch"
+        n = len(blaetter)
+
+        # Erst unter einem Namen schreiben, den der Cleaner nicht aufgreift,
+        # dann umbenennen: so sieht er nie eine halb geschriebene Datei.
+        files = []
+        for seq, blatt in enumerate(blaetter, start=1):
+            name = f"{prefix}_stapel-{stapel_id}_{seq:03d}v{n:03d}.pdf"
+            teil = os.path.join(OUTDIR, f".{name}.part")
+            _build_pdf(blatt, teil, dpi)
+            os.replace(teil, os.path.join(OUTDIR, name))
+            files.append(name)
+
+        resp = {"status": "ok", "stapel": stapel_id, "files": files, "sheets": n, "pages": len(pages)}
+        if err:
+            resp["status"] = "partial"
+            resp["msg"] = (
+                f"Einzug nach {len(pages)} Seite(n) unterbrochen – "
+                f"{n} Blatt/Blätter werden trotzdem als Briefstapel übernommen."
+            )
+            resp["stderr"] = err
+        return jsonify(resp)
+    finally:
+        _cleanup(tmpdir)
+
+
+@app.route("/scan/adf/stapel/simplex")
+def scan_adf_stapel_simplex():
+    return _scan_adf_stapel(duplex=False)
+
+
+@app.route("/scan/adf/stapel/duplex")
+def scan_adf_stapel_duplex():
+    return _scan_adf_stapel(duplex=True)
 
 
 @app.route("/scan/adf/batch/simplex")

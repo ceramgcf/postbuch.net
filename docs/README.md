@@ -20,7 +20,7 @@ Mal sehen, ist das README im Wurzelverzeichnis.
 | [Dokumente importieren](dokumente-importieren.md) | Die sechs Eingangswege, Duplikate, Fehlerfälle |
 | [Die Dokumentansicht](dokumentansicht.md) | Freigabe, Metadaten, Bestreiten, Erstattungen verknüpfen, Kürzungen, PDF-Betrachter |
 | [Akten, Verbleib und Wiedervorlagen](akten-und-organisation.md) | Ordnung schaffen: Akten, Papieroriginale, Fristen |
-| [Suche und Assistent](suche-und-assistent.md) | Volltext, semantische Suche, Chat mit den eigenen Dokumenten |
+| [Suche und Assistent](suche-und-assistent.md) | Suche nach Stichwort und Inhalt, Chat mit den eigenen Dokumenten |
 | [PKV, Beihilfe und Abrechnung](abrechnung-pkv-beihilfe.md) | Arztrechnungen, Einreichungen, Erstattungen, Kürzungen |
 | [Analyse](analyse.md) | Unbezahlte Rechnungen, Handwerkerkosten fürs Finanzamt, Fristenkalender, freie Salden |
 | [Export und Import](export-import.md) | Akte für den Anwalt, Excel-Auswertung, Dokumentenübergabe zwischen Instanzen |

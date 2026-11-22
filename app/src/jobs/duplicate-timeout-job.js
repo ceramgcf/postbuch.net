@@ -3,9 +3,10 @@
  *
  * Läuft alle 60 Sekunden und prüft auf abgelaufene Suspensions.
  *
- * Logik:
- *   - new_confidence > match_confidence → Auto-Replace (bessere Qualität)
- *   - Sonst → Auto-Discard (Duplikat verwerfen)
+ * Nach Ablauf der Frist werden immer beide Dokumente behalten (keep_both).
+ * Selbsttätig ersetzt oder verworfen wird nie: Ein fälschlich als Duplikat
+ * erkanntes Dokument (etwa ein Rezept) ginge sonst verloren, wenn die Meldung
+ * übersehen wird.
  *
  * Der ursprüngliche Discord-Message-Button wird entfernt.
  */
@@ -55,14 +56,8 @@ async function _sweep() {
     const jobId = suspension.job_id;
 
     try {
-      const newConf = Number(suspension.new_confidence || 0);
-      const oldConf = Number(suspension.match_confidence || 0);
-
-      // Besser: Auto-Replace; schlechter oder gleich: Auto-Discard
-      const decision = newConf > oldConf ? 'replace' : 'discard';
-      const reason = decision === 'replace'
-        ? `Auto-Replace (neue Qualität ${Math.round(newConf * 100)}% > alte ${Math.round(oldConf * 100)}%)`
-        : `Auto-Discard (neue Qualität ${Math.round(newConf * 100)}% ≤ alte ${Math.round(oldConf * 100)}%)`;
+      const decision = 'keep_both';
+      const reason = `Frist abgelaufen, beide Dokumente werden behalten (Verdacht auf ${suspension.match_postid})`;
 
       console.log(`[duplicate-timeout] Job ${jobId}: ${reason}`);
       appLog('INFO', 'duplicate-timeout', `Job ${jobId}: ${reason}`);

@@ -206,7 +206,7 @@ export function antwortText(content, onThinking) {
  * `url`-Feld. Alle anderen OpenAI-kompatiblen Server (Ollama, vLLM, llama.cpp,
  * OpenAI selbst) wollen die data-URL. NICHT am echten LM Studio verifiziert —
  * betrifft im Zweifel ausschließlich Provider mit explizit gewähltem Dialekt
- * 'lmstudio', siehe internaldocs/FEATURE_PDF_RASTERIZER.md §9.1.
+ * 'lmstudio', siehe internaldocs/archiv/FEATURE_PDF_RASTERIZER.md §9.1.
  */
 function bildBlock(buffer, mime, dialekt) {
   const b64 = buffer.toString('base64');

@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "stand": "2026-10-26",
+  "stand": "2026-11-20",
   "hinweis": "Kuratierte Empfehlungen des postbuch.net-Entwicklerteams. Die Reihenfolge je Klasse ist der Rang; postbuch.net nimmt den ersten Kandidaten, auf den diese Instanz nachweislich Zugriff hat. Preise in USD je 1 Million Token.",
   "klassen": {
-    "analyse": [
+    "routine": [
       {
         "providerId": "anthropic",
         "providerTyp": "anthropic",
@@ -14,7 +14,7 @@
         "preisCacheWrite": 0.125,
         "preisCacheRead": 0.01,
         "waehrung": "USD",
-        "notiz": "Bestes Verhältnis aus Trefferquote und Preis für alle Dokumente"
+        "notiz": "Schnell und günstig für Routineaufgaben"
       },
       {
         "providerId": "openai",
@@ -39,6 +39,58 @@
         "preisCacheRead": 0.14,
         "waehrung": "USD",
         "notiz": "Alternative mit Inferenz in der EU"
+      },
+      {
+        "providerId": "lokal",
+        "providerTyp": "openai-compatible",
+        "model": "gemma",
+        "label": "Gemma 4 12B (lokale KI)",
+        "notiz": "Läuft auf dem eigenen Rechner, ohne Cloud und ohne laufende Kosten"
+      }
+    ],
+    "komplex": [
+      {
+        "providerId": "anthropic",
+        "providerTyp": "anthropic",
+        "model": "claude-sonnet-5-5",
+        "label": "Claude Sonnet 5.5",
+        "preisIn": 2.0,
+        "preisOut": 10.0,
+        "preisCacheWrite": 2.5,
+        "preisCacheRead": 0.2,
+        "waehrung": "USD",
+        "notiz": "Stark bei Dokumentanalyse, Nachlese und Antworten des Büroassistenten"
+      },
+      {
+        "providerId": "openai",
+        "providerTyp": "openai",
+        "model": "gpt-6.1-sol",
+        "label": "GPT-6.1 Sol",
+        "preisIn": 2.0,
+        "preisOut": 10.0,
+        "preisCacheWrite": 2.5,
+        "preisCacheRead": 0.1,
+        "waehrung": "USD",
+        "notiz": "Alternative bei fehlendem Anthropic-Zugriff"
+      },
+      {
+        "providerId": "mistral",
+        "providerTyp": "openai-compatible",
+        "model": "mistral-large-4",
+        "label": "Mistral Large 4",
+        "preisIn": 1.36,
+        "preisOut": 4.18,
+        "preisCacheWrite": 1.36,
+        "preisCacheRead": 0.14,
+        "waehrung": "USD",
+        "notiz": "Alternative mit Inferenz in der EU"
+      },
+      {
+        "providerId": "lokal",
+        "providerTyp": "openai-compatible",
+        "model": "gemma",
+        "label": "Gemma 4 12B (lokale KI)",
+        "notiz": "Läuft auf dem eigenen Rechner, ohne Cloud und ohne laufende Kosten"
       }
     ],
     "preanalysis": [
@@ -461,15 +513,6 @@
     ],
     "embedding": [
       {
-        "providerId": "eingebaut",
-        "model": "snowflake-arctic-embed-m-v2.0",
-        "label": "Eingebauter Dienst: Snowflake Arctic Embed M v2.0",
-        "preisIn": 0.0,
-        "preisOut": 0.0,
-        "waehrung": "USD",
-        "notiz": "Läuft cloudfrei im eigenen Stack, mehrsprachig, auch auf kleinen Rechnern"
-      },
-      {
         "providerId": "openai",
         "providerTyp": "openai-compatible",
         "model": "text-embedding-3-large",
@@ -477,13 +520,60 @@
         "preisIn": 0.13,
         "preisOut": 0.0,
         "waehrung": "USD",
-        "notiz": "Mehrsprachig, gute Qualitaet fuer deutsche Dokumente"
+        "notiz": "Mehrsprachig, gute Qualität für deutsche Dokumente",
+        "schwellen": {
+          "grundrauschen": 0.273,
+          "unsinnMax": 0.318,
+          "voll": 0.732,
+          "duplikat": 0.88
+        }
       },
       {
-        "providerTyp": "openai-compatible",
-        "model": "bge-m3",
-        "label": "BGE-M3 (selbst gehostet)",
-        "notiz": "Cloudfreie Alternative auf einem eigenen Embedding-Server"
+        "providerId": "eingebaut",
+        "model": "snowflake-arctic-embed-m-v2.0",
+        "label": "Eingebauter Dienst: Snowflake Arctic Embed M v2.0",
+        "preisIn": 0.0,
+        "preisOut": 0.0,
+        "waehrung": "USD",
+        "notiz": "Läuft cloudfrei im eigenen Stack, mehrsprachig, auch auf Rechnern mit 1 GB Arbeitsspeicher",
+        "schwellen": {
+          "grundrauschen": 0.078,
+          "unsinnMax": 0.199,
+          "voll": 0.557,
+          "duplikat": 0.8
+        }
+      },
+      {
+        "providerId": "eingebaut",
+        "model": "voyage-4-nano",
+        "label": "Eingebauter Dienst: Voyage 4 Nano",
+        "preisIn": 0.0,
+        "preisOut": 0.0,
+        "waehrung": "USD",
+        "notiz": "Cloudfrei, im Vergleich die besten Treffer der lokalen Modelle; braucht 2 GB Arbeitsspeicher, lädt einmalig rund 370 MB",
+        "ramMinMb": 1800,
+        "schwellen": {
+          "grundrauschen": 0.213,
+          "unsinnMax": 0.231,
+          "voll": 0.885,
+          "duplikat": 0.85
+        }
+      },
+      {
+        "providerId": "eingebaut",
+        "model": "embeddinggemma-2",
+        "label": "Eingebauter Dienst: EmbeddingGemma 2",
+        "preisIn": 0.0,
+        "preisOut": 0.0,
+        "waehrung": "USD",
+        "notiz": "Cloudfrei, fast so gut wie Voyage 4 Nano bei weniger Speicher; braucht 2 GB Arbeitsspeicher, lädt einmalig rund 250 MB",
+        "ramMinMb": 1800,
+        "schwellen": {
+          "grundrauschen": 0.611,
+          "unsinnMax": 0.625,
+          "voll": 0.873,
+          "duplikat": 0.9
+        }
       }
     ]
   }
