@@ -24,12 +24,6 @@ Generator übergangen. Zum Release wird seine Überschrift durch
 
 ---
 
-## Unveröffentlicht
-
-- Behoben: Der Windows-Installationsbefehl aus der Anleitung brach mit einer Fehlermeldung zu „Netzwerkfreigabe“ ab. README und Hilfe nennen jetzt einen Befehl, der funktioniert.
-
----
-
 ## 3.0.0 – 2026-11-22
 
 - Neu: Betriebsart „komplett lokal“. Dokumente liegen in einem Ordner auf dem eigenen Rechner, Analyse und Chat laufen über eine lokale KI ohne Cloud-Dienst.
