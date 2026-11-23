@@ -196,7 +196,7 @@ curl -fsSL https://github.com/ceramgcf/postbuch.net/releases/latest/download/ins
 **Windows** (PowerShell mit „Als Administrator ausführen“):
 
 ```powershell
-irm https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.ps1 | iex
+& ([scriptblock]::Create((irm https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.ps1)))
 ```
 
 Unter Windows richtet das Skript zuerst WSL 2 und eine eigene Linux-Umgebung

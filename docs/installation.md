@@ -61,7 +61,7 @@ namens `postbuch.net`. Den Windows-Teil richtet ein PowerShell-Skript ein. Öffn
 dazu PowerShell mit **Als Administrator ausführen** und gib ein:
 
 ```powershell
-irm https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.ps1 | iex
+& ([scriptblock]::Create((irm https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.ps1)))
 ```
 
 Das Skript
