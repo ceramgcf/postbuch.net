@@ -47,6 +47,7 @@ import { MODEL_CLASSES, modellwahlAus, klassenFuer } from '@/components/settings
 import { ModellwahlAuswahl } from '@/components/settings/ModellwahlAuswahl';
 import { WurzelordnerFeld, useAppOrdner, useWurzelVorbelegung, wurzelLabel, pfadUnterWurzel } from '@/components/settings/WurzelordnerFeld';
 import PasswortHinweis from '@/components/settings/PasswortHinweis';
+import UpdatePruefungSchalter from '@/components/settings/UpdatePruefungSchalter';
 import { NachRestoreInhalt } from '@/components/dashboard/NachRestoreHinweis';
 
 /**
@@ -769,6 +770,14 @@ export default function EinrichtungPage() {
             <Button variant="outline" onClick={() => setBetriebBearbeiten(true)}>
               <Pencil className="h-4 w-4 mr-1.5" />Ändern
             </Button>
+          </Abschnitt>
+
+          <Abschnitt
+            icon={RefreshCw}
+            titel="Updates"
+            beschreibung="postbuch.net sucht ab Werk nach neuen Versionen. Willst du das nicht, schalte es hier ab; später geht das unter Einstellungen → Allgemein → Version und Updates."
+          >
+            <UpdatePruefungSchalter />
           </Abschnitt>
 
           <StatusZeilen status={status} nur={['betrieb', 'hostAgent']} aktuellerSchritt="betrieb" onSchritt={geheZuSchritt} />

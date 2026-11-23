@@ -112,10 +112,10 @@ export function bytesFuerStufe(manifest, stufe) {
 
 /**
  * Mindestausstattung der lokalen KI – dieselben Werte wie in
- * scripts/postbuch-hostconfig.sh (HOSTCONFIG_LOKALKI_*). GB dezimal.
+ * scripts/postbuch-hostconfig.sh (HOSTCONFIG_LOKALKI_*). Den
+ * Mindest-Arbeitsspeicher legt jede Stufe selbst fest (ramMiB im Manifest).
  */
 export const LOKALKI_GRENZEN = Object.freeze({
-  minSpeicherMiB: 22888,          // 24 GB Arbeitsspeicher + nutzbarer Grafikspeicher
   flottVramMiB: 7629,             // unter 8 GB Grafikspeicher wird es extrem langsam
   reserveBytes: 5 * 1024 ** 3,    // nach dem Modell müssen 5 GiB frei bleiben
 });
@@ -128,7 +128,7 @@ const gbText = (bytes) => Math.round(bytes / 1e9).toLocaleString('de-DE');
  * Agent prüft beim Einschalten selbst noch einmal.
  *
  * @param {object|null} stack  agent.stack
- * @returns {{ ramMiB: number|null, vramMiB: number, speicherMiB: number|null,
+ * @returns {{ ramMiB: number|null, vramMiB: number, minRamMiB: number|null,
  *   langsam: boolean, sperrgrund: string|null }|null}
  */
 export function lokalkiEignung(stack) {
@@ -137,19 +137,21 @@ export function lokalkiEignung(stack) {
   const gpu = stack.gpu;
   const vramMiB = gpu?.dockerBereit && Number.isFinite(gpu.vramMiB) ? gpu.vramMiB : 0;
   const ramMiB = Number.isFinite(stack.ramMiB) ? stack.ramMiB : null;
-  const speicherMiB = ramMiB != null ? ramMiB + vramMiB : null;
+  const stufe = waehleStufe(ladeManifest(), vramMiB > 0 ? { vramMiB } : null);
+  const minRamMiB = stufe ? stufe.ramMiB : null;
   const lk = stack.lokalki;
   const fehltBytes = Number.isFinite(lk?.bedarf?.bytes)
     ? Math.max(0, lk.bedarf.bytes - (lk.vorhandenBytes || 0)) : null;
   const frei = Number.isFinite(stack.platteFreiBytes) ? stack.platteFreiBytes : null;
 
   let sperrgrund = null;
-  if (speicherMiB != null && speicherMiB < g.minSpeicherMiB) {
-    sperrgrund = `Zu wenig Speicher: Arbeitsspeicher und nutzbarer Grafikspeicher ergeben rund ${gbText(speicherMiB * 1024 ** 2)} GB, `
-      + 'die lokale KI braucht mindestens 24 GB.';
+  if (ramMiB != null && minRamMiB != null && ramMiB < minRamMiB) {
+    sperrgrund = `Zu wenig Arbeitsspeicher: Vorhanden sind rund ${gbText(ramMiB * 1024 ** 2)} GB, `
+      + `die lokale KI braucht ${stufe.gpu ? 'mit dieser Grafikkarte' : 'ohne NVIDIA-Grafikkarte'} `
+      + `mindestens ${gbText(minRamMiB * 1024 ** 2)} GB.`;
   } else if (fehltBytes != null && frei != null && frei < fehltBytes + g.reserveBytes) {
     sperrgrund = `Zu wenig freier Speicherplatz: Das Modell braucht noch rund ${gbText(fehltBytes)} GB, danach müssen `
       + `mindestens 5 GB frei bleiben. Frei sind ${gbText(frei)} GB.`;
   }
-  return { ramMiB, vramMiB, speicherMiB, langsam: vramMiB < g.flottVramMiB, sperrgrund };
+  return { ramMiB, vramMiB, minRamMiB, langsam: vramMiB < g.flottVramMiB, sperrgrund };
 }

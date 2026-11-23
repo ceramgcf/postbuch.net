@@ -183,8 +183,10 @@ NVIDIA-Grafikkarte:
 Voraussetzungen, die der Reiter **Stack**, der Update-Agent und der Installer
 gleichermaßen prüfen:
 
-- **Arbeitsspeicher und nutzbarer Grafikspeicher zusammen mindestens 24 GB.**
-  Darunter ist **Einrichten und einschalten** ausgegraut, mit Begründung. Unter
+- **Genug Arbeitsspeicher für die jeweilige Stufe:** ohne NVIDIA-Grafikkarte
+  mindestens 15 GB, mit einer Karte mit 6–8 GB mindestens 12 GB, mit einer
+  Karte ab 10 GB mindestens 8 GB. Ein PC mit 16 GB reicht also auch ohne
+  Grafikkarte. Darunter ist **Einrichten und einschalten** ausgegraut, mit Begründung. Unter
   Windows zählt der Arbeitsspeicher, den WSL bekommt (standardmäßig die Hälfte,
   siehe [unten](#lokale-ki-unter-windows)).
 - **Nach dem Laden des Modells noch mindestens 5 GB frei.** Sonst ist der
@@ -223,7 +225,7 @@ Dokumente verarbeitet werden oder der Chat läuft:
 | ------------------------ | ---------------------------------- | ----------- |
 | ab 10 GB                 | rund 4 GB                          | unter 1 GB  |
 | 6–8 GB                   | rund 12 GB                         | unter 1 GB  |
-| keine NVIDIA-Grafikkarte | rund 16 GB                         | unter 1 GB  |
+| keine NVIDIA-Grafikkarte | rund 12 GB                         | unter 1 GB  |
 
 Im Leerlauf belegt der Dienst nur noch rund 0,5 bis 0,7 GB. Zusammen mit dem
 übrigen Stack (Datenbank, App, Oberfläche, Embedding-Dienst), der immer läuft,
@@ -237,29 +239,30 @@ anderweitig gebraucht wird oder das Modell entladen ist.
 Unter Windows läuft postbuch.net in WSL 2, einer kleinen virtuellen Maschine.
 Sie darf standardmäßig höchstens die Hälfte des Arbeitsspeichers nutzen; nur
 diesen Anteil kann auch das Modell verwenden, und nur er zählt für die
-24-GB-Prüfung. Bei einem PC mit 32 GB sind das 16 GB.
+Speicherprüfung. Bei einem PC mit 32 GB sind das 16 GB.
 
 - **Belegt wird nur, was gerade gebraucht wird.** Die Hälfte ist eine
   Obergrenze, keine feste Reservierung. Im Leerlauf zeigt der Task-Manager für
   den Prozess **VmmemWSL** etwa 1 bis 2,5 GB. Während der Verarbeitung steigt
   der Wert (mit Modelldatei im Cache auf rund 10 GB) und fällt nach dem
   Entladen des Modells von selbst wieder; Windows bekommt den Speicher zurück.
-- **Mehr Speicher für WSL bietet der Windows-Installer selbst an**, aber nur,
-  wenn erst dadurch die 24 GB erreicht werden und Windows danach noch
-  mindestens 8 GB behält. Er gibt WSL dann nur so viel, wie nötig ist: 24 GB
-  abzüglich des Grafikspeichers. Reichen Arbeits- und Grafikspeicher auch so,
-  fragt er nicht. Die Einstellung gilt für **alle** WSL-Umgebungen auf dem PC
-  (etwa Ubuntu oder Docker Desktop), die dann ebenfalls bis zu dieser Grenze
-  Speicher belegen können; darauf weist er vor der Frage ausdrücklich hin. Die
-  Deinstallation entfernt den Eintrag wieder. Wer die lokale KI erst später
-  einschalten will, führt den Installer erneut aus (oder in den Apps
-  **postbuch.net Server → Ändern**).
+- **Mehr Speicher für WSL bietet der Installer selbst an**, bei der
+  Betriebsart „Komplett lokal“ und nur, wenn erst dadurch der nötige
+  Arbeitsspeicher erreicht wird und Windows danach noch mindestens 8 GB behält.
+  Er gibt WSL dann nur so viel, wie die Stufe braucht (ohne Grafikkarte
+  15 GB). Reicht der Speicher auch so, fragt er nicht. Die Einstellung
+  gilt für **alle** WSL-Umgebungen auf dem PC (etwa Ubuntu oder Docker
+  Desktop), die dann ebenfalls bis zu dieser Grenze Speicher belegen können;
+  darauf weist er vor der Frage ausdrücklich hin. Die Deinstallation entfernt
+  den Eintrag wieder. Siehe
+  [Speicher für die lokale KI unter Windows](installation.md#speicher-für-die-lokale-ki-unter-windows).
 - **Von Hand** lässt sich die Grenze in der Datei `.wslconfig` im eigenen
-  Benutzerordner festlegen, etwa für 24 GB:
+  Benutzerordner festlegen. Das ist der Weg, wenn du die lokale KI erst nach
+  der Installation unter Einstellungen → Stack einschaltest, etwa für 15 GB:
 
   ```ini
   [wsl2]
-  memory=24GB
+  memory=15GB
   ```
 
   Wirksam wird das nach `wsl --shutdown` in einer PowerShell. Steht dort schon

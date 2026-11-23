@@ -80,6 +80,12 @@ installer_log_abschluss() {
           && "$RELEASE_STAGE" == "${INSTALL_DIR:-/nie}.stage."* ]]; then
         rm -rf "$RELEASE_STAGE" 2>/dev/null || sudo -n rm -rf "$RELEASE_STAGE" 2>/dev/null || true
     fi
+    # Der Download der Erstinstallation (fester Name in /tmp) ist nach dem Lauf
+    # überflüssig, auch wenn er mitten in den Fragen abgebrochen wurde. Ein
+    # selbst abgelegtes Archiv neben dem Skript bleibt.
+    if [[ "${TARBALL:-}" == /tmp/postbuch-latest.tar.gz && "$TARBALL" != "$LOCAL_TARBALL" ]]; then
+        rm -f -- "$TARBALL" 2>/dev/null || true
+    fi
     # Nach einer Übergabe (an_neuen_installer_uebergeben) liegt dieses Skript
     # samt geprüftem Archiv in einem privaten Ordner, den sonst niemand mehr
     # wegräumt. Gelöscht wird nur, was der Marker als solchen ausweist.
@@ -2592,6 +2598,50 @@ ask_restore_backup() {
     [[ "$answer" == "j" || "$answer" == "J" ]] && echo "true" || echo "false"
 }
 
+# Erstinstallation: Datei und Backup-Passwort gleich im Fragenblock, damit
+# das Einspielen nach dem Start ohne Rückfrage läuft. Ohne Datei oder bei
+# einem Fehler übernimmt wie bisher die Seite /setup/restore im Browser.
+# Andere Pfade (Clean-Neuinstallation) fragen weiter erst nach dem Start.
+RESTORE_VORAB_ERLAUBT=false
+RESTORE_VORAB=false
+RESTORE_PFAD=""
+RESTORE_PW=""
+RESTORE_VERSCHLUESSELT=false
+RESTORE_BROWSER=false
+restore_vorab_erfragen() {
+    $RESTORE_VORAB_ERLAUBT || return 0
+    [[ -r /dev/tty ]] || return 0
+    RESTORE_VORAB=true; RESTORE_PFAD=""; RESTORE_PW=""; RESTORE_VERSCHLUESSELT=false
+    RESTORE_BROWSER=false
+    local datei=""
+    if [[ -n "$LOKAL_ABLAGE_SICHERUNG" ]]; then
+        # Die Sicherung aus dem weiterverwendeten Ablageordner bietet der
+        # Server nach dem Start selbst an; hier nur ihr Passwort.
+        datei="$LOKAL_ABLAGE_SICHERUNG"
+    else
+        echo ""
+        echo "  Die Sicherung wird nach dem Start gleich vom Installer eingespielt."
+        echo "  Pfad zur Datei (.pgdump.gz), unter Windows z. B. C:\\Users\\…\\postbuch_….pgdump.gz."
+        while true; do
+            datei=$(prompt "Pfad (leer = später im Browser hochladen)" "")
+            [[ -z "$datei" ]] && { RESTORE_BROWSER=true; return 0; }
+            if ist_wsl 2>/dev/null && [[ "$datei" =~ ^[A-Za-z]:\\ ]]; then
+                datei=$(wslpath -u "$datei" 2>/dev/null || printf '%s' "$datei")
+            fi
+            datei="${datei%\"}"; datei="${datei#\"}"
+            [[ -f "$datei" && -r "$datei" ]] && break
+            warn "Datei nicht gefunden oder nicht lesbar: $datei"
+        done
+        RESTORE_PFAD="$datei"
+    fi
+    if [[ "$(od -An -tx1 -N2 "$datei" 2>/dev/null | tr -d ' \n')" != 1f8b ]]; then
+        RESTORE_VERSCHLUESSELT=true
+        RESTORE_PW=$(prompt_secret "Backup-Passwort (leer = später im Browser)")
+        [[ -z "$RESTORE_PW" ]] && RESTORE_BROWSER=true
+    fi
+    return 0
+}
+
 # Markierung für den Setup-Restore. Stammt die Sicherung aus einem
 # weiterverwendeten Ablageordner, steht ihr Pfad relativ zum Ordner darin;
 # /setup/restore bietet sie dann direkt zum Einspielen an.
@@ -2638,7 +2688,12 @@ json_feld() { # $1 JSON-Text $2 Feldname (nur einfache Werte)
 restore_im_installer() {
     local flag="$INSTALL_DIR/data/scan_buffer/.setup_restore_pending"
     [[ -f "$flag" ]] || return 1
-    [[ -r /dev/tty ]] || return 1
+    # Vorab erfragt: keine Rückfrage mehr, jeder Fehler führt in den Browser.
+    if $RESTORE_VORAB; then
+        $RESTORE_BROWSER && return 1
+    else
+        [[ -r /dev/tty ]] || return 1
+    fi
     local basis="http://localhost:$(web_port)" admin_pw vorschlag="" pfad="" ziel antwort code fehler
     local bpw="" verschluesselt=false tmp
     admin_pw=$(grep -m1 '^APP_PASSWORD=' "$INSTALL_DIR/.env" 2>/dev/null | cut -d= -f2-)
@@ -2646,16 +2701,25 @@ restore_im_installer() {
     [[ -n "$admin_pw" ]] || return 1
 
     echo ""
-    if vorschlag=$(curl -sf --max-time 20 "$basis/setup/restore/vorschlag" 2>/dev/null) && [[ -n "$vorschlag" ]]; then
+    if $RESTORE_VORAB && [[ -n "$RESTORE_PFAD" ]]; then
+        vorschlag=""
+    elif vorschlag=$(curl -sf --max-time 20 "$basis/setup/restore/vorschlag" 2>/dev/null) && [[ -n "$vorschlag" ]]; then
         echo "  Gefundene Sicherung: $(json_feld "$vorschlag" name)"
         echo "  Stand: $(json_feld "$vorschlag" geaendertAm | sed 's/T/ /; s/\..*//') (UTC)"
-        local wahl
-        wahl=$(prompt "Diese Sicherung einspielen? (n = andere Datei angeben) [J/n]" "J")
-        [[ "${wahl,,}" == n* ]] && vorschlag=""
+        if ! $RESTORE_VORAB; then
+            local wahl
+            wahl=$(prompt "Diese Sicherung einspielen? (n = andere Datei angeben) [J/n]" "J")
+            [[ "${wahl,,}" == n* ]] && vorschlag=""
+        fi
     fi
     if [[ -n "$vorschlag" ]]; then
         ziel="$basis/setup/restore/vorschlag"
         [[ "$(json_feld "$vorschlag" verschluesselt)" == true ]] && verschluesselt=true
+    elif $RESTORE_VORAB; then
+        pfad="$RESTORE_PFAD"
+        [[ -n "$pfad" && -f "$pfad" && -r "$pfad" ]] || return 1
+        ziel="$basis/setup/restore"
+        $RESTORE_VERSCHLUESSELT && verschluesselt=true
     else
         echo "  Die Sicherung kann gleich hier eingespielt werden."
         echo "  Pfad zur Datei (.pgdump.gz), unter Windows z. B. C:\\Users\\…\\postbuch_….pgdump.gz."
@@ -2677,7 +2741,14 @@ restore_im_installer() {
     # Beliebig viele Versuche; abbrechen lässt sich mit einer leeren Eingabe.
     # Die Bremse gegen Durchprobieren sitzt im Server (429).
     while true; do
-        if $verschluesselt; then
+        if $RESTORE_VORAB; then
+            # Genau ein Versuch mit dem vorab genannten Passwort.
+            if $verschluesselt; then
+                [[ -n "$bpw" ]] && { rm -f "$tmp"; return 1; }
+                bpw="$RESTORE_PW"
+                [[ -z "$bpw" ]] && { rm -f "$tmp"; return 1; }
+            fi
+        elif $verschluesselt; then
             bpw=$(prompt_secret "Backup-Passwort (leer = später im Browser)")
             [[ -z "$bpw" ]] && { rm -f "$tmp"; return 1; }
         fi
@@ -2715,8 +2786,10 @@ restore_im_installer() {
                 verschluesselt=true; continue ;;
             401:BACKUP_PASSWORT_FALSCH)
                 warn "${fehler:-Backup-Passwort ist falsch.}"
+                $RESTORE_VORAB && { warn "Weiter im Browser."; rm -f "$tmp"; return 1; }
                 continue ;;
             429:*)
+                $RESTORE_VORAB && { warn "${fehler:-Zu viele Versuche.} Weiter im Browser."; rm -f "$tmp"; return 1; }
                 warn "${fehler:-Zu viele Versuche.} Kurz warten, dann erneut eingeben."
                 continue ;;
             *)
@@ -2787,13 +2860,16 @@ LOKAL_ABLAGE_DIR=""
 LOKAL_ABLAGE_ANZEIGE=""
 LOKAL_ABLAGE_SICHERUNG=""   # Sicherung aus einer weiterverwendeten Ablage
 LOKAL_ABLAGE_HOCHLADEN=false # weiterverwendete Ablage, Sicherung kommt per Upload
+LOKAL_ABLAGE_NEU=""          # oberster noch anzulegender Teil des Ablagepfads
 
+# $1 optional: Verzeichnis mit dem Release (vor dem Kopieren die Stage).
 lokal_bibliothek() {
+    local quelle="${1:-$INSTALL_DIR}"
     [[ "${DOCKER_COMPOSE:-}" == sudo\ * ]] && DOCKER_ART=sudo
     declare -F hostconfig_ablage_syntax >/dev/null && return 0
-    [[ -r "$INSTALL_DIR/scripts/postbuch-hostconfig.sh" ]] || return 1
+    [[ -r "$quelle/scripts/postbuch-hostconfig.sh" ]] || return 1
     # shellcheck source=../scripts/postbuch-hostconfig.sh
-    source "$INSTALL_DIR/scripts/postbuch-hostconfig.sh"
+    source "$quelle/scripts/postbuch-hostconfig.sh"
 }
 
 ist_wsl() { hostconfig_ist_wsl; }
@@ -3107,12 +3183,16 @@ lokal_ablage_freier_name() {
 # Fragt den Ablageordner ab, prüft ihn mit den Regeln des Host-Agenten und legt
 # ihn an. Setzt LOKAL_ABLAGE_DIR (Linux-Pfad) und LOKAL_ABLAGE_ANZEIGE.
 lokal_ablage_dialog() {
-    local vorschlag profil="" eingabe pfad neu ausweich="" sicherung antwort schreibprobe
+    local vorschlag profil="" eingabe pfad neu ausweich="" sicherung antwort schreibprobe vorhanden
+    local besitzer_uid
     LOKAL_ABLAGE_SICHERUNG=""
     LOKAL_ABLAGE_HOCHLADEN=false
+    # Bei der Erstinstallation gibt es das Installationsverzeichnis noch nicht;
+    # sein künftiger Besitzer steht aber schon fest.
+    besitzer_uid=$(stat -c %u -- "$INSTALL_DIR" 2>/dev/null) || besitzer_uid="${INSTALL_BESITZER%%:*}"
     # Nie im Installationsverzeichnis: Eine Deinstallation löscht es ganz.
     # Vorschlag im Benutzerverzeichnis des Besitzers der Installation (wie die Regel).
-    vorschlag=$(getent passwd "$(stat -c %U -- "$INSTALL_DIR" 2>/dev/null)" 2>/dev/null | cut -d: -f6)
+    vorschlag=$(getent passwd "$besitzer_uid" 2>/dev/null | cut -d: -f6)
     if [[ "$vorschlag" == /?* && "$vorschlag" != /root ]]; then
         vorschlag="$vorschlag/postbuch.net-Ablage"
     else
@@ -3145,7 +3225,7 @@ Rechner liegen, gib einen Ordner außerhalb von OneDrive an$( [[ -n "$ausweich" 
             warn "Ungültiger Pfad. Erlaubt sind absolute Pfade ohne \$ # \" ' \` und ohne versteckte Ordner."
             continue
         fi
-        if ! hostconfig_ablage_erlaubt "$pfad" "$INSTALL_DIR" "$INSTALL_DIR/data/modelle"; then
+        if ! hostconfig_ablage_erlaubt "$pfad" "$INSTALL_DIR" "$INSTALL_DIR/data/modelle" "$besitzer_uid"; then
             if ist_wsl; then
                 warn "Dieser Ort ist nicht erlaubt. Geeignet sind Windows-Ordner unter C:\\Users\\<name> oder auf einem weiteren Laufwerk – ein Ordner in der Linux-Umgebung würde bei einer Deinstallation mitgelöscht."
             else
@@ -3196,30 +3276,24 @@ Rechner liegen, gib einen Ordner außerhalb von OneDrive an$( [[ -n "$ausweich" 
                 continue
             fi
         fi
+        # Angelegt wird erst nach der Zusammenfassung (lokal_ablage_anlegen).
+        # Hier nur prüfen, am vorhandenen Teil des Pfads: keine Verknüpfung,
+        # und postbuch.net darf dort schreiben (Probe legt nichts dauerhaft an).
         neu=""
         [[ -e "$pfad" ]] || neu="$pfad"
         [[ -n "$neu" ]] && while [[ ! -e "$(dirname -- "$neu")" ]]; do neu=$(dirname -- "$neu"); done
-        # Nichts durch eine Verknüpfung hindurch anlegen.
-        if ! hostconfig_ablage_kanonisch "$( [[ -n "$neu" ]] && dirname -- "$neu" || printf '%s' "$pfad")"; then
+        vorhanden="$pfad"
+        [[ -n "$neu" ]] && vorhanden=$(dirname -- "$neu")
+        if [[ ! -d "$vorhanden" ]] || ! hostconfig_ablage_kanonisch "$vorhanden"; then
             warn "$eingabe enthält eine Verknüpfung. Bitte den echten Ordner angeben."; continue
         fi
-        if ! mkdir -p -- "$pfad" 2>/dev/null; then
-            warn "$eingabe lässt sich nicht anlegen."; continue
-        fi
-        if ! hostconfig_ablage_kanonisch "$pfad"; then
-            warn "$eingabe enthält eine Verknüpfung. Bitte den echten Ordner angeben."; continue
-        fi
-        if ! schreibprobe=$(mktemp -- "$pfad/.postbuch-schreibprobe.XXXXXX" 2>/dev/null) ||
+        if ! schreibprobe=$(mktemp -- "$vorhanden/.postbuch-schreibprobe.XXXXXX" 2>/dev/null) ||
            ! rm -- "$schreibprobe" 2>/dev/null; then
             warn "In $eingabe kann postbuch.net nicht schreiben. Bitte einen anderen Ordner wählen."; continue
         fi
-        # Als root angelegte Ordner gehören dem Besitzer der Installation –
-        # ohne Verknüpfungen zu folgen, falls jemand zwischendurch eine einschiebt.
-        if [[ -n "$neu" && $(id -u) -eq 0 && -n "${INSTALL_BESITZER:-}" ]]; then
-            find -P "$neu" -xdev -exec chown -h "$INSTALL_BESITZER" -- {} + 2>/dev/null || true
-        fi
         break
     done
+    LOKAL_ABLAGE_NEU="$neu"
     ist_onedrive_pfad "$pfad" && warn "Dieser Ordner liegt in OneDrive und wird in die Cloud synchronisiert."
     LOKAL_ABLAGE_DIR="$pfad"
     LOKAL_ABLAGE_ANZEIGE="$pfad"
@@ -3230,102 +3304,328 @@ Fällt sie aus, sind beide weg. Kopiere den Ablageordner regelmäßig auf ein
 anderes Laufwerk oder richte im Assistenten eine externe Sicherung ein."
 }
 
-# Prüft Grafikkarte, Stufe und Platz. Setzt LOKAL_KI=true nur, wenn die lokale
-# KI eingerichtet werden kann und eine langsame Stufe ausdrücklich bestätigt ist.
-lokal_ki_dialog() {
-    local gpu vram="" name="" bereit=false antwort bedarf=0 d frei
-    if ! hostconfig_lokalki_manifest "$INSTALL_DIR"; then
-        warn "Das Modellverzeichnis dieses Releases ist nicht lesbar – lokale KI wird übersprungen."
+# Legt den im Dialog geprüften Ablageordner an (nach der Zusammenfassung).
+# Mehrfacher Aufruf schadet nicht. Scheitert es, bricht der Lauf ab, bevor
+# etwas im Installationsverzeichnis liegt.
+lokal_ablage_anlegen() {
+    local pfad="$LOKAL_ABLAGE_DIR"
+    [[ -n "$pfad" ]] || error "Kein Ablageordner festgelegt."
+    mkdir -p -- "$pfad" 2>/dev/null || error "Der Ablageordner $LOKAL_ABLAGE_ANZEIGE lässt sich nicht anlegen."
+    hostconfig_ablage_kanonisch "$pfad" \
+        || error "Der Ablageordner $LOKAL_ABLAGE_ANZEIGE enthält eine Verknüpfung. Abgebrochen, nichts installiert."
+    # Als root angelegte Ordner gehören dem Besitzer der Installation –
+    # ohne Verknüpfungen zu folgen, falls jemand zwischendurch eine einschiebt.
+    if [[ -n "$LOKAL_ABLAGE_NEU" && -e "$LOKAL_ABLAGE_NEU" && $(id -u) -eq 0 && -n "${INSTALL_BESITZER:-}" ]]; then
+        find -P "$LOKAL_ABLAGE_NEU" -xdev -exec chown -h "$INSTALL_BESITZER" -- {} + 2>/dev/null || true
+    fi
+    LOKAL_ABLAGE_NEU=""
+}
+
+# ── Eignung für „Komplett lokal“ ─────────────────────────────────────────────
+# Angeboten wird „Komplett lokal“ nur, wenn die lokale KI hier laufen kann.
+# Unter Windows reicht install.ps1 Werte herein, die WSL selbst nicht kennt –
+# als Umgebungsvariablen (WSLENV), damit ältere install.sh sie ignorieren:
+#   POSTBUCH_WINDOWS_RAM_MIB     Arbeitsspeicher des ganzen PCs
+#   POSTBUCH_WSL_SPEICHER_FREI   1, wenn die .wslconfig keine memory-Grenze hat
+#   POSTBUCH_WINDOWS_FREI_BYTES  freier Platz auf dem Laufwerk der WSL-Instanz
+# Reicht der Speicher erst, wenn WSL mehr bekommt, endet der Installer nach
+# Zustimmung mit Exit-Code 75 und einer Übergabedatei. install.ps1 setzt dann
+# die Grenze, startet WSL neu und ruft ihn erneut auf. Das geschieht nur vor
+# dem Kopieren der Erstinstallation; es bleibt also nichts halb liegen.
+LOKAL_UEBERGABE_EXIT=75
+LOKAL_UEBERGABE_DATEI=/root/.postbuch-installer-uebergabe
+LOKAL_UEBERGABE_ERLAUBT=false
+LOKAL_BETRIEBSART=""          # lokal|klassisch, sobald entschieden
+LOKAL_VORGABE_LOKAL=false     # aus der Übergabedatei: Betriebsart 1 vorschlagen
+LOKAL_VORGABE_CUDA=""         # ja|nein: NVIDIA-Frage schon beantwortet
+LOKAL_VORGABE_LANGSAM=false   # langsame Stufe schon bestätigt
+LOKAL_TOOLKIT_FEHLT=false     # Toolkit-Einrichtung in diesem Lauf gescheitert
+LK_GPU_VRAM=""; LK_GPU_NAME=""; LK_GPU_BEREIT=false
+LK_WEG=""; LK_GRUND=""; LK_WSL_GB=0; LK_BEDARF=0
+
+# Mindest-Arbeitsspeicher der gewählten Stufe in GB (dezimal, wie im Manifest).
+lk_ram_gb() { printf '%s' $(( (${LK_RAM:-0} * 1048576 + 500000000) / 1000000000 )); }
+
+zahl_oder_leer() { [[ "$1" =~ ^[0-9]{1,15}$ ]] && printf '%s' "$1"; return 0; }
+
+lokal_gpu_lesen() {
+    local gpu
+    LK_GPU_VRAM=""; LK_GPU_NAME=""; LK_GPU_BEREIT=false
+    gpu=$(hostconfig_gpu_erkennen) || return 0
+    LK_GPU_VRAM="${gpu%%|*}"; LK_GPU_NAME="${gpu#*|}"; LK_GPU_NAME="${LK_GPU_NAME%|*}"
+    LK_GPU_BEREIT="${gpu##*|}"
+}
+
+# Kann die Grafikkarte in diesem Lauf noch nutzbar werden? Nicht nach einem
+# Nein zu den NVIDIA-Bedingungen und nicht ohne Weg zum Container Toolkit.
+lokal_gpu_moeglich() {
+    [[ -n "$LK_GPU_VRAM" && "$LOKAL_VORGABE_CUDA" != nein ]] || return 1
+    [[ "$LK_GPU_BEREIT" == true ]] && return 0
+    ! $LOKAL_TOOLKIT_FEHLT && command -v apt-get >/dev/null 2>&1
+}
+
+# Ein Nein zu NVIDIA gilt nur für den einen Versuch: Wer danach wieder
+# „Komplett lokal“ wählt, wird erneut gefragt. Nur aus betriebsart_dialog
+# aufrufen; setzt dessen lokale Variable cuda_abgelehnt für den Menühinweis.
+lokal_cuda_nein_vergessen() {
+    [[ "$LOKAL_VORGABE_CUDA" == nein ]] || return 0
+    cuda_abgelehnt=true; LOKAL_VORGABE_CUDA=""
+}
+
+# $1 nutzbarer Grafikspeicher in MiB oder leer. Setzt LK_WEG (ok|wsl-mehr|nein),
+# LK_GRUND (Satz für den Nutzer, nur bei nein), LK_WSL_GB und LK_BEDARF (Bytes).
+# Dieselben Grenzen wie hostconfig_lokalki_speicher_pruefen und install.ps1.
+lokalki_bewerten() {
+    local vram="$1" ram rc=0 frei frei_win d gesamt_win noetig
+    LK_WEG=nein; LK_GRUND=""; LK_WSL_GB=0; LK_BEDARF=0
+    if ! hostconfig_lokalki_stufe "$vram"; then
+        LK_GRUND="Für diese Ausstattung gibt es keine passende Stufe des Modells."
         return 0
     fi
-    if gpu=$(hostconfig_gpu_erkennen); then
-        vram="${gpu%%|*}"; name="${gpu#*|}"; name="${name%|*}"; bereit="${gpu##*|}"
-        info "Grafikkarte: $name ($(( vram / 1024 )) GB)"
-        if hostconfig_cuda_akzeptiert "$INSTALL_DIR" || cuda_zustimmung_einholen; then
-            LOKAL_CUDA_ZUSTIMMUNG="$HOSTCONFIG_CUDA_LIZENZ"
-            if [[ "$bereit" != true ]] && nvidia_toolkit_installieren; then
-                gpu=$(hostconfig_gpu_erkennen) && bereit="${gpu##*|}"
-            fi
-            [[ "$bereit" == true ]] || warn "Ohne Toolkit läuft die lokale KI nur auf dem Prozessor."
-        else
-            bereit=false
+    while IFS='|' read -r _ _ _ d _; do (( LK_BEDARF += d )); done < <(hostconfig_lokalki_stufe_dateien)
+    # Unter WSL zählt der Platz auf dem Windows-Laufwerk: Die virtuelle Platte
+    # der Instanz meldet weit mehr, als sie wachsen kann.
+    frei=$(freier_platz_bytes "$INSTALL_DIR/data/modelle")
+    if ist_wsl; then
+        frei_win=$(zahl_oder_leer "${POSTBUCH_WINDOWS_FREI_BYTES:-}")
+        if [[ -n "$frei_win" ]] && { ! [[ "$frei" =~ ^[0-9]+$ ]] || (( frei_win < frei )); }; then
+            frei="$frei_win"
         fi
-    else
+    fi
+    # Bei der Erstinstallation kommt die Grundinstallation dazu.
+    local basis=0
+    [[ -e "$INSTALL_DIR/docker-compose.yml" ]] || basis=$(( BASIS_DOCKER_BYTES + BASIS_DATEN_BYTES + BASIS_RESERVE_BYTES ))
+    if [[ "$frei" =~ ^[0-9]+$ ]] && (( frei < LK_BEDARF + HOSTCONFIG_LOKALKI_RESERVE_BYTES + basis )); then
+        LK_GRUND="Zu wenig freier Platz: Das Modell braucht rund $(( LK_BEDARF / 1024 ** 3 + 1 )) GB plus 5 GB Reserve$( (( basis > 0 )) && printf ', postbuch.net selbst rund %s GB' "$(gb_aufrunden "$basis")"), frei sind $(( frei / 1024 ** 3 )) GB."
+        return 0
+    fi
+    ram=$(hostconfig_ram_mib) || ram=0
+    hostconfig_lokalki_speicher_pruefen || rc=$?
+    # 5 = zu wenig; 1 = nicht ermittelbar, dann nicht sperren.
+    if (( rc != 5 )); then LK_WEG=ok; return 0; fi
+    gesamt_win=$(zahl_oder_leer "${POSTBUCH_WINDOWS_RAM_MIB:-}")
+    if $LOKAL_UEBERGABE_ERLAUBT && ist_wsl && [[ "${POSTBUCH_WSL_SPEICHER_FREI:-}" == 1 && -n "$gesamt_win" ]]; then
+        # Wie install.ps1: Mindestbedarf der Stufe plus 512 MiB für den Kern.
+        noetig=$(( (LK_RAM + 512 + 1023) / 1024 ))
+        if (( gesamt_win - noetig * 1024 >= 8192 && noetig * 1024 > ram )); then
+            LK_WEG=wsl-mehr; LK_WSL_GB=$noetig
+            return 0
+        fi
+    fi
+    LK_GRUND="Der Arbeitsspeicher beträgt rund $(( (ram + 512) / 1024 )) GB; die lokale KI braucht $( [[ "$LK_GPU" == ja ]] && echo "mit dieser Grafikkarte" || echo "ohne NVIDIA-Grafikkarte") mindestens $(lk_ram_gb) GB."
+    if ist_wsl && [[ -n "$gesamt_win" ]]; then
+        if [[ "${POSTBUCH_WSL_SPEICHER_FREI:-}" != 1 ]]; then
+            LK_GRUND+=" In der .wslconfig ist der Speicher für WSL begrenzt; dieser Eintrag bleibt, wie er ist."
+        elif $LOKAL_UEBERGABE_ERLAUBT; then
+            LK_GRUND+=" Auch mit mehr Speicher für WSL reicht der PC nicht, denn Windows muss mindestens 8 GB behalten."
+        fi
+    fi
+}
+
+# Übergabedatei für install.ps1 (nur unter WSL): Speichergrenze und die schon
+# gegebenen Antworten, damit der zweite Lauf nicht noch einmal fragt.
+lokal_uebergabe_schreiben() {
+    local tmp
+    tmp=$(mktemp "$LOKAL_UEBERGABE_DATEI.XXXXXX") || return 1
+    if ! printf 'wsl_speicher_gb=%s\nbetriebsart=lokal\ncuda=%s\nlangsam=ja\n' \
+            "$LK_WSL_GB" "${LOKAL_VORGABE_CUDA:-nein}" > "$tmp"; then
+        rm -f -- "$tmp"; return 1
+    fi
+    mv -f -- "$tmp" "$LOKAL_UEBERGABE_DATEI"
+}
+
+lokal_uebergabe_lesen() {
+    local f="$LOKAL_UEBERGABE_DATEI" k v
+    ist_wsl && [[ -f "$f" && ! -L "$f" ]] || return 0
+    while IFS='=' read -r k v; do
+        case "$k=$v" in
+            betriebsart=lokal) LOKAL_VORGABE_LOKAL=true ;;
+            cuda=ja|cuda=nein) LOKAL_VORGABE_CUDA="$v" ;;
+            langsam=ja) LOKAL_VORGABE_LANGSAM=true ;;
+        esac
+    done < "$f"
+    rm -f -- "$f"
+}
+
+# WSL mehr Arbeitsspeicher geben lassen. Bei Ja endet der Installer hier mit
+# Exit-Code 75; install.ps1 übernimmt. 1 = abgelehnt, zurück zur Betriebsart.
+lokal_wsl_speicher_anbieten() {
+    local antwort jetzt gesamt
+    jetzt=$(hostconfig_ram_mib) || jetzt=0
+    gesamt=$(zahl_oder_leer "${POSTBUCH_WINDOWS_RAM_MIB:-}")
+    panel "Mehr Arbeitsspeicher für WSL" "WSL darf bisher rund $(( (jetzt + 512) / 1024 )) von $(( ${gesamt:-0} / 1024 )) GB Arbeitsspeicher nutzen.
+Das reicht nicht für die lokale KI (mindestens $(lk_ram_gb) GB).
+Mit einer Grenze von $LK_WSL_GB GB ginge es; Windows behält dann mindestens $(( ${gesamt:-0} / 1024 - LK_WSL_GB )) GB.
+Belegt wird der Speicher nur, solange WSL ihn braucht.
+
+ACHTUNG: Die Grenze steht in der .wslconfig und gilt für ALLE WSL-Umgebungen
+auf diesem PC (z. B. Ubuntu oder Docker Desktop), nicht nur für postbuch.net.
+Beim Deinstallieren von postbuch.net wird der Eintrag wieder entfernt.
+
+Bei Ja stellt der Windows-Installer die Grenze um, startet WSL neu und setzt
+die Einrichtung danach von selbst fort."
+    antwort=$(prompt "WSL bis zu $LK_WSL_GB GB Arbeitsspeicher geben? [j/n]" "n")
+    if [[ ! "$antwort" =~ ^[jJ] ]]; then
+        info "Unverändert. Ohne mehr Speicher lässt sich die lokale KI nicht einrichten."
+        return 1
+    fi
+    lokal_uebergabe_schreiben || { warn "Die Übergabe an den Windows-Installer ließ sich nicht schreiben."; return 1; }
+    info "Weiter geht es im Windows-Installer."
+    exit "$LOKAL_UEBERGABE_EXIT"
+}
+
+# Die lokale KI in fester Reihenfolge: NVIDIA-Bedingungen und Toolkit, danach
+# Speicher und Platz mit dem tatsächlich nutzbaren Grafikspeicher, dann das
+# Tempo, zuletzt (falls nötig) mehr Speicher für WSL.
+# 0 = LOKAL_KI=true; 1 = nicht möglich oder abgelehnt, zurück zur Betriebsart.
+lokal_ki_dialog() {
+    local vram="" antwort extrem=false
+    if lokal_gpu_moeglich; then
+        info "Grafikkarte: $LK_GPU_NAME ($(( LK_GPU_VRAM / 1024 )) GB)"
+        if [[ "$LOKAL_CUDA_ZUSTIMMUNG" == "$HOSTCONFIG_CUDA_LIZENZ" || "$LOKAL_VORGABE_CUDA" == ja ]] \
+           || cuda_zustimmung_einholen; then
+            LOKAL_CUDA_ZUSTIMMUNG="$HOSTCONFIG_CUDA_LIZENZ"; LOKAL_VORGABE_CUDA=ja
+            if [[ "$LK_GPU_BEREIT" != true ]]; then
+                if nvidia_toolkit_installieren; then lokal_gpu_lesen; else LOKAL_TOOLKIT_FEHLT=true; fi
+            fi
+            if [[ "$LK_GPU_BEREIT" == true ]]; then
+                vram="$LK_GPU_VRAM"
+            else
+                LOKAL_TOOLKIT_FEHLT=true
+                warn "Das NVIDIA Container Toolkit fehlt; die Grafikkarte bleibt ungenutzt. Ich prüfe, ob es ohne sie reicht."
+            fi
+        else
+            LOKAL_CUDA_ZUSTIMMUNG=""; LOKAL_VORGABE_CUDA=nein
+            info "Ohne Zustimmung bleibt die Grafikkarte ungenutzt. Ich prüfe, ob es ohne sie reicht."
+        fi
+    elif [[ -z "$LK_GPU_VRAM" ]]; then
         info "Keine NVIDIA-Grafikkarte erkannt."
     fi
-    [[ "$bereit" == true ]] || vram=""
-    hostconfig_lokalki_stufe "$vram" || { warn "Keine passende Stufe für die lokale KI."; return 0; }
 
-    while IFS='|' read -r _ _ _ d _; do (( bedarf += d )); done < <(hostconfig_lokalki_stufe_dateien)
-    frei=$(freier_platz_bytes "$INSTALL_DIR/data/modelle")
-    # Nach dem Modell müssen noch 5 GB frei bleiben (HOSTCONFIG_LOKALKI_RESERVE_BYTES).
-    if [[ "$frei" =~ ^[0-9]+$ ]] && (( frei < bedarf + HOSTCONFIG_LOKALKI_RESERVE_BYTES )); then
-        warn "Zu wenig freier Platz für das Modell: nötig sind rund $(( bedarf / 1024 ** 3 + 1 )) GB plus 5 GB Reserve, frei $(( frei / 1024 ** 3 )) GB. Lokale KI wird nicht eingerichtet."
-        return 0
+    # Reicht es nicht, erklärt die Betriebsart beim nächsten Durchlauf den Grund.
+    # Nach einem Nein zu NVIDIA bietet sie den Weg mit Grafikkarte wieder an,
+    # deshalb steht der Grund dann hier.
+    lokalki_bewerten "$vram"
+    if [[ "$LK_WEG" == nein ]]; then
+        [[ "$LOKAL_VORGABE_CUDA" == nein ]] && info "Ohne die NVIDIA-Grafikkarte reicht es nicht. $LK_GRUND"
+        return 1
     fi
 
-    # Arbeitsspeicher + nutzbarer Grafikspeicher mindestens 24 GB – sonst lädt
-    # das Modell nicht oder legt den Rechner lahm. Keine Rückfrage, kein Übergehen.
-    local ram=0 rc=0
-    ram=$(hostconfig_ram_mib) || ram=0
-    hostconfig_lokalki_speicher_pruefen "$vram" || rc=$?
-    # 5 = zu wenig; 1 = nicht ermittelbar, dann nicht sperren.
-    if (( rc == 5 )); then
-        panel "Lokale KI nicht möglich" "$( [[ -n "$vram" ]] && echo "Arbeitsspeicher und Grafikspeicher ergeben" || echo "Der Arbeitsspeicher beträgt") rund $(( (ram + ${vram:-0} + 512) / 1024 )) GB.
-Die lokale KI braucht zusammen mindestens 24 GB.$(ist_wsl && printf '\n%s' "Unter Windows zählt der Speicher, den WSL bekommt (Standard: die Hälfte des RAM).
-Reicht der ganze PC, bietet der Windows-Installer an, WSL mehr zu geben:
-den Installer erneut ausführen (oder in den Apps postbuch.net Server → Ändern).")
-
-Die KI richtest du stattdessen im Assistenten per API-Schlüssel ein."
-        return 0
-    fi
-
-    local extrem=false
     [[ -z "$vram" ]] || (( vram < HOSTCONFIG_LOKALKI_FLOTT_VRAM_MIB )) && extrem=true
-    if $extrem || [[ "$LK_SCHICHTEN" == auto ]]; then
+    if ! $LOKAL_VORGABE_LANGSAM && { $extrem || [[ "$LK_SCHICHTEN" == auto ]]; }; then
         $extrem && printf "\n  ${C_RED:-}${C_BOLD}⚠ ACHTUNG: Ohne mindestens 8 GB nutzbaren Grafikspeicher läuft die lokale KI extrem langsam.${C_RESET}\n" >&2
         panel "$($extrem && echo "Lokale KI wird extrem langsam" || echo "Lokale KI wird langsamer")" "$( [[ "$LK_GPU" == nein ]] && echo "Ohne nutzbare NVIDIA-Grafikkarte rechnet das Modell nur auf dem Prozessor." || echo "Die Grafikkarte fasst das Modell nicht ganz; ein Teil läuft im Arbeitsspeicher.")
-Ein Dokument dauert dann $($extrem && echo "viele Minuten" || echo "deutlich länger") statt weniger Sekunden.
-Benötigt werden rund $(( LK_RAM / 1024 )) GB Arbeitsspeicher.
+Ein Dokument dauert dann $( [[ "$LK_GPU" == nein ]] && echo "oft 10 Minuten und mehr" || { $extrem && echo "viele Minuten" || echo "deutlich länger"; }) statt weniger Sekunden.
+Benötigt werden mindestens $(lk_ram_gb) GB Arbeitsspeicher.
 
 Alternative: eine Cloud-KI per API-Schlüssel im Einrichtungsassistenten.
 Das lässt sich später jederzeit in den Einstellungen umstellen."
         antwort=$(prompt "Trotzdem lokale KI einrichten? Zum Bestätigen 'ja' eingeben" "nein")
-        [[ "${antwort,,}" == ja ]] || { info "Keine lokale KI – die KI richtest du im Assistenten ein."; return 0; }
+        [[ "${antwort,,}" == ja ]] || return 1
+    fi
+
+    if [[ "$LK_WEG" == wsl-mehr ]]; then
+        lokal_wsl_speicher_anbieten || return 1
     fi
     LOKAL_KI=true
-    success "Lokale KI: $LK_MODELL, Stufe $LK_STUFE (Download rund $(( bedarf / 1024 ** 3 + 1 )) GB nach dem Start)"
+    success "Lokale KI: $LK_MODELL, Stufe $LK_STUFE (Download rund $(( LK_BEDARF / 1024 ** 3 + 1 )) GB nach dem Start)"
 }
 
-# Eingangsfrage der Erstinstallation. Unter Windows (WSL) ist „komplett lokal“
-# die Empfehlung, unter Linux die klassische Einrichtung im Assistenten.
+# Eingangsfrage der Erstinstallation. „Komplett lokal“ gibt es nur, wenn die
+# lokale KI hier laufen kann; sonst erklärt ein Hinweis den Grund, und die
+# Einrichtung ist klassisch. Scheitert die lokale KI unterwegs (Nein zu NVIDIA,
+# zu wenig Speicher ohne Grafikkarte, Tempo abgelehnt), geht es mit neu
+# bewerteter Ausstattung zurück zu dieser Frage.
+# $1 optional: Verzeichnis mit dem Release (vor dem Kopieren die Stage).
+# Die Ablage fragt run_setup_dialog danach, nach dem Kopieren.
 betriebsart_dialog() {
-    lokal_bibliothek || { warn "Bibliothek für die lokale Einrichtung fehlt – klassische Einrichtung."; return 0; }
-    local standard=2 wahl
-    if ist_wsl; then
-        standard=1
-        # Laufwerke unter /mnt sind Windows-Dateisysteme; PostgreSQL braucht ext4.
-        [[ "$INSTALL_DIR" == /mnt/* ]] && error "Unter WSL muss postbuch.net im Linux-Dateisystem liegen (z. B. ~/postbuch), nicht unter $INSTALL_DIR."
+    [[ -n "$LOKAL_BETRIEBSART" ]] && return 0
+    LOKAL_BETRIEBSART=klassisch
+    local quelle="${1:-$INSTALL_DIR}" wahl standard mit_gpu ohne_gpu grund hinweis cuda_abgelehnt=false
+    lokal_bibliothek "$quelle" || { warn "Bibliothek für die lokale Einrichtung fehlt – klassische Einrichtung."; return 0; }
+    # Laufwerke unter /mnt sind Windows-Dateisysteme; PostgreSQL braucht ext4.
+    if ist_wsl && [[ "$INSTALL_DIR" == /mnt/* ]]; then
+        error "Unter WSL muss postbuch.net im Linux-Dateisystem liegen (z. B. ~/postbuch), nicht unter $INSTALL_DIR."
     fi
-    echo ""
-    hr
-    echo ""
-    printf "  ${C_BOLD}${C_CYAN}SCHRITT: Betriebsart${C_RESET}\n"
-    panel "Komplett lokal oder mit Cloud-Diensten?" "1) Komplett lokal: Die Originale liegen in einem Ordner auf diesem Rechner,
+    if ! hostconfig_lokalki_manifest "$quelle"; then
+        warn "Das Modellverzeichnis dieses Releases ist nicht lesbar – klassische Einrichtung."
+        return 0
+    fi
+    lokal_uebergabe_lesen
+    lokal_gpu_lesen
+    while true; do
+        LOKAL_KI=false
+        mit_gpu=nein; grund=""; hinweis=""
+        if lokal_gpu_moeglich; then
+            lokalki_bewerten "$LK_GPU_VRAM"; mit_gpu="$LK_WEG"; grund="$LK_GRUND"
+        fi
+        lokalki_bewerten ""; ohne_gpu="$LK_WEG"
+        [[ -z "$grund" ]] && grund="$LK_GRUND"
+        if [[ "$mit_gpu" == nein && "$ohne_gpu" == nein ]]; then
+            [[ -n "$LK_GPU_VRAM" && "$LOKAL_VORGABE_CUDA" == nein ]] && grund="Ohne die NVIDIA-Grafikkarte reicht es nicht. $LK_GRUND"
+            echo ""
+            hr
+            echo ""
+            printf "  ${C_BOLD}${C_CYAN}SCHRITT: Betriebsart${C_RESET}\n"
+            panel "Komplett lokal ist auf diesem Rechner nicht möglich" "$grund
+
+postbuch.net wird deshalb klassisch eingerichtet: Ablage und KI wählst du nach
+dem ersten Login im Einrichtungsassistenten. Eine Ablage in einem Ordner auf
+diesem Rechner kannst du dort ebenfalls wählen."
+            return 0
+        fi
+        if [[ "$ohne_gpu" == nein ]]; then
+            hinweis="
+   Hier nur mit der NVIDIA-Grafikkarte (dafür fragt der Installer nach der
+   Zustimmung zu den NVIDIA-Bedingungen)."
+        fi
+        [[ "$mit_gpu" != ok && "$ohne_gpu" != ok ]] && hinweis+="
+   Dafür braucht WSL mehr Arbeitsspeicher; der Installer fragt danach."
+        $cuda_abgelehnt && [[ "$mit_gpu" != nein ]] && hinweis+="
+   Die NVIDIA-Bedingungen hast du eben abgelehnt; bei 1 fragt der Installer
+   noch einmal."
+        standard=2
+        { ist_wsl || $LOKAL_VORGABE_LOKAL; } && standard=1
+        # Nach einem Nein zu NVIDIA, wenn es nur mit Grafikkarte geht: klassisch vorschlagen.
+        $cuda_abgelehnt && [[ "$ohne_gpu" == nein ]] && standard=2
+        # Fortsetzung nach dem WSL-Neustart: Die Betriebsart ist schon gewählt.
+        # Klappt die lokale KI dann doch nicht, fragt die Schleife wieder.
+        if $LOKAL_VORGABE_LOKAL && [[ -n "$LOKAL_VORGABE_CUDA" ]]; then
+            echo ""
+            info "Betriebsart: Komplett lokal (vor dem WSL-Neustart gewählt)."
+            if lokal_ki_dialog; then
+                LOKAL_BETRIEBSART=lokal
+                return 0
+            fi
+            LOKAL_VORGABE_LOKAL=false; LOKAL_VORGABE_LANGSAM=false
+            lokal_cuda_nein_vergessen
+            info "Zurück zur Betriebsart."
+            continue
+        fi
+        echo ""
+        hr
+        echo ""
+        printf "  ${C_BOLD}${C_CYAN}SCHRITT: Betriebsart${C_RESET}\n"
+        panel "Komplett lokal oder mit Cloud-Diensten?" "1) Komplett lokal: Die Originale liegen in einem Ordner auf diesem Rechner,
    die KI läuft hier (Modell rund 9 GB, am besten mit NVIDIA-Grafikkarte).
-   Kein Cloud-Konto nötig.
+   Kein Cloud-Konto nötig.$hinweis
 2) Klassisch: Ablage (OneDrive, Nextcloud, …) und KI (API-Schlüssel) wählst du
    nach dem ersten Login im Einrichtungsassistenten.
 
 Beides lässt sich später in den Einstellungen ändern, ohne neu zu installieren."
-    while true; do
-        wahl=$(prompt "Betriebsart [1/2]" "$standard")
-        [[ "$wahl" == 1 || "$wahl" == 2 ]] && break
+        while true; do
+            wahl=$(prompt "Betriebsart [1/2]" "$standard")
+            [[ "$wahl" == 1 || "$wahl" == 2 ]] && break
+        done
+        [[ "$wahl" == 1 ]] || return 0
+        if lokal_ki_dialog; then
+            LOKAL_BETRIEBSART=lokal
+            return 0
+        fi
+        LOKAL_VORGABE_LOKAL=false; LOKAL_VORGABE_LANGSAM=false
+        lokal_cuda_nein_vergessen
+        info "Zurück zur Betriebsart."
     done
-    [[ "$wahl" == 1 ]] || return 0
-    lokal_ablage_dialog
-    LOKAL_ABLAGE=true
-    lokal_ki_dialog
 }
 
 # Nach dem Stackstart: Einschalten der lokalen KI als Auftrag an den Host-Agenten.
@@ -3366,9 +3666,190 @@ lokalki_auftrag_einreihen() {
 # Host feststehen müssen. Ablage, OneDrive, KI und Scanner richtet anschließend
 # der Web-Assistent ein; die zugehörigen ENV-Variablen bleiben für --headless,
 # Restore und Bestandsinstallationen als leere Kompatibilitätswerte erhalten.
+# Der Instanzname erscheint in Login, Seitenleiste und Exporten und steht
+# unquotiert in der .env. Verboten sind deshalb Steuerzeichen und alles, was
+# Compose dort als Anführung, Variable oder Kommentar liest.
+instanzname_pruefen() { # $1 Name
+    local n="$1"
+    if [[ -z "$n" ]]; then
+        warn "Der Instanzname darf nicht leer sein."; return 1
+    fi
+    if (( ${#n} > 60 )); then
+        warn "Der Instanzname darf höchstens 60 Zeichen lang sein."; return 1
+    fi
+    if [[ "$n" =~ [[:cntrl:]] || "$n" == *[\"\'\`\$\\#]* ]]; then
+        warn "Im Instanznamen sind diese Zeichen nicht erlaubt: \" ' \` \$ \\ #"; return 1
+    fi
+}
+
+instanzname_erfragen() { # $1 Vorschlag; setzt INSTANCE_NAME
+    while true; do
+        INSTANCE_NAME=$(prompt "Gewünschter Instanzname" "$1")
+        INSTANCE_NAME=$(printf '%s' "$INSTANCE_NAME" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        instanzname_pruefen "$INSTANCE_NAME" && return 0
+    done
+}
+
+# ── Platzbedarf der Grundinstallation ────────────────────────────────────────
+# Gemessen bei einer frischen Erstinstallation (Images, Build-Zwischenstände,
+# Quellcode und leere Datenbank), aufgerundet. Messung klassisch auf arm64
+# (November 2026): rund 6 GB im Docker-Verzeichnis (Images app 1,5 GB,
+# embedding 1 GB, pgvector 0,7 GB, web 0,15 GB, dazu der Build-Cache), keine
+# Spitze über dem Endstand; Code 19 MB, leere Datenbank 73 MB. Images und Build liegen im
+# Docker-Verzeichnis, Code und Daten im Installationsverzeichnis; auf
+# derselben Platte zählt beides zusammen. Die Reserve deckt die ersten
+# Dokumente, Protokolle und ein späteres Update.
+BASIS_DOCKER_BYTES=$(( 8 * 1024 ** 3 ))
+BASIS_DATEN_BYTES=$(( 1 * 1024 ** 3 ))
+BASIS_RESERVE_BYTES=$(( 2 * 1024 ** 3 ))
+SP_BEDARF=0; SP_FREI=""
+
+gb_aufrunden() { echo $(( ($1 + 1024 ** 3 - 1) / 1024 ** 3 )); }
+
+# Prüft vor der Zusammenfassung, ob Platz für die Installation (und bei
+# „Komplett lokal“ für das Modell) da ist. Reicht er nicht, endet der Lauf,
+# bevor etwas angelegt wurde. Nicht ermittelbar = nicht sperren.
+basis_speicher_pruefen() {
+    local docker_dir frei_docker frei_install dev_docker dev_install bedarf_install frei_win
+    docker_dir=$(docker_runtime info --format '{{.DockerRootDir}}' 2>/dev/null) || docker_dir=""
+    [[ "$docker_dir" == /* ]] || docker_dir=/var/lib/docker
+    frei_docker=$(freier_platz_bytes "$docker_dir")
+    frei_install=$(freier_platz_bytes "$INSTALL_DIR")
+    bedarf_install=$(( BASIS_DATEN_BYTES + BASIS_RESERVE_BYTES ))
+    $LOKAL_KI && bedarf_install=$(( bedarf_install + LK_BEDARF + HOSTCONFIG_LOKALKI_RESERVE_BYTES ))
+    dev_docker=$(p="$docker_dir"; while [[ ! -e "$p" && "$p" != / ]]; do p=$(dirname -- "$p"); done; stat -c %d -- "$p" 2>/dev/null || true)
+    dev_install=$(p="$INSTALL_DIR"; while [[ ! -e "$p" && "$p" != / ]]; do p=$(dirname -- "$p"); done; stat -c %d -- "$p" 2>/dev/null || true)
+    if [[ -n "$dev_docker" && "$dev_docker" == "$dev_install" ]] || ist_wsl 2>/dev/null; then
+        # Eine Platte (unter WSL ohnehin: die virtuelle Platte der Instanz).
+        SP_BEDARF=$(( BASIS_DOCKER_BYTES + bedarf_install ))
+        SP_FREI="$frei_install"
+        if ist_wsl 2>/dev/null; then
+            frei_win=$(zahl_oder_leer "${POSTBUCH_WINDOWS_FREI_BYTES:-}")
+            if [[ -n "$frei_win" ]] && { ! [[ "$SP_FREI" =~ ^[0-9]+$ ]] || (( frei_win < SP_FREI )); }; then
+                SP_FREI="$frei_win"
+            fi
+        fi
+        if [[ "$SP_FREI" =~ ^[0-9]+$ ]] && (( SP_FREI < SP_BEDARF )); then
+            platz_abbruch "Für postbuch.net$($LOKAL_KI && printf ' samt lokaler KI') werden rund $(gb_aufrunden "$SP_BEDARF") GB freier Platz gebraucht, frei sind $(( SP_FREI / 1024 ** 3 )) GB."
+        fi
+        return 0
+    fi
+    SP_BEDARF=$(( BASIS_DOCKER_BYTES + bedarf_install ))
+    SP_FREI=""
+    if [[ "$frei_docker" =~ ^[0-9]+$ ]] && (( frei_docker < BASIS_DOCKER_BYTES )); then
+        platz_abbruch "Im Docker-Verzeichnis $docker_dir werden rund $(gb_aufrunden "$BASIS_DOCKER_BYTES") GB freier Platz gebraucht, frei sind $(( frei_docker / 1024 ** 3 )) GB."
+    fi
+    if [[ "$frei_install" =~ ^[0-9]+$ ]] && (( frei_install < bedarf_install )); then
+        platz_abbruch "Für $INSTALL_DIR werden rund $(gb_aufrunden "$bedarf_install") GB freier Platz gebraucht, frei sind $(( frei_install / 1024 ** 3 )) GB."
+    fi
+    [[ "$frei_docker" =~ ^[0-9]+$ && "$frei_install" =~ ^[0-9]+$ ]] && SP_FREI=$(( frei_docker < frei_install ? frei_docker : frei_install ))
+    return 0
+}
+
+platz_abbruch() {
+    panel "Zu wenig freier Platz" "$1
+Bitte Platz schaffen und den Installer erneut starten.
+Es wurde nichts installiert."
+    installation_verwerfen_vor_beginn
+    exit 1
+}
+
+# Räumt Download und Stage weg, solange noch nichts installiert ist.
+installation_verwerfen_vor_beginn() {
+    [[ -n "${RELEASE_STAGE:-}" && -d "$RELEASE_STAGE" ]] && safe_rm_rf "$RELEASE_STAGE"
+    [[ -n "${TARBALL:-}" && "$TARBALL" != "$LOCAL_TARBALL" ]] && rm -f -- "$TARBALL"
+    return 0
+}
+
+# sudo wird vor der Zusammenfassung erfragt und bis zum Ende wach gehalten:
+# Host-Agent und Docker brauchen es erst mitten in der Installation, und dort
+# soll niemand mehr etwas eingeben müssen.
+sudo_vorab() {
+    [[ $(id -u) -ne 0 ]] || return 0
+    command -v sudo >/dev/null 2>&1 || return 0
+    if ! sudo -n true 2>/dev/null; then
+        echo ""
+        info "Für den Hintergrunddienst (Host-Agent) und Docker braucht der Installer einmalig"
+        info "dein sudo-Passwort. Danach läuft die Installation ohne weitere Eingabe durch."
+    fi
+    sudo_keepalive_starten || true
+}
+
+# Zeigt alle Antworten und fragt ein letztes Mal. 0 = installieren.
+zusammenfassung_bestaetigen() {
+    local z="" ki="" adresse antwort restore
+    # Unter Windows liegt das Programm nicht auf einem Windows-Laufwerk,
+    # sondern in der eigenen WSL-Instanz; ein nackter Linux-Pfad verwirrt dort.
+    if ist_wsl; then
+        z+="Ort:            WSL-Instanz ${WSL_DISTRO_NAME:-postbuch.net}, darin $INSTALL_DIR"$'\n'
+    else
+        z+="Ort:            $INSTALL_DIR"$'\n'
+    fi
+    z+="Instanzname:    $INSTANCE_NAME"$'\n'
+    if [[ "$LOKAL_BETRIEBSART" == lokal ]]; then
+        z+="Betriebsart:    Komplett lokal"$'\n'
+        z+="Ablage:         $LOKAL_ABLAGE_ANZEIGE$( [[ -n "$LOKAL_ABLAGE_NEU" ]] && printf ' (wird angelegt)')"$'\n'
+        if $LOKAL_KI; then
+            if [[ "$LK_GPU" == nein ]]; then
+                ki="nur Prozessor"
+            else
+                ki="Grafikkarte $LK_GPU_NAME"
+            fi
+            z+="KI:             lokal, $LK_MODELL ($ki), Download rund $(gb_aufrunden "$LK_BEDARF") GB nach dem Start"$'\n'
+        fi
+    else
+        z+="Betriebsart:    klassisch (Ablage und KI richtet der Assistent ein)"$'\n'
+    fi
+    if [[ "$RESTORE_BACKUP" == true ]]; then
+        if $RESTORE_BROWSER || ! $RESTORE_VORAB; then
+            restore="ja, im Browser nach dem Start"
+        elif [[ -n "$RESTORE_PFAD" ]]; then
+            restore="ja, $RESTORE_PFAD"
+        else
+            restore="ja, Sicherung aus dem Ablageordner"
+        fi
+        z+="Sicherung:      $restore"$'\n'
+    fi
+    z+="Adminpasswort:  festgelegt (Benutzer admin)"$'\n'
+    if [[ -n "$DUCKDNS_API_TOKEN" ]]; then
+        adresse="$APP_BASE_URL"
+        [[ "$WEB_BIND" == 127.0.0.1 ]] && adresse+=" (nur über HTTPS)" || adresse+=", im Heimnetz auch Port $WEB_PORT_WAHL"
+    else
+        adresse="http://localhost:$WEB_PORT_WAHL, im Heimnetz über die IP dieses Rechners (ohne HTTPS)"
+    fi
+    z+="Adresse:        $adresse"$'\n'
+    if [[ "$SP_FREI" =~ ^[0-9]+$ ]]; then
+        z+="Platz:          rund $(gb_aufrunden "$SP_BEDARF") GB nötig, $(( SP_FREI / 1024 ** 3 )) GB frei"$'\n'
+    fi
+    if [[ "$RESTORE_BACKUP" != true ]]; then
+        z+=$'\n'"Die tägliche Update-Prüfung ist an. Der Assistent erklärt sie beim ersten"$'\n'
+        z+="Aufruf und lässt sie dort mit einem Klick abschalten."$'\n'
+    fi
+    z+=$'\n'"Die Installation läuft danach ohne weitere Eingabe durch (je nach Rechner"$'\n'
+    z+="5 bis 30 Minuten)."
+    hr
+    panel "Zusammenfassung" "$z"
+    while true; do
+        antwort=$(prompt "Jetzt installieren? [J/n]" "J")
+        case "${antwort,,}" in
+            j|ja|"") return 0 ;;
+            n|nein) return 1 ;;
+        esac
+    done
+}
+
 # Voraussetzung: INSTALL_DIR und INSTANCE_NAME müssen gesetzt sein
 # (INSTANCE_NAME="" → wird hier abgefragt).
 run_setup_dialog() {
+    setup_fragen
+    setup_schreiben
+}
+
+# Alle Fragen, die vor dem ersten Containerstart feststehen müssen. Schreibt
+# nichts ins Installationsverzeichnis und legt keinen Ordner an; das tut erst
+# setup_schreiben. So kann die Erstinstallation alle Fragen vorn bündeln, eine
+# Zusammenfassung zeigen und danach ohne Rückfrage durchlaufen.
+setup_fragen() {
     # ── Instanzname (falls noch nicht gesetzt) ────────────────────────────────
     if [[ -z "${INSTANCE_NAME:-}" ]]; then
         hr
@@ -3376,13 +3857,7 @@ run_setup_dialog() {
         echo "  Instanzname"
         echo ""
         echo "  Dieser Name wird in der Web-Oberflaeche angezeigt (z.B. in Login, Sidebar, Exporten)."
-        while [[ -z "$INSTANCE_NAME" ]]; do
-            INSTANCE_NAME=$(prompt "Gewünschter Instanzname" "Postbuch")
-            INSTANCE_NAME=$(echo "$INSTANCE_NAME" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-            if [[ -z "$INSTANCE_NAME" ]]; then
-                warn "Instanzname darf nicht leer sein."
-            fi
-        done
+        instanzname_erfragen "${INSTANCE_DEFAULT:-Postbuch}"
     fi
 
     # ── Automatisch generierte Werte ──────────────────────────────────────────
@@ -3399,7 +3874,13 @@ run_setup_dialog() {
     if lokal_bibliothek && hostconfig_cuda_akzeptiert "$INSTALL_DIR"; then
         LOKAL_CUDA_ZUSTIMMUNG="$HOSTCONFIG_CUDA_LIZENZ"
     fi
+    # Bei der Erstinstallation ist die Betriebsart schon vor dem Kopieren
+    # entschieden; hier folgt dann nur noch die Ablage.
     betriebsart_dialog
+    if [[ "$LOKAL_BETRIEBSART" == lokal ]]; then
+        lokal_ablage_dialog
+        LOKAL_ABLAGE=true
+    fi
     $LOKAL_ABLAGE && STORAGE_BACKEND="lokal"
     $LOKAL_KI && POSTBUCH_KI="lokal"
 
@@ -3410,6 +3891,7 @@ run_setup_dialog() {
     else
         RESTORE_BACKUP=$(ask_restore_backup)
     fi
+    [[ "$RESTORE_BACKUP" == "true" ]] && restore_vorab_erfragen
 
     # ── Admin-Passwort ────────────────────────────────────────────────────────
     APP_PASSWORD=""
@@ -3548,6 +4030,12 @@ Einstellungen unter Allgemein → Erreichbarkeit abschalten."
     ONEDRIVE_CLIENT_SECRET=""
     ONEDRIVE_TENANT_ID="consumers"
     SCANNER_DEVICE_URL=""
+}
+
+# Schreibt, was setup_fragen festgelegt hat: Ablageordner, .env, Caddyfile,
+# restart.sh. Keine Rückfragen.
+setup_schreiben() {
+    $LOKAL_ABLAGE && lokal_ablage_anlegen
 
     # ── .env schreiben ────────────────────────────────────────────────────────
     hr
@@ -3862,6 +4350,45 @@ parse_args() {
 # Ein Git-Arbeitsstand ist nie eine Installation: Releases enthalten kein .git.
 MERKDATEI_NAME=".postbuch-installdir"
 INSTALL_DIR_QUELLE="Standard"
+
+# Liegt im Installationsverzeichnis, solange eine Erstinstallation nicht
+# fertig ist (vom Kopieren der Dateien bis zum gestarteten Stack).
+UNVOLLSTAENDIG_MARKE=.installation-unvollstaendig
+
+# Eine abgebrochene Erstinstallation hat nie eine Nutzerin oder einen Nutzer
+# gesehen: Ihr Verzeichnis darf nach Rückfrage ganz weg. Eine gewählte Ablage
+# liegt außerhalb und bleibt unberührt.
+unvollstaendige_installation_verwerfen() {
+    local wahl="" dc=(docker compose)
+    echo ""
+    warn "Unter $INSTALL_DIR liegt eine abgebrochene Erstinstallation."
+    echo "  Sie wurde nie fertig eingerichtet. Ein Ordner für die Ablage bleibt, wo er ist."
+    echo ""
+    echo "    [1]  Verwerfen und neu installieren"
+    echo "    [2]  Abbrechen"
+    echo ""
+    while ! [[ "$wahl" =~ ^[12]$ ]]; do
+        read -rp "  Auswahl [1/2]: " wahl </dev/tty || tty_weg
+    done
+    [[ "$wahl" == 1 ]] || exit 0
+    if [[ -z "$INSTALL_DIR" || "$INSTALL_DIR" == / || "$INSTALL_DIR" == "$LAUFZEIT_HOME" \
+          || -e "$INSTALL_DIR/.git" || ! -f "$INSTALL_DIR/$UNVOLLSTAENDIG_MARKE" ]]; then
+        error "$INSTALL_DIR wird nicht gelöscht."
+    fi
+    agent_sperre_nehmen
+    if [[ -f "$INSTALL_DIR/docker-compose.yml" ]] && command -v docker >/dev/null 2>&1; then
+        docker info >/dev/null 2>&1 || dc=(sudo docker compose)
+        ( cd "$INSTALL_DIR" && "${dc[@]}" down --remove-orphans ) \
+            || error "Die Container der abgebrochenen Installation ließen sich nicht stoppen."
+    fi
+    safe_rm_rf "$INSTALL_DIR" || error "$INSTALL_DIR ließ sich nicht löschen."
+    # Brach der Lauf nach der Einrichtung des Host-Agenten ab, zeigt dieser auf
+    # den eben gelöschten Ordner. Ein Agent einer anderen Installation bleibt.
+    local agent_ziel
+    agent_ziel=$(grep '^POSTBUCH_INSTALL_DIR=' "$AGENT_CONF" 2>/dev/null | tail -n1 | cut -d'=' -f2- || true)
+    [[ -n "$agent_ziel" && "$agent_ziel" == "$INSTALL_DIR" ]] && remove_update_agent
+    success "Abgebrochene Installation verworfen."
+}
 
 ist_installation() {   # $1 = Verzeichnis
     [[ -n "$1" && -f "$1/docker-compose.yml" && -f "$1/.env" \
@@ -4991,7 +5518,9 @@ SUDO_KEEPALIVE_PID=""
 sudo_keepalive_starten() {
     [[ $(id -u) -ne 0 ]] || return 0
     command -v sudo &>/dev/null || return 0
-    sudo -v || {
+    # Erst ohne Passwort versuchen: „sudo -v“ fragt auch bei NOPASSWD, sobald
+    # daneben eine Regel mit Passwort steht (so ab Werk auf Raspberry Pi OS).
+    sudo -n true 2>/dev/null || sudo -v || {
         warn "Sudo-Authentifizierung fehlgeschlagen – der Update-Agent kann nach dem Build evtl. nicht aktualisiert werden."
         return 1
     }
@@ -5040,7 +5569,7 @@ agent_einrichten() {
     fi
 
     info "Richte den Host-Agenten ein. Über ihn steuert die Oberfläche Ports, Ablage,"
-    info "Dienste, HTTPS und Updates; dafür wird jetzt einmalig sudo benötigt."
+    info "Dienste, HTTPS und Updates; dafür braucht er einmalig sudo-Rechte."
     install_update_agent normal \
         || warn "Host-Agent konnte nicht eingerichtet werden. Einstellungen, die den Rechner betreffen, und Updates aus der Oberfläche gehen erst nach einem erneuten Installer-Lauf."
 }
@@ -5471,6 +6000,8 @@ if $OPT_DEINSTALLIEREN; then
     fi
     MODE="uninstall"
     agent_sperre_nehmen
+elif [[ -f "$INSTALL_DIR/$UNVOLLSTAENDIG_MARKE" ]]; then
+    unvollstaendige_installation_verwerfen
 elif [[ -f "$INSTALL_DIR/docker-compose.yml" ]]; then
     echo ""
     echo "  Bestehende Installation gefunden: $INSTALL_DIR"
@@ -5560,19 +6091,10 @@ if [[ "$MODE" == "install" ]]; then
         fi
     fi
 
-    hr
-    echo ""
-    echo "  Instanzname"
-    echo ""
-    echo "  Dieser Name wird in der Web-Oberflaeche angezeigt (z.B. in Login, Sidebar, Exporten)."
-
-    while [[ -z "$INSTANCE_NAME" ]]; do
-        INSTANCE_NAME=$(prompt "Gewünschter Instanzname" "$INSTANCE_DEFAULT")
-        INSTANCE_NAME=$(echo "$INSTANCE_NAME" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        if [[ -z "$INSTANCE_NAME" ]]; then
-            warn "Instanzname darf nicht leer sein."
-        fi
-    done
+    # Gefragt wird im Fragenblock der Erstinstallation (setup_fragen), nach
+    # der Betriebsart: Eine Übergabe an install.ps1 (mehr WSL-Speicher) fragt
+    # dann im zweiten Lauf nicht noch einmal.
+    instanzname_pruefen "$INSTANCE_DEFAULT" 2>/dev/null || INSTANCE_DEFAULT="Postbuch"
 elif [[ "$MODE" == "update" ]]; then
     # Beim Update den bestehenden Namen unverändert beibehalten.
     INSTANCE_NAME=$(grep '^INSTANCE_NAME=' "$INSTALL_DIR/.env" | head -n1 | cut -d'=' -f2- || true)
@@ -5850,13 +6372,23 @@ if [[ "$MODE" == "uninstall" ]]; then
     merkdatei_entfernen "$INSTALL_DIR_ABS"
     hr
     echo ""
-    echo "  ✓ postbuch.net wurde vollständig entfernt."
+    if ist_wsl; then
+        # Den Windows-Teil (Instanz, Aufgabe, Freigabe, Verknüpfung) entfernt
+        # install.ps1 danach, auch wenn hier über das Menü deinstalliert wurde.
+        echo "  ✓ postbuch.net wurde aus der WSL-Instanz entfernt. Den Windows-Teil räumt"
+        echo "    der Windows-Installer gleich danach auf."
+    else
+        echo "  ✓ postbuch.net wurde vollständig entfernt."
+    fi
     # install.ps1 liest den Ort, bevor es die WSL-Instanz entfernt.
-    $OPT_DEINSTALLIEREN && [[ -n "$ABLAGE_BEHALTEN" ]] \
+    { $OPT_DEINSTALLIEREN || ist_wsl; } && [[ -n "$ABLAGE_BEHALTEN" ]] \
         && printf '%s\n' "$ABLAGE_BEHALTEN" > "$LAUFZEIT_HOME/.postbuch-ablage-behalten"
     if [[ -n "$ABLAGE_BEHALTEN" ]]; then
+        ablage_anzeige="$ABLAGE_BEHALTEN"
+        ist_wsl && [[ "$ablage_anzeige" == /mnt/[a-z]/* ]] \
+            && ablage_anzeige=$(wslpath -w "$ablage_anzeige" 2>/dev/null || printf '%s' "$ablage_anzeige")
         echo ""
-        echo "  Die Originale liegen weiterhin in $ABLAGE_BEHALTEN,"
+        echo "  Die Originale liegen weiterhin in $ablage_anzeige,"
         echo "  die letzte Sicherung der Datenbank im Unterordner _backup/user."
     fi
     echo ""
@@ -6320,6 +6852,13 @@ fi
 if [[ "$INSTALL_DIR" != /* ]]; then
     INSTALL_DIR="$PWD/$INSTALL_DIR"
 fi
+# Ein anderes Ziel als vorgeschlagen kann eine abgebrochene Erstinstallation
+# enthalten; über sie wird nicht einfach drüberkopiert.
+if [[ -f "$INSTALL_DIR/$UNVOLLSTAENDIG_MARKE" ]]; then
+    unvollstaendige_installation_verwerfen
+elif [[ -f "$INSTALL_DIR/docker-compose.yml" ]]; then
+    error "In $INSTALL_DIR liegt bereits eine Installation. Zum Verwalten: $INSTALL_DIR/install.sh"
+fi
 
 echo ""
 info "Lade postbuch.net herunter..."
@@ -6341,9 +6880,47 @@ fi
 tarball_pruefen_oder_abbrechen "$TARBALL"
 release_stage_erstellen "$TARBALL" || exit 1
 
+# ── Fragen ───────────────────────────────────────────────────────────────────
+# Alle Fragen kommen hier, vor jeder Änderung am Rechner: Betriebsart (samt
+# lokaler KI), Instanzname, Ablage, Sicherung, Adminpasswort, DuckDNS, Ports
+# und sudo. Danach eine Zusammenfassung; erst mit „Jetzt installieren“ wird
+# etwas angelegt, und ab dort läuft die Installation ohne Rückfrage durch.
+# Endet der Lauf vorher – abgebrochen oder für mehr WSL-Speicher an
+# install.ps1 übergeben –, bleibt nichts halb liegen.
 INSTALL_BESITZER=$(installations_besitzer_bestimmen "$INSTALL_DIR") || exit 1
+LOKAL_UEBERGABE_ERLAUBT=true
+betriebsart_dialog "$RELEASE_STAGE"
+LOKAL_UEBERGABE_ERLAUBT=false
+
+hr
+echo ""
+echo "  SETUP – Konfiguration"
+echo ""
+info "Einige Werte werden automatisch generiert, andere musst du eingeben."
+
+RESTORE_BACKUP="false"
+RESTORE_VORAB_ERLAUBT=true
+setup_fragen
+sudo_vorab
+basis_speicher_pruefen
+if ! zusammenfassung_bestaetigen; then
+    installation_verwerfen_vor_beginn
+    echo ""
+    info "Abgebrochen. Es wurde nichts installiert."
+    echo ""
+    exit 0
+fi
+
+# ── Installation (ab hier keine Rückfrage mehr) ──────────────────────────────
+hr
+echo ""
+info "Installiere postbuch.net ..."
+$LOKAL_ABLAGE && lokal_ablage_anlegen
 mkdir -p "$INSTALL_DIR"
 INSTALL_MODUS=$(stat -c '%a' "$INSTALL_DIR") || exit 1
+# Bis der Stack läuft, gilt die Installation als unvollständig. Ein erneuter
+# Lauf bietet dann an, sie zu verwerfen, statt sie als fertig zu behandeln.
+: > "$INSTALL_DIR/$UNVOLLSTAENDIG_MARKE" || exit 1
 
 # `manifest_gate` laeuft absichtlich vor `mkdir -p`: bei einem ungueltigen
 # Manifest soll eine Erstinstallation noch kein Verzeichnis hinterlassen. Fuer
@@ -6367,15 +6944,7 @@ write_lokale_installerkopie
 safe_rm_rf "$RELEASE_STAGE"
 [[ "$TARBALL" != "$LOCAL_TARBALL" ]] && rm -f "$TARBALL"
 
-# ── Geführtes Setup ───────────────────────────────────────────────────────────
-hr
-echo ""
-echo "  SETUP – Konfiguration"
-echo ""
-info "Einige Werte werden automatisch generiert, andere musst du eingeben."
-
-RESTORE_BACKUP="false"
-run_setup_dialog
+setup_schreiben
 release_persistente_besitzer_wiederherstellen "$INSTALL_DIR" "$INSTALL_BESITZER" \
     || error "Besitzrechte der Konfiguration konnten nicht gesetzt werden."
 
@@ -6409,6 +6978,7 @@ else
     compose_up_build_all
 fi
 lokalki_auftrag_einreihen
+rm -f -- "$INSTALL_DIR/$UNVOLLSTAENDIG_MARKE"
 
 # ── Erfolg + nächste Schritte ─────────────────────────────────────────────────
 LAN_IP=$(heimnetz_ip)

@@ -461,7 +461,7 @@ export default function DocumentDetailPage() {
 
       {/* Actions */}
       <ActionBar
-        key={postid}
+        key={`aktionen-${postid}`}
         postid={postid}
         currentStatus={postbuch.status}
         art={postbuch.art}
@@ -707,7 +707,7 @@ export default function DocumentDetailPage() {
         </div>
       )}
       <ArztrechnungDetail data={arztrechnung} istTier={postbuch.lebensbereich === 'tier'} />
-      <ErstattungsbescheidDetail key={postid} postid={postid} data={erstattungsbescheid}
+      <ErstattungsbescheidDetail key={`erstattung-${postid}`} postid={postid} data={erstattungsbescheid}
         ausstehend={erstattungsbescheidAusstehend} kuerzungenAusstehend={kuerzungenAusstehend}
         istTier={postbuch.lebensbereich === 'tier'} />
       {data.erstattungsbescheidFehlt && <FachdatenFehlenHinweis key={`fachdaten-${postid}`} postid={postid}

@@ -26,6 +26,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Spinner } from '@/components/ui/spinner';
 import { Dialog, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import UpdateLaufDialog from './UpdateLaufDialog';
+import UpdatePruefungSchalter from './UpdatePruefungSchalter';
 import {
   Download, CheckCircle, ShieldAlert, Copy, Check, RefreshCw, Terminal, ShieldCheck, ShieldQuestion,
 } from 'lucide-react';
@@ -134,15 +135,6 @@ export default function UpdateCard() {
       setLaufNonce(nonce);
       setLaufOffen(true);
       qc.invalidateQueries({ queryKey: ['updates'] });
-    },
-  });
-
-  const schalter = useMutation({
-    mutationFn: (an) => api.settings.update('update_check_enabled', an),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['updates'] });
-      qc.invalidateQueries({ queryKey: ['settings'] });
-      qc.invalidateQueries({ queryKey: ['cloudfrei-check'] });
     },
   });
 
@@ -287,26 +279,7 @@ export default function UpdateCard() {
             </div>
           )}
 
-          <div className="flex items-center justify-between border-t border-border pt-3">
-            <div>
-              <p className="text-sm font-medium">Täglich auf Updates prüfen</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {data?.checkAktiv
-                  ? quelleKonfiguriert
-                    ? 'Fragt einmal täglich bei der konfigurierten Bezugsquelle nach neuen Versionen.'
-                    : 'Ausgesetzt, bis eine Bezugsquelle konfiguriert ist.'
-                  : 'Aus – es geht kein Request nach draußen.'}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => schalter.mutate(!data?.checkAktiv)}
-              disabled={schalter.isPending}
-              className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${data?.checkAktiv ? 'bg-primary' : 'bg-muted'}`}
-            >
-              <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${data?.checkAktiv ? 'translate-x-6' : 'translate-x-1'}`} />
-            </button>
-          </div>
+          <UpdatePruefungSchalter className="border-t border-border pt-3" />
 
           {/* Nur bei GitHub-Quellen: dort tragen Releases den Pre-release-Haken. */}
           {data?.kanalWaehlbar && (

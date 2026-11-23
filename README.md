@@ -118,9 +118,9 @@ selbst in PDFs um. Ein Editor für Entwürfe ist es nicht.
   Alternativ betreibst du einen eigenen KI-Server, etwa mit Ollama oder LM
   Studio, oder die eingebaute lokale KI (siehe unten). Die Embeddings für Suche und Duplikatprüfung berechnet postbuch.net
   mit einem eingebauten Dienst selbst.
-- **Nur für die eingebaute lokale KI (ganz ohne Cloud):** einen PC, bei dem
-  Arbeitsspeicher und Grafikspeicher zusammen mindestens 24 GB ergeben, am
-  besten mit einer NVIDIA-Grafikkarte ab 12 GB. Unter 8 GB Grafikspeicher läuft
+- **Nur für die eingebaute lokale KI (ganz ohne Cloud):** einen PC mit
+  mindestens 16 GB Arbeitsspeicher, am besten mit einer NVIDIA-Grafikkarte ab
+  12 GB. Unter 8 GB Grafikspeicher läuft
   sie extrem langsam. Das Modell braucht rund 9 GB Platz, danach müssen noch
   5 GB frei sein. Im Leerlauf entlädt sich das Modell nach 5 Minuten und gibt
   den Speicher wieder frei; postbuch.net belegt dann insgesamt knapp 2 GB.
@@ -171,7 +171,7 @@ mehreren Geräten erreichbar sein, oder reicht dir ein einzelner Rechner?**
 | Dokumente liegen in | OneDrive oder Nextcloud/WebDAV | einem Ordner auf dem eigenen Rechner |
 | KI für die Auswertung | Cloud-Anbieter mit eigenem API-Key oder eigener KI-Server | eingebaute lokale KI auf dem Rechner |
 | Konto bei einem Cloud-Dienst | ja, für Ablage und KI | nein |
-| Rechner | Raspberry Pi ab 2 GB RAM, Linux-PC oder Windows-PC | PC mit NVIDIA-Grafikkarte, Arbeits- und Grafikspeicher zusammen mindestens 24 GB; unter Windows oder Linux |
+| Rechner | Raspberry Pi ab 2 GB RAM, Linux-PC oder Windows-PC | PC ab 16 GB Arbeitsspeicher, am besten mit NVIDIA-Grafikkarte; unter Windows oder Linux |
 | Laufende Kosten | Guthaben beim KI-Anbieter, je nach Ablage Speicherplatz | keine Anbieterkosten, dafür Strom und passende Hardware |
 | Dokumente verlassen das Haus | ja, zu den gewählten Anbietern | nein |
 | Qualität bei kniffligen Dokumenten | Cloud-Modelle sind derzeit besser | lokale Modelle bleiben derzeit zurück |
@@ -196,7 +196,7 @@ curl -fsSL https://github.com/ceramgcf/postbuch.net/releases/latest/download/ins
 **Windows** (PowerShell mit „Als Administrator ausführen“):
 
 ```powershell
-& ([scriptblock]::Create((irm https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.ps1)))
+irm https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.ps1 | iex
 ```
 
 Unter Windows richtet das Skript zuerst WSL 2 und eine eigene Linux-Umgebung

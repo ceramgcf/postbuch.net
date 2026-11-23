@@ -345,9 +345,8 @@ hostconfig_cuda_konfiguriert() { # $1 install
 }
 
 # Mindestausstattung der lokalen KI – dieselben Werte wie LOKALKI_GRENZEN in
-# app/src/lib/llm/lokal-modelle.js. GB dezimal, damit ein Rechner mit 16 GB
-# RAM und 8-GB-Karte trotz reservierten Speichers die Grenze erreicht.
-HOSTCONFIG_LOKALKI_MIN_SPEICHER_MIB=22888   # 24 GB RAM + nutzbarer Grafikspeicher
+# app/src/lib/llm/lokal-modelle.js. Den Mindest-Arbeitsspeicher legt jede Stufe
+# selbst fest (ram_mib in lokal-modelle.kv). GB dezimal.
 HOSTCONFIG_LOKALKI_FLOTT_VRAM_MIB=7629      # ab 8 GB Grafikspeicher kein Schneckentempo
 HOSTCONFIG_LOKALKI_RESERVE_BYTES=5368709120 # nach dem Modell müssen 5 GiB frei bleiben
 
@@ -359,12 +358,14 @@ hostconfig_ram_mib() {
     printf '%s' $(( kb / 1024 ))
 }
 
-# Reicht der Speicher für die lokale KI? $1 nutzbarer Grafikspeicher in MiB
-# oder leer. Rückgabe 0 = ja, 5 = zu wenig, 1 = nicht ermittelbar.
+# Reicht der Arbeitsspeicher für die gewählte Stufe? Vorher setzt
+# hostconfig_lokalki_stufe LK_RAM. Rückgabe 0 = ja, 5 = zu wenig,
+# 1 = nicht ermittelbar.
 hostconfig_lokalki_speicher_pruefen() {
     local ram
+    [[ "${LK_RAM:-}" =~ ^[0-9]+$ ]] || return 1
     ram=$(hostconfig_ram_mib) || return 1
-    (( ram + ${1:-0} >= HOSTCONFIG_LOKALKI_MIN_SPEICHER_MIB )) || return 5
+    (( ram >= LK_RAM )) || return 5
 }
 
 # Erste Stufe in Manifest-Reihenfolge, deren Bedingung erfüllt ist – dieselbe
@@ -625,7 +626,7 @@ hostconfig_lokalki_an() { # $1 install $2 war-aktiv
     # Zu wenig Speicher: Das Modell lädt nicht oder legt den Rechner lahm.
     # Auch der Agent prüft hier, nicht nur App und Installer.
     # Nicht ermittelbarer Speicher sperrt nicht – wie in App und Installer.
-    hostconfig_lokalki_speicher_pruefen "$vram"; rc=$?
+    hostconfig_lokalki_speicher_pruefen; rc=$?
     (( rc == 5 )) && return 5
     dir=$(hostconfig_modelle_dir "$install") || return 1
     # Bis hier ist nichts verändert; ein Abbruch beim Laden braucht keinen
@@ -756,7 +757,9 @@ hostconfig_ablage_kanonisch() { # $1 Pfad
 # Die Ablage liegt nie im Installationsverzeichnis: Eine Deinstallation löscht
 # es ganz, der Ablageordner bleibt stehen. Unter WSL gilt dasselbe für das
 # Linux-Dateisystem der Instanz (wsl --unregister) – dort nur Windows-Ordner.
-hostconfig_ablage_erlaubt() { # $1 Pfad $2 install $3 Modellordner(optional)
+# $4 (optional): UID des künftigen Besitzers, solange es $2 noch nicht gibt
+# (Erstinstallation fragt die Ablage vor dem Anlegen des Verzeichnisses).
+hostconfig_ablage_erlaubt() { # $1 Pfad $2 install $3 Modellordner(optional) $4 Besitzer-UID(optional)
     local p="$1" install="$2" besitzer home
     case "$p" in "$install"|"$install"/*) return 1 ;; esac
     case "$install" in "$p"/*) return 1 ;; esac
@@ -771,6 +774,9 @@ hostconfig_ablage_erlaubt() { # $1 Pfad $2 install $3 Modellordner(optional)
         return
     fi
     besitzer=$(stat -c %U -- "$install" 2>/dev/null)
+    if [[ -z "$besitzer" && "${4:-}" =~ ^[0-9]+$ ]]; then
+        besitzer=$(getent passwd "$4" 2>/dev/null | cut -d: -f1)
+    fi
     home=$(getent passwd "$besitzer" 2>/dev/null | cut -d: -f6)
     if [[ "$home" == /?* && "$home" != /root && "$p" == "$home"/?* ]]; then return 0; fi
     [[ "$p" =~ ^/mnt/[^/]+/. || "$p" =~ ^/media/[^/]+/[^/]+/. || "$p" =~ ^/srv/[^/]+ ]]

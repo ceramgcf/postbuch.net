@@ -27,9 +27,11 @@ Handwerkerfunktionen sind außerhalb Deutschlands dagegen ohne Nutzen.
 - **Docker mit Compose-Plugin.** Auf Debian-/Ubuntu-artigen Systemen richtet der
   Installer Docker bei Bedarf selbst ein.
 - **Architektur:** `arm64` und `amd64`.
-- **Speicherplatz:** Mit einer Cloud-Dateiablage liegen die PDFs in der Cloud,
-  nicht auf dem Server. Lokal belegt werden im Wesentlichen die Docker-Images (rund 2 GB, mit
-  den Scanner-Diensten gut 3 GB), die
+- **Speicherplatz:** Der Installer verlangt vorab rund 11 GB freien Platz
+  (davon 8 GB im Docker-Verzeichnis), mit Reserve für die ersten Dokumente und
+  ein späteres Update. Mit einer Cloud-Dateiablage liegen die PDFs in der Cloud,
+  nicht auf dem Server. Lokal belegt werden im Wesentlichen die Docker-Images
+  samt Build-Zwischenständen (rund 6 GB, mit den Scanner-Diensten etwas mehr), die
   PostgreSQL-Datenbank (wächst mit Metadaten und Embeddings, typischerweise
   einige hundert MB) sowie kurzlebige Zwischendateien während der Verarbeitung.
   Bei der Betriebsart [Komplett lokal](installation.md#komplett-lokal) kommen
@@ -106,10 +108,12 @@ Endpunkt oder ein lokal gehostetes Modell über Ollama oder LM Studio.
 
 Ganz ohne Cloud geht es mit der [eingebauten lokalen KI](ki-provider.md#eingebaute-lokale-ki).
 Sie braucht einen PC mit **NVIDIA-Grafikkarte, am besten mit 12 GB
-Grafikspeicher**. Arbeitsspeicher und Grafikspeicher müssen zusammen
-**mindestens 24 GB** ergeben, sonst lässt sich die lokale KI nicht einrichten.
-Unter 8 GB Grafikspeicher läuft sie extrem langsam, ohne NVIDIA-Karte nur auf
-dem Prozessor und dann viele Minuten je Dokument. Für das Modell müssen rund
+Grafikspeicher**. Ohne NVIDIA-Karte braucht sie **mindestens 15 GB
+Arbeitsspeicher**, mit Karte weniger (ab 10 GB Grafikspeicher 8 GB). Sonst
+lässt sich die lokale KI nicht einrichten, und der Installer bietet die
+Betriebsart „Komplett lokal“ gar nicht erst an. Unter 8 GB Grafikspeicher
+läuft sie extrem langsam, ohne NVIDIA-Karte nur auf dem Prozessor und dann
+oft 10 Minuten und mehr je Dokument. Für das Modell müssen rund
 9 GB Platz frei sein und danach noch 5 GB übrig bleiben. Unter Windows zählt
 nur der Arbeitsspeicher, den WSL bekommt, standardmäßig die Hälfte; mehr lässt
 sich einstellen. Im Leerlauf entlädt sich das Modell nach 5 Minuten und gibt

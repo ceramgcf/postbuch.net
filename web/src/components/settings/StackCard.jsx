@@ -214,7 +214,10 @@ function DienstZeile({ dienst: d, bekannt, gpu, eignung, steuerbar, gesperrt, on
   ].filter(Boolean);
   const meta = [
     platte.length ? `Festplatte: ${platte.join(' + ')}` : null,
-    ramText(d.ramMiB) && `Arbeitsspeicher bis etwa ${ramText(d.ramMiB)}`,
+    // Bei der lokalen KI ist der Wert der Mindest-Arbeitsspeicher des Rechners
+    // für die gewählte Stufe (GB dezimal wie im Manifest).
+    lk ? gb(d.ramMiB * 1024 ** 2) && `Arbeitsspeicher mindestens ${gb(d.ramMiB * 1024 ** 2)}`
+      : ramText(d.ramMiB) && `Arbeitsspeicher bis etwa ${ramText(d.ramMiB)}`,
   ].filter(Boolean);
 
   let knoepfe = null;
@@ -354,7 +357,7 @@ function AktionsDialog({ frage, platteFreiBytes, klassenAufLokalerKi, onAbbreche
       text = (fehlt > 0
         ? `Der Host-Agent lädt das Modell (${gb(fehlt) || 'mehrere GB'}) und startet den Dienst. Je nach Leitung kann das über eine Stunde dauern; ein abgebrochener Download wird beim nächsten Einschalten fortgesetzt.`
         : 'Der Host-Agent startet den Dienst; das Modell ist bereits vorhanden.')
-        + (ramText(d.ramMiB) ? ` Im Betrieb braucht er bis zu ${ramText(d.ramMiB)} Arbeitsspeicher.` : '')
+        + (gb(d.ramMiB * 1024 ** 2) ? ` Der Rechner braucht dafür mindestens ${gb(d.ramMiB * 1024 ** 2)} Arbeitsspeicher.` : '')
         + (knapp ? ` Achtung: Frei sind nur ${gb(platteFreiBytes)}.` : '')
         + ' Gewählt wird die lokale KI unter „KI“.';
     } else {

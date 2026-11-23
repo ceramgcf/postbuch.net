@@ -24,6 +24,14 @@ Generator übergangen. Zum Release wird seine Überschrift durch
 
 ---
 
+## 3.0.1 – 2026-11-23
+
+- Installer: Alle Fragen kommen vorab mit Zusammenfassung, danach läuft die Installation ohne weitere Eingabe durch.
+- „Komplett lokal“ wird nur angeboten, wenn die Ausstattung reicht. Die lokale KI kommt jetzt mit weniger Arbeitsspeicher aus.
+- Windows: Installation wieder mit dem kurzen Befehl, gründlichere Deinstallation und mehrere Verbesserungen rund um WSL.
+- Die tägliche Update-Prüfung lässt sich im Einrichtungsassistenten abschalten.
+- Mehrere Fehlerkorrekturen, unter anderem in der Dokumentansicht auf dem Handy.
+
 ## 3.0.0 – 2026-11-22
 
 - Neu: Betriebsart „komplett lokal“. Dokumente liegen in einem Ordner auf dem eigenen Rechner, Analyse und Chat laufen über eine lokale KI ohne Cloud-Dienst.

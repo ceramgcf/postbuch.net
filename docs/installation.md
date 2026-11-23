@@ -61,7 +61,7 @@ namens `postbuch.net`. Den Windows-Teil richtet ein PowerShell-Skript ein. Öffn
 dazu PowerShell mit **Als Administrator ausführen** und gib ein:
 
 ```powershell
-& ([scriptblock]::Create((irm https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.ps1)))
+irm https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.ps1 | iex
 ```
 
 Das Skript
@@ -154,7 +154,9 @@ den Stack, die geplante Aufgabe, die Verknüpfung, die Einstellungen für das
 Heimnetz, den Eintrag in „Programme und Features“ und die Instanz. Der Ablageordner bleibt mit allen Originalen stehen.
 Liegt er ausnahmsweise im Linux-Teil der Instanz, bietet das Skript an, ihn
 vorher nach `Dokumente\postbuch.net-Ablage` zu kopieren; lehnst du ab oder
-scheitert die Kopie, bleibt die Instanz bestehen.
+scheitert die Kopie, bleibt die Instanz bestehen. Wählst du stattdessen im
+Menü des normalen Installationsbefehls „Deinstallieren“, räumt das Skript den
+Windows-Teil danach genauso auf.
 
 WSL selbst bleibt installiert, denn andere Programme können es ebenfalls nutzen.
 Deshalb steht im Explorer links weiterhin der Eintrag **Linux**. Wird WSL sonst
@@ -209,15 +211,20 @@ siehe [DuckDNS/HTTPS](#der-einrichtungsdialog-schritt-für-schritt) und
 #### Speicher für die lokale KI unter Windows
 
 WSL darf standardmäßig höchstens die Hälfte des Arbeitsspeichers nutzen. Reicht
-das zusammen mit dem Grafikspeicher nicht für die
-[lokale KI](ki-provider.md#lokale-ki-unter-windows) (24 GB), der ganze PC aber
-schon, fragt das Skript, ob WSL mehr bekommen soll. Es bietet nur so viel an,
-wie nötig ist (24 GB abzüglich des Grafikspeichers), und nur, wenn Windows
-danach mindestens 8 GB behält. Der Eintrag `memory` landet markiert in
+das nicht für die
+[lokale KI](ki-provider.md#lokale-ki-unter-windows) (ohne Grafikkarte 15 GB), der ganze PC aber
+schon, fragt der Installer bei der Betriebsart [Komplett lokal](#komplett-lokal),
+ob WSL mehr bekommen soll – erst nach der Frage zur NVIDIA-Grafikkarte, denn
+ohne deine Zustimmung wird sie nicht genutzt, und mit ihr braucht es weniger
+Arbeitsspeicher. Er bietet nur so viel an, wie nötig ist, und nur, wenn
+Windows danach mindestens 8 GB behält. Der Eintrag `memory` landet markiert in
 derselben `.wslconfig` und gilt damit für **alle** WSL-Umgebungen auf diesem
-PC; darauf weist das Skript vor der Frage ausdrücklich hin. Ein vorhandener
-`memory`-Wert bleibt unverändert, die Deinstallation entfernt den eigenen
-Eintrag wieder. Wer die lokale KI nicht nutzen will, antwortet mit Nein.
+PC; darauf weist der Installer vor der Frage ausdrücklich hin. Bei Ja startet
+das Skript WSL neu und setzt die Einrichtung von selbst fort, ohne die
+schon beantworteten Fragen zu wiederholen; laufen gerade
+andere Linux-Umgebungen, bricht es ab, ohne etwas zu installieren. Ein
+vorhandener `memory`-Wert bleibt unverändert, die Deinstallation entfernt den
+eigenen Eintrag wieder. Bei Nein geht es zurück zur Betriebsart.
 
 ### Eine Vorabversion installieren
 
@@ -263,9 +270,9 @@ Vorabversionen lassen sich später in der Oberfläche einschalten (siehe
 
 | Frage                  | Was passiert                                                                                                                                                                                                 |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Instanzname**        | Erscheint in der Seitenleiste und auf gedruckten Etiketten. Frei wählbar, z. B. „Familie Muster".                                                                                                            |
+| **Instanzname**        | Erscheint in der Seitenleiste und auf gedruckten Etiketten. Frei wählbar, z. B. „Familie Muster“; bis 60 Zeichen, ohne `"`, `'`, `$`, `\`, `` ` `` und `#`. |
 | _(automatisch)_        | Datenbank-Passwort und Session-Secret werden zufällig erzeugt.                                                                                                                                               |
-| **Betriebsart**        | „Komplett lokal“ (Ablage in einem Ordner auf diesem Rechner, KI im eigenen Stack) oder „Klassisch“ (Ablage und KI im Assistenten). Die Frage kommt auch, wenn du danach ein Backup einspielst: Die Betriebsart legt fest, welche Dienste dieser Rechner startet, das Backup bringt nur die Daten. Unter Windows ist „Komplett lokal“ vorgeschlagen, unter Linux „Klassisch“. Siehe [Komplett lokal](#komplett-lokal). |
+| **Betriebsart**        | „Komplett lokal“ (Ablage in einem Ordner auf diesem Rechner, KI im eigenen Stack) oder „Klassisch“ (Ablage und KI im Assistenten). Die Frage kommt auch, wenn du danach ein Backup einspielst: Die Betriebsart legt fest, welche Dienste dieser Rechner startet, das Backup bringt nur die Daten. Vorschlag unter Windows: „Komplett lokal“, unter Linux „Klassisch“. Reicht die Ausstattung nicht, nennt ein Hinweis den Grund. Siehe [Komplett lokal](#komplett-lokal). |
 | **Backup einspielen?** | Für Umzüge und Neuaufbau: Der Stack startet leer, danach spielt der Installer die Sicherung selbst ein und fragt dafür bei Bedarf das Backup-Passwort ab. Wer das lieber im Browser erledigt, lässt die Eingabe leer und nimmt die Seite `.../setup/restore`. Von dort geht es auch ohne Backup in den Einrichtungsassistenten. Siehe [Beim Neuaufsetzen](backup-wiederherstellung.md#beim-neuaufsetzen). Bei einer weiterverwendeten Ablage (siehe [Komplett lokal](#komplett-lokal)) entfällt die Frage. |
 | **Admin-Passwort**     | Das Kennwort für den Benutzer `admin`. Es landet als `APP_PASSWORD` in der `.env`.                                                                                                                           |
 | **DuckDNS/HTTPS**      | Eine kostenlose DuckDNS-Subdomain mit Token; Caddy holt das Zertifikat selbst. Danach fragt der Installer die IP-Adresse dieses Rechners im Heimnetz ab, vorbelegt mit der ermittelten, und trägt sie selbst bei DuckDNS ein. Für OneDrive nachdrücklich empfohlen, für Browserzugriff optional, für eine dauerhaft installierte PWA und Push erforderlich. |
@@ -279,11 +286,41 @@ Web-Assistenten – bei „Komplett lokal“ sind Ablage und KI dort schon gewä
 Nicht-interaktive und Bestandspfade dürfen die entsprechenden ENV-Variablen
 weiterhin verwenden.
 
+**Erst alle Fragen, dann die Installation.** Der Installer stellt alle Fragen
+vorab, auch die nach dem sudo-Passwort, und prüft den freien Platz (rund 11 GB,
+davon 8 GB im Docker-Verzeichnis). Danach zeigt er eine Zusammenfassung: Ort
+(unter Windows die WSL-Instanz `postbuch.net`), Instanzname, Betriebsart, Adresse, Platzbedarf und den Hinweis auf die
+tägliche Update-Prüfung. Erst nach „Jetzt installieren?“ legt er los und
+braucht dann keine Eingabe mehr; das dauert je nach Rechner 5 bis 30 Minuten.
+Bei „n“ wird nichts installiert. Bricht eine Erstinstallation mittendrin ab,
+erkennt der nächste Lauf das und bietet an, sie zu verwerfen, samt
+Hintergrunddienst.
+
 ### Komplett lokal
 
-Bei dieser Betriebsart braucht postbuch.net kein Cloud-Konto. Der Installer
-fragt dafür zwei Dinge:
+Bei dieser Betriebsart braucht postbuch.net kein Cloud-Konto. Angeboten wird
+sie nur, wenn die lokale KI auf diesem Rechner laufen kann: ohne
+NVIDIA-Grafikkarte mindestens 15 GB Arbeitsspeicher, mit Grafikkarte weniger
+(siehe [Voraussetzungen](ki-provider.md#eingebaute-lokale-ki)), und nach dem Modell (rund 9 GB)
+bleiben noch 5 GB frei. Sonst zeigt der Installer einen Hinweis mit dem Grund
+und richtet postbuch.net klassisch ein; einen Ordner auf diesem Rechner als
+Ablage kannst du dann im Assistenten wählen. Der Installer fragt in dieser
+Reihenfolge:
 
+- **Lokale KI** – der Installer erkennt die NVIDIA-Grafikkarte und zeigt die
+  [NVIDIA-Containerlizenz](https://developer.download.nvidia.com/licenses/NVIDIA_Deep_Learning_Container_License.pdf)
+  und die [CUDA-EULA](https://docs.nvidia.com/cuda/archive/12.8.1/eula/index.html).
+  Tippe einmalig `ja`, wenn du CUDA auf diesem Rechner nutzen willst. Der
+  Installer richtet bei Bedarf gleich das NVIDIA Container Toolkit ein (mit
+  `apt`). Mit nutzbarer Karte wählt er die [Betriebsstufe](ki-provider.md#eingebaute-lokale-ki).
+  Ohne Zustimmung oder ohne Toolkit zählt die Karte nicht mehr; der Installer
+  prüft dann neu, ob es ohne sie reicht. Reicht es nicht, geht es zurück zur
+  Betriebsart, mit Hinweis auf den Grund. Wählst du dort wieder „Komplett
+  lokal“, fragt der Installer erneut nach den NVIDIA-Bedingungen. Wäre die KI deutlich langsamer,
+  richtet er sie nur ein, wenn du das mit `ja` bestätigst; unter 8 GB
+  Grafikspeicher warnt er rot, dass sie extrem langsam wird. Unter Windows
+  folgt, falls nötig, die Frage nach mehr
+  [Speicher für WSL](#speicher-für-die-lokale-ki-unter-windows).
 - **Ablageordner** – hier liegen die Originale als normale Dateien. Unter
   Windows schlägt der Installer den Unterordner `postbuch.net` im Ordner
   „Dokumente“ vor, sichtbar im Explorer; unter Linux `postbuch.net-Ablage` im
@@ -296,19 +333,12 @@ fragt dafür zwei Dinge:
   Deinstallation löscht beides, der Ablageordner bleibt dagegen stehen. Synchronisiert OneDrive den Ordner „Dokumente“, landet die Ablage
   dort ebenfalls in der Microsoft-Cloud; der Installer weist dann darauf hin und
   nennt einen Ordner außerhalb von OneDrive, etwa `C:\Users\<name>\postbuch.net`. Details: [Ordner auf diesem Rechner](storage-backends.md#ordner-auf-diesem-rechner).
-- **Lokale KI** – der Installer erkennt die NVIDIA-Grafikkarte und zeigt die
-  [NVIDIA-Containerlizenz](https://developer.download.nvidia.com/licenses/NVIDIA_Deep_Learning_Container_License.pdf)
-  und die [CUDA-EULA](https://docs.nvidia.com/cuda/archive/12.8.1/eula/index.html).
-  Tippe einmalig `ja`, wenn du CUDA auf diesem Rechner nutzen willst. Der
-  Installer richtet bei Bedarf das NVIDIA Container Toolkit ein (mit `apt`).
-  Mit nutzbarer Karte wählt er die [Betriebsstufe](ki-provider.md#eingebaute-lokale-ki).
-  Ohne Zustimmung oder ohne passende Karte
-  wäre die KI deutlich langsamer; dann richtet er sie nur ein, wenn du das mit
-  `ja` bestätigst, und sonst wählst du die KI im Assistenten. Unter 8 GB
-  Grafikspeicher warnt er rot, dass sie extrem langsam wird. Ergeben
-  Arbeitsspeicher und Grafikspeicher zusammen weniger als 24 GB oder blieben
-  nach dem Modell (rund 9 GB) keine 5 GB frei, richtet er die lokale KI gar
-  nicht ein.
+
+Diese Fragen kommen, bevor der Installer etwas ins Installationsverzeichnis
+schreibt. Bricht eine Erstinstallation später ab (etwa beim Bauen der
+Container), erkennt der nächste Lauf das und bietet an, die unfertige
+Installation zu verwerfen und neu zu beginnen. Ein gewählter Ablageordner
+bleibt dabei stehen.
 
 Das Modell lädt der Host-Agent nach dem Start im Hintergrund, Fortschritt
 unter [Einstellungen → Stack](betrieb-troubleshooting.md#der-stack). Der
@@ -547,7 +577,10 @@ Er hat zehn Schritte:
 2. ![Instanz-Symbol](icons/network.svg) **Instanz** – Instanzname, Basisadresse und die Einstellungen, die der
    Host-Agent auf dem Server ausführt (Port, Adresse, TLS über DuckDNS). Der
    Installer hat all das bereits gesetzt; der Schritt zeigt es deshalb nur an
-   und gibt die Formulare erst über ![Bearbeiten-Symbol](icons/pencil.svg) „Ändern" frei
+   und gibt die Formulare erst über ![Bearbeiten-Symbol](icons/pencil.svg) „Ändern" frei. Darunter steht
+   der Schalter **Täglich auf Updates prüfen**. Er ist an; wer nichts nach
+   draußen schicken will, schaltet ihn hier ab (siehe
+   [Updates](betrieb-troubleshooting.md#updates))
 3. ![Personen-Symbol](icons/users.svg) **Personen** – Menschen anlegen, Zugänge vergeben
 4. ![Dateiablage-Symbol](icons/cloud.svg) **Dateiablage** – Backend wählen, OneDrive per Gerätecode verbinden oder Nextcloud
    anmelden

@@ -4,6 +4,7 @@
 #   irm https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.ps1 | iex
 # Entfernen:
 #   & ([scriptblock]::Create((irm https://github.com/ceramgcf/postbuch.net/releases/latest/download/install.ps1))) -Deinstallieren
+# Parameter gehen nur mit dieser Scriptblock-Form; "irm ... | iex" kennt keine.
 #
 # Richtet nur den Windows-Teil ein und uebergibt dann an install.sh in einer
 # eigenen WSL-Instanz "postbuch.net" (Debian). Dort laufen Signaturpruefung,
@@ -37,7 +38,9 @@
 
 param(
     [switch]$Deinstallieren,
-    [ValidateSet('an', 'aus')][string]$Netzwerkfreigabe,
+    # Kein ValidateSet: Unter "irm ... | iex" wird param() als Variable in der
+    # Sitzung angelegt und scheitert am leeren Wert. Geprueft wird im Rumpf.
+    [string]$Netzwerkfreigabe = '',
     [string]$Quelle = '',
     [string]$InstallerUrl = '',
     [string]$Zielversion = '',
@@ -59,7 +62,7 @@ $WslConfig = Join-Path $env:USERPROFILE '.wslconfig'
 $WslMarke = '# postbuch.net: Zugriff im Heimnetz'
 $WslMarkeSpeicher = '# postbuch.net: Speicher fuer die lokale KI'
 # Grenzen der lokalen KI wie in scripts/postbuch-hostconfig.sh (MiB).
-$LokalKiMinMiB = 22888   # Arbeitsspeicher + Grafikspeicher zusammen (24 GB)
+$LokalKiMinMiB = 14305   # hoechster Mindest-Arbeitsspeicher einer Stufe (ohne Grafikkarte, 15 GB)
 $WindowsRestMiB = 8192   # so viel behaelt Windows mindestens
 $WslPufferMiB = 512      # zieht der Linux-Kern vom zugeteilten Speicher ab
 $FwRegel = 'postbuch.net-Heimnetz'
@@ -271,11 +274,16 @@ function WSL-Neustarten {
 }
 
 # -- Speicher fuer die lokale KI ----------------------------------------------
-# WSL bekommt standardmaessig die Haelfte des Arbeitsspeichers. Reicht das
-# zusammen mit dem Grafikspeicher nicht fuer die lokale KI (24 GB), der ganze
-# Rechner aber schon, bietet der Installer an, WSL gerade so viel mehr zu
-# geben wie noetig. Windows behaelt dabei mindestens 8 GB. Ein vorhandener
-# memory-Eintrag bleibt unangetastet.
+# WSL bekommt standardmaessig die Haelfte des Arbeitsspeichers. Ob die lokale
+# KI damit laeuft, entscheidet install.sh in der Instanz, erst nachdem die
+# NVIDIA-Frage beantwortet ist (ohne Zustimmung zaehlt die Grafikkarte nicht).
+# Dafuer bekommt es per WSLENV, was WSL selbst nicht sieht: den Speicher des
+# ganzen PCs, ob die .wslconfig schon eine Grenze hat, und den freien Platz
+# auf dem Laufwerk der Instanz. Braucht WSL mehr, endet install.sh nach
+# Zustimmung mit Exit-Code 75 und nennt in einer Uebergabedatei die Grenze;
+# dieses Skript traegt sie ein, startet WSL neu und ruft install.sh erneut auf.
+# Windows behaelt dabei mindestens 8 GB. Ein vorhandener memory-Eintrag bleibt
+# unangetastet.
 
 function Groesse-MiB([string]$wert) {
     if ($wert -notmatch '^\s*(\d+(?:\.\d+)?)\s*([KMGT]?)B?\s*$') { return $null }
@@ -302,44 +310,76 @@ function Grafikspeicher-MiB {
 
 function Arbeitsspeicher-MiB { return [long]((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1MB) }
 
-function Speicher-Anbieten {
+# Freier Platz auf dem Laufwerk, auf dem die virtuelle Platte der Instanz liegt.
+function Instanz-Frei-Bytes {
+    $lxss = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'
+    $ort = $null
+    if (Test-Path $lxss) {
+        foreach ($k in Get-ChildItem $lxss) {
+            $e = Get-ItemProperty $k.PSPath -ErrorAction SilentlyContinue
+            if ($e.DistributionName -eq $Instanz) { $ort = "$($e.BasePath)" -replace '^\\\\\?\\', '' }
+        }
+    }
+    if (-not $ort) { $ort = $env:USERPROFILE }
+    try { return [long](New-Object IO.DriveInfo ([IO.Path]::GetPathRoot($ort))).AvailableFreeSpace } catch { return $null }
+}
+
+# Werte fuer install.sh (siehe oben). Ohne lesbaren Wert fehlt die Variable;
+# install.sh entscheidet dann ohne sie.
+function Speicher-Umgebung {
+    $u = @{}
+    $u['POSTBUCH_WINDOWS_RAM_MIB'] = "$(Arbeitsspeicher-MiB)"
+    $u['POSTBUCH_WSL_SPEICHER_FREI'] = if (Ini-Wert (WslConfig-Lesen) 'wsl2' 'memory') { '0' } else { '1' }
+    $frei = Instanz-Frei-Bytes
+    if ($null -ne $frei) { $u['POSTBUCH_WINDOWS_FREI_BYTES'] = "$frei" }
+    return $u
+}
+
+$UebergabeDatei = '/root/.postbuch-installer-uebergabe'
+
+# Liest die von install.sh verlangte Grenze und prueft sie nach denselben Regeln:
+# ganze GB, mehr als WSL heute bekommt, hoechstens so viel wie fuer die lokale
+# KI ohne Grafikkarte noetig und so, dass Windows mindestens 8 GB behaelt.
+function Uebergabe-Speicher-GB {
+    $ErrorActionPreference = 'Continue'
+    $roh = @(& $WslExe -d $Instanz -u root -- cat $UebergabeDatei 2>$null)
+    Konsole-Zuruecksetzen
+    $gb = $null
+    foreach ($z in $roh) { if ("$z".Trim() -match '^wsl_speicher_gb=(\d{1,3})$') { $gb = [int]$Matches[1] } }
+    if ($null -eq $gb) { return $null }
     $ramMiB = Arbeitsspeicher-MiB
-    $vramMiB = Grafikspeicher-MiB
+    $hoechstens = [int][math]::Ceiling(($LokalKiMinMiB + $WslPufferMiB) / 1024)
+    if ($gb * 1024 -le [long]($ramMiB / 2) -or $gb -gt $hoechstens -or $ramMiB - $gb * 1024 -lt $WindowsRestMiB) { return $null }
+    return $gb
+}
+
+function Uebergabe-Loeschen {
+    $ErrorActionPreference = 'Continue'
+    $null = & $WslExe -d $Instanz -u root -- rm -f $UebergabeDatei 2>$null
+    Konsole-Zuruecksetzen
+}
+
+# Traegt die Grenze ein und startet WSL neu. $false, wenn sie jetzt nicht
+# wirken kann (eigener Eintrag vorhanden oder andere Linux-Instanzen laufen).
+function Speicher-Setzen([int]$gb) {
     $z = WslConfig-Lesen
-    $eingetragen = Ini-Wert $z 'wsl2' 'memory'
-    $wslMiB = if ($eingetragen) { Groesse-MiB $eingetragen } else { [long]($ramMiB / 2) }
-    if ($null -eq $wslMiB) { return }
-    # Reicht es schon (etwa dank der Grafikkarte), wird nichts angeboten.
-    if ($wslMiB - $WslPufferMiB + $vramMiB -ge $LokalKiMinMiB) { return }
-    $noetigGB = [int][math]::Ceiling(($LokalKiMinMiB - $vramMiB + $WslPufferMiB) / 1024)
-    # Nur anbieten, wenn Windows danach noch mindestens 8 GB bleiben.
-    if ($ramMiB - $noetigGB * 1024 -lt $WindowsRestMiB) { return }
-    if ($eingetragen) {
-        Hinweis "In $WslConfig ist der Speicher fuer WSL auf $eingetragen begrenzt. Fuer die lokale KI waeren $noetigGB GB noetig; der Eintrag bleibt, wie er ist."
-        return
+    if (Ini-Wert $z 'wsl2' 'memory') {
+        Hinweis "In $WslConfig steht bereits eine Speichergrenze fuer WSL. Sie bleibt, wie sie ist."
+        return $false
     }
-    $gbRam = [math]::Round($ramMiB / 1024)
-    Write-Host ""
-    Hinweis 'Speicher fuer die eingebaute lokale KI'
-    Info    "WSL darf hier bisher hoechstens die Haelfte des Arbeitsspeichers nutzen (rund $([math]::Round($ramMiB / 2048)) von $gbRam GB)."
-    Info    "Das reicht$(if ($vramMiB -gt 0) { ' zusammen mit dem Grafikspeicher' }) nicht fuer die lokale KI (24 GB)."
-    Info    "Mit einer Grenze von $noetigGB GB ginge es; Windows behaelt dann mindestens $($gbRam - $noetigGB) GB."
-    Info    'Belegt wird der Speicher nur, solange WSL ihn braucht, danach bekommt Windows ihn zurueck.'
-    Write-Host ""
-    Hinweis "ACHTUNG: Die Einstellung steht in $WslConfig und gilt fuer ALLE WSL-Umgebungen"
-    Hinweis 'auf diesem PC (z. B. Ubuntu oder Docker Desktop), nicht nur fuer postbuch.net.'
-    Hinweis 'Sie koennen dann ebenfalls bis zu dieser Grenze Speicher belegen.'
-    Info    'Beim Deinstallieren von postbuch.net wird der Eintrag wieder entfernt.'
-    Info    'Ohne lokale KI (KI per API-Schluessel) ist das nicht noetig.'
-    Write-Host ""
-    if ((Read-Host "  WSL bis zu $noetigGB GB Arbeitsspeicher geben? [j/N]") -notmatch '^[jJ]') {
-        Info 'Unveraendert. Die lokale KI laesst sich dann nicht einrichten.'
-        return
+    $andere = @(Andere-Laufende-Instanzen)
+    if ($andere.Count -gt 0) {
+        Hinweis "Es laufen weitere Linux-Instanzen ($($andere -join ', ')). Die neue Speichergrenze wirkt erst nach einem Neustart von WSL."
+        Info    'Diese Instanzen beenden und denselben Befehl erneut ausfuehren.'
+        return $false
     }
-    Ini-Setzen $z 'wsl2' 'memory' "$($noetigGB)GB" $WslMarkeSpeicher
+    Ini-Setzen $z 'wsl2' 'memory' "$($gb)GB" $WslMarkeSpeicher
     WslConfig-Schreiben $z
-    Ok "WSL darf jetzt bis zu $noetigGB GB Arbeitsspeicher nutzen ($WslConfig)."
-    WSL-Neustarten 'die neue Speichergrenze' 'Die neue Speichergrenze'
+    Ok "WSL darf jetzt bis zu $gb GB Arbeitsspeicher nutzen ($WslConfig)."
+    Info 'Starte WSL neu, damit die neue Speichergrenze gleich gilt ...'
+    $null = Wsl --shutdown
+    Ok 'WSL neu gestartet.'
+    return $true
 }
 
 # Die gespeicherte Zustimmung gilt auch nach einem Neustart waehrend der Installation.
@@ -463,7 +503,8 @@ function Restore-Offen {
 function Installation-Vorhanden {
     if (-not (Instanz-Vorhanden)) { return $false }
     $ErrorActionPreference = 'Continue'
-    $null = & $WslExe -d $Instanz -u root -- test -f /root/postbuch/.env
+    # Eine abgebrochene Erstinstallation (Marke von install.sh) zaehlt nicht.
+    $null = & $WslExe -d $Instanz -u root -- test -f /root/postbuch/.env -a ! -e /root/postbuch/.installation-unvollstaendig
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -675,14 +716,22 @@ function Deinstallations-Befehl {
 function Deinstallation {
     Info 'postbuch.net wird von diesem PC entfernt. Die Ablage mit den Originalen bleibt erhalten.'
     Write-Host ""
-    $instanzBleibt = $false
     if (Instanz-Vorhanden) {
         # install.sh fragt nach (LOESCHEN), sichert die Datenbank in die Ablage,
         # entfernt den Stack und laesst den Ablageordner stehen.
         $rc = Wsl-Terminal (Deinstallations-Befehl)
         if ($rc -eq 2) { Info 'Deinstallation abgebrochen. postbuch.net bleibt eingerichtet.'; return }
         if ($rc -ne 0 -and $rc -ne 4) { Abbruch "Die Deinstallation in der Instanz ist nicht abgeschlossen (install.sh $rc). Die Instanz bleibt bestehen." }
+    }
+    Windows-Teil-Entfernen
+}
 
+# Alles ausser dem Stack: Ablage-Rettung, Aufgabe, Freigabe, Verknuepfung,
+# Verwaltungseintrag und WSL-Instanz. Auch nach einer Deinstallation ueber das
+# Menue von install.sh, das nur den Stack in der Instanz entfernt.
+function Windows-Teil-Entfernen {
+    $instanzBleibt = $false
+    if (Instanz-Vorhanden) {
         # Liegt die Ablage innerhalb der Instanz, ginge sie mit ihr verloren (Exit 10).
         $lage = Wsl-Bash @'
 f=/root/.postbuch-ablage-behalten
@@ -935,11 +984,10 @@ function Installation {
     }
     Ok 'WSL ist bereit.'
 
-    # Vor dem Anlegen der Instanz, damit sie gleich im gespiegelten Netz und
-    # mit der passenden Speichergrenze startet.
+    # Vor dem Anlegen der Instanz, damit sie gleich im gespiegelten Netz startet.
+    # Mehr Speicher fuer die lokale KI erbittet install.sh selbst (Schritt 6).
     $heimnetzBereit = Heimnetz-Einrichten
     if ($heimnetzGewuenscht -and -not $heimnetzBereit) { Firewall-Entfernen }
-    Speicher-Anbieten
 
     # -- 3. Instanz -------------------------------------------------------------
     if (-not (Instanz-Vorhanden)) {
@@ -991,16 +1039,46 @@ command -v curl >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninterac
     Write-Host ""
     Info 'Weiter geht es in der Linux-Instanz mit dem Einrichtungsdialog.'
     Write-Host ""
-    $alterDokumentePfad = $env:POSTBUCH_WINDOWS_DOKUMENTE
-    $alteWslEnv = $env:WSLENV
-    try {
-        $env:POSTBUCH_WINDOWS_DOKUMENTE = [Environment]::GetFolderPath('MyDocuments')
-        $env:WSLENV = (@($alteWslEnv, 'POSTBUCH_WINDOWS_DOKUMENTE/u') | Where-Object { $_ }) -join ':'
-        $rc = Wsl-Terminal (Installer-Befehl $opt)
-    } finally {
-        $env:POSTBUCH_WINDOWS_DOKUMENTE = $alterDokumentePfad
-        $env:WSLENV = $alteWslEnv
+    # Alle Werte gehen als Daten per WSLENV hinein, nie als Skripttext.
+    # Exit-Code 75: install.sh braucht fuer die lokale KI mehr Speicher in WSL
+    # (siehe "Speicher fuer die lokale KI"); danach genau ein zweiter Lauf.
+    $neuGestartet = $false
+    while ($true) {
+        $umgebung = Speicher-Umgebung
+        $umgebung['POSTBUCH_WINDOWS_DOKUMENTE'] = [Environment]::GetFolderPath('MyDocuments')
+        $alt = @{}
+        foreach ($k in $umgebung.Keys) { $alt[$k] = [Environment]::GetEnvironmentVariable($k) }
+        $alteWslEnv = $env:WSLENV
+        try {
+            foreach ($k in $umgebung.Keys) { [Environment]::SetEnvironmentVariable($k, $umgebung[$k]) }
+            $namen = @($umgebung.Keys | ForEach-Object { if ($_ -eq 'POSTBUCH_WINDOWS_DOKUMENTE') { "$_/u" } else { $_ } })
+            $env:WSLENV = (@($alteWslEnv) + $namen | Where-Object { $_ }) -join ':'
+            $rc = Wsl-Terminal (Installer-Befehl $opt)
+        } finally {
+            foreach ($k in $alt.Keys) { [Environment]::SetEnvironmentVariable($k, $alt[$k]) }
+            $env:WSLENV = $alteWslEnv
+        }
+        if ($rc -ne 75 -or $neuGestartet) { break }
+        $gb = Uebergabe-Speicher-GB
+        if ($null -eq $gb) {
+            Uebergabe-Loeschen
+            Abbruch 'install.sh hat eine ungueltige Speichergrenze fuer WSL verlangt. Es wurde nichts geaendert.'
+        }
+        if (-not (Speicher-Setzen $gb)) {
+            Uebergabe-Loeschen
+            Abbruch 'Die Speichergrenze fuer WSL ist nicht gesetzt. Es wurde noch nichts installiert; derselbe Befehl beginnt von vorn.'
+        }
+        $neuGestartet = $true
+        # Der WSL-Neustart hat auch das Wachhalten beendet; ohne es faehrt die
+        # Instanz im Leerlauf herunter und der Modell-Download bleibt stehen.
+        Wachhalten-Einrichten
+        Info 'Warte, bis die Linux-Instanz wieder bereit ist ...'
+        $null = Wsl-Bash 'timeout 90 systemctl is-system-running --wait >/dev/null 2>&1 || true'
+        Write-Host ""
+        Info 'Weiter geht es in der Linux-Instanz mit dem Einrichtungsdialog.'
+        Write-Host ""
     }
+    if ($rc -eq 75) { Uebergabe-Loeschen }
     if ($rc -ne 0) { Abbruch "Die Einrichtung in der Instanz ist nicht abgeschlossen (install.sh $rc). Derselbe Befehl setzt sie fort." }
 
     # -- 7. Firewall, Verknuepfung, Programme und Features ----------------------
@@ -1008,9 +1086,9 @@ command -v curl >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninterac
     if (-not (Installation-Vorhanden)) {
         # Im Menue deinstalliert: Windows-Teil gleich mit aufraeumen.
         Write-Host ""
-        Hinweis 'In der Instanz ist postbuch.net nicht mehr eingerichtet.'
-        Info    'Vollstaendig entfernen: denselben Befehl mit -Deinstallieren ausfuehren.'
+        Info 'postbuch.net ist in der Instanz entfernt. Jetzt folgt der Windows-Teil.'
         Write-Host ""
+        Windows-Teil-Entfernen
         return
     }
     $ports = Instanz-Ports
@@ -1068,6 +1146,8 @@ try {
     }
     if ($InstallerUrl -notmatch '^https://[A-Za-z0-9./_~%:-]+$') { Abbruch 'Ungueltige Installer-Adresse.' }
     if ($Zielversion -and -not $ZielversionOk) { Abbruch 'Ungueltige Zielversion (Form x.y.z).' }
+    # Netzwerkfreigabe-Aendern schaltet bei jedem Wert ausser 'an' ab: Tippfehler abweisen.
+    if ($Netzwerkfreigabe -and $Netzwerkfreigabe -notin @('an', 'aus')) { Abbruch 'Netzwerkfreigabe nur mit "an" oder "aus".' }
     if ($Deinstallieren -and $Netzwerkfreigabe) { Abbruch 'Bitte Deinstallation und Netzwerkfreigabe getrennt aufrufen.' }
     if ($Netzwerkfreigabe -and ($WebPort -or $HttpPort -or $HttpsPort)) { Abbruch 'Bitte Portaenderungen getrennt aufrufen.' }
     if ($Deinstallieren) { Deinstallation }

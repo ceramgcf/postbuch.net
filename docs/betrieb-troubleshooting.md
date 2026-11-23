@@ -105,6 +105,13 @@ neuere Version gibt. War der Rechner zur Prüfzeit in der Nacht aus oder im
 Energiesparmodus, holt postbuch.net die Prüfung nach dem Start nach. Das Ergebnis steht unter ![Einstellungen-Symbol](icons/settings.svg) **Einstellungen → Allgemein** und
 als Hinweis in der Seitenleiste. Nur Administratoren sehen die Karte.
 
+Die Prüfung ist ab Werk an. Sie überträgt nur die Internetadresse deines
+Anschlusses an die Bezugsquelle, keine Dokumente und keine Daten; installiert
+wird nur, wenn du es selbst anstößt. Abschalten lässt sie sich mit **Täglich
+auf Updates prüfen** auf derselben Karte oder schon im Einrichtungsassistenten
+im Schritt **Instanz**. Ist sie aus, geht keine Anfrage nach draußen, und
+neue Versionen erscheinen nicht.
+
 ### Vorabversionen
 
 Bezieht die Instanz ihre Releases von GitHub (Standard bei neuen
